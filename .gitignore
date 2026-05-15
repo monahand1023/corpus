@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.uv-cache/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+*.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+
+# User-configured per-instance file — don't commit. Sample lives in
+# corpus.toml.example.
+corpus.toml

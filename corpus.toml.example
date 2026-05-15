@@ -1,0 +1,76 @@
+# corpus.toml — instance config.
+#
+# Copy this file to `corpus.toml` and edit. The real config is gitignored
+# so you can keep paths/keys/etc out of source control.
+
+[corpus]
+# Where the chunks + vectors live. SQLite + sqlite-vec; one file.
+db_path = "./corpus.db"
+
+[embedder]
+# Built-in providers: voyage, gemini.
+#
+# voyage (voyage-3-large, 1024-dim) is the default — top retrieval quality,
+# Anthropic-recommended. Card-on-file required to lift free-tier rate limits.
+#
+# gemini (gemini-embedding-001) is the alternative — no card needed, free tier
+# via Google AI Studio. Matryoshka dim selection: 768, 1536, or 3072.
+#
+# The dim MUST match the model's output. The DB stores it on first ingest
+# and refuses to open with a mismatched dim (rather than silently corrupt).
+provider = "voyage"
+model = "voyage-3-large"
+dim = 1024
+
+[retriever]
+# Defaults you almost never need to touch.
+top_k = 5
+max_per_source_type = 3   # cross-source diversity in result list
+hybrid = true              # combine vector + BM25 via reciprocal rank fusion
+
+# Each source = one place to read documents from.
+# `name` is a free-form label used everywhere as the chunk's source_type.
+# `type` selects which built-in connector to use.
+#
+# Built-in connectors as of v0.1:
+#   markdown — `.md` files with optional YAML frontmatter (default glob: **/*.md)
+#   text     — `.txt` plain text files (default glob: **/*.txt)
+#   pdf      — PDFs via pypdf; install: `pip install corpus-rag[pdf]`
+#   html     — HTML files via trafilatura; install: `pip install corpus-rag[html]`
+#
+# Adding a new source type? See docs/adding_a_source.md.
+
+[[sources]]
+name = "notes"
+type = "markdown"
+path = "~/Documents/notes"
+# glob = "**/*.md"  # optional; defaults to the connector's default
+
+# [[sources]]
+# name = "papers"
+# type = "pdf"
+# path = "~/Documents/papers"
+# glob = "**/*.pdf"
+
+# [[sources]]
+# name = "bookmarks"
+# type = "html"
+# path = "~/exports/saved-articles"
+
+# [[sources]]
+# name = "plain_notes"
+# type = "text"
+# path = "~/Documents/quick-notes"
+
+# Reference patterns that `expand_context` will look for inside a chunk's
+# content, plus that auto-tune BM25 weight when the user's query contains them.
+# Default: empty. If empty, `expand_context` returns siblings + parent only
+# (no cross-document reference chasing).
+#
+# Example below shows Jira-style keys. Adapt to your archive — could be
+# DOI numbers, RFC references, GitHub issues, internal ticket IDs, etc.
+#
+# [[references]]
+# pattern = '\b[A-Z]{2,}-\d+\b'
+# source_type = "tickets"
+# description = "Jira-style keys (PROJ-123)"

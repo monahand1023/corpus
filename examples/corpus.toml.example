@@ -1,0 +1,25 @@
+# Example config that points at the bundled sample corpus.
+# Copy this to ./corpus.toml (in the repo root) to try the pipeline:
+#
+#   cp examples/corpus.toml.example corpus.toml
+#   uv run corpus-ingest --source sample -v
+#   uv run corpus-query "what is corpus?"
+
+[corpus]
+db_path = "./corpus.db"
+
+[embedder]
+provider = "voyage"
+model = "voyage-3-large"
+dim = 1024
+
+[retriever]
+top_k = 5
+max_per_source_type = 3
+hybrid = true
+
+[[sources]]
+name = "sample"
+type = "markdown"
+path = "./examples/sample_corpus/notes"
+glob = "**/*.md"
