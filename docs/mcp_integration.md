@@ -77,17 +77,6 @@ Search results reordered chronologically instead of by relevance.
 
 **Returns:** chunks matching `topic`, sorted ascending by `updated_at`. Use for "walk me through what happened with X" questions.
 
-### `who_did_what`
-
-Find chunks where a specific person is the author, assignee, or reporter.
-
-**Args:**
-- `person` (str): substring match, case-insensitive. Handles name variance (Jira-display vs GitHub-login).
-- `top_k` (int, 1-50, default 15)
-- `since` / `until` (ISO date, optional)
-
-**Returns:** chunks across all sources where the person is named. **Requires** your connectors to populate `metadata.author` / `extra.assignee` / `extra.reporter`. Returns empty for sources that don't.
-
 ### `recent_activity`
 
 Chunks updated within the last N days.

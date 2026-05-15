@@ -165,8 +165,7 @@ corpus-query "your question"
 
 ## Tips
 
-- **Set `metadata.author`** if you want `who_did_what(person)` to work for your source.
-- **Set `metadata.extra.parent`** if your docs have hierarchy (Jira parent epics, threaded forum posts, etc.). `expand_context`'s `parent` mode uses this.
+- **Set `metadata.extra.parent`** if your docs have hierarchy (parent epics, threaded forum posts, etc.). `expand_context`'s `parent` mode uses this.
 - **Honor the size cap.** Chunks over ~2,000 chars start eating context budget on the Claude side. The chars/4 token heuristic is in `util/tokens.py`.
 - **Run scrub** in the chunker before computing `content_hash`. Otherwise dedup will think two near-identical docs are different just because secret patterns differ.
 - **Use deterministic `chunk_id`s.** `chunk_id(source_type, source_key, kind, index)` from `util/hash.py` does this — guarantees idempotent re-ingestion.

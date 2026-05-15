@@ -1,7 +1,7 @@
 """MCP stdio server exposing the corpus to Claude Code.
 
-Eight tools: search, expand_context, timeline, who_did_what, recent_activity,
-get_summary, get_doc, corpus_stats.
+Seven tools: search, expand_context, get_doc, timeline, recent_activity,
+get_summary, corpus_stats.
 
 Hygiene rules:
   - stdout is the MCP protocol channel — never `print()`. Logging is on stderr.
@@ -45,8 +45,8 @@ mcp = FastMCP(
         "Search a personal archive. Use `search_knowledge` for natural-language "
         "questions; `expand_context` to chase references from a chunk; "
         "`get_doc` to pull every chunk of a specific document; "
-        "`timeline` / `who_did_what` / `recent_activity` for non-semantic "
-        "queries; `get_summary` for a Claude-generated one-paragraph summary "
+        "`timeline` and `recent_activity` for non-semantic queries; "
+        "`get_summary` for a Claude-generated one-paragraph summary "
         "of a doc (only available after running `corpus-summarize`)."
     ),
 )
@@ -173,25 +173,6 @@ async def timeline(
         ts_short = ts[:10] if isinstance(ts, str) else "?"
         out.append(f"[{i}] {ts_short} — {c.source_type}:{c.source_key}\n{c.title or ''}\n{c.content[:600]}")
     return "\n\n---\n\n".join(out)
-
-
-@mcp.tool(
-    description=(
-        "Chunks where a specific person is author / assignee / reporter. "
-        "Only works for source types whose connectors populate those fields."
-    )
-)
-async def who_did_what(
-    person: Annotated[str, Field(description="Person name fragment")],
-    top_k: Annotated[int, Field(description="How many unique docs (1-50)", ge=1, le=50)] = 15,
-    since: Annotated[str | None, Field(description="ISO date lower bound")] = None,
-    until: Annotated[str | None, Field(description="ISO date upper bound")] = None,
-) -> str:
-    _, _, retriever, _ = _init()
-    chunks = await asyncio.to_thread(retriever.who_did_what, person, top_k, since, until)
-    if not chunks:
-        return f"No chunks involving '{person}'"
-    return "\n\n---\n\n".join(_format_chunk_block(i, c) for i, c in enumerate(chunks, 1))
 
 
 @mcp.tool(description="Chunks updated within the last N days, newest first.")

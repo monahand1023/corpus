@@ -145,28 +145,6 @@ class Retriever:
         candidates.sort(key=lambda c: _chunk_updated_at(c) or "")
         return candidates[:top_k]
 
-    def who_did_what(
-        self,
-        person: str,
-        top_k: int = 20,
-        since: str | None = None,
-        until: str | None = None,
-    ) -> list[StoredChunk]:
-        """Depends on your connectors populating author/assignee/reporter in
-        chunk metadata. Returns empty if no source has those fields."""
-        rows = self._store.find_by_person(person, since=since, until=until, limit=top_k * 5)
-        seen: set[tuple[str, str]] = set()
-        out: list[StoredChunk] = []
-        for c in rows:
-            key = (c.source_type, c.source_key)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(c)
-            if len(out) >= top_k:
-                break
-        return out
-
     def recent_activity(
         self,
         days: int = 7,

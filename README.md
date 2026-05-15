@@ -1,17 +1,20 @@
-# corpus
+# corpus-rag
 
-Single-user RAG framework for personal archives. Local-first, MCP-native.
+Single-user, local-first RAG framework for personal archives. MCP-native.
 
-Point it at any directory of markdown files (notes, Obsidian vault, exported docs) and get:
+Point it at any directory of markdown / PDF / HTML / text files and get:
 
 - Semantic + BM25 hybrid search with auto-tuned fusion weights
 - Source-diversity-aware retrieval (no single doc floods top-K)
 - Multi-hop reference chasing via `expand_context`
 - Optional cross-encoder re-ranker (local, BGE)
 - Optional per-document Claude-Haiku summaries
-- Eight MCP tools wired into Claude Code over stdio
+- Seven MCP tools wired into Claude Code over stdio
 
-**Stack:** Python 3.12 + uv • Voyage embeddings • SQLite + sqlite-vec • FastMCP. No AWS, no Docker, no Terraform.
+**Stack:** Python 3.12 • Voyage or Gemini embeddings • SQLite + sqlite-vec • FastMCP. No AWS, no Docker, no Terraform.
+
+[![PyPI](https://img.shields.io/pypi/v/corpus-rag.svg)](https://pypi.org/project/corpus-rag/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
 
@@ -24,49 +27,49 @@ You add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude 
 ## Quick start
 
 ```sh
-# 1. Clone and install
-git clone <this repo> corpus
-cd corpus
-uv sync
+# 1. Install
+pip install corpus-rag                # base
+pip install 'corpus-rag[all]'         # + reranker, summarizer, pdf, html, gemini
 
-# 2. Set up your config
-cp corpus.toml.example corpus.toml
-cp .env.example .env
-# Edit corpus.toml: point [[sources]] at your data
-# Edit .env: paste your VOYAGE_API_KEY (free tier covers ~200M tokens)
+# 2. Interactive setup wizard — generates corpus.toml + .env
+corpus-init
 
-# 3. Run a first ingest
-uv run corpus-ingest --source notes -v
+# 3. Paste your VOYAGE_API_KEY (free tier covers ~200M tokens) into .env
+#    Sign up at https://dash.voyageai.com/  — or pick Gemini in the wizard
+#    to use Google AI Studio's free tier instead.
 
-# 4. Try it from the CLI
-uv run corpus-query "the question you wish you could ask your archive"
+# 4. Run the first ingest
+corpus-ingest --source notes -v
 
-# 5. Wire it to Claude Code (see "MCP server" below)
+# 5. Try it from the CLI
+corpus-query "the question you wish you could ask your archive"
+
+# 6. Wire it to Claude Code — see "MCP server" below
 ```
 
-The example corpus in `examples/sample_corpus/` lets you try the full pipeline before pointing it at real data — just run `corpus-ingest --source sample` after copying `examples/corpus.toml.example` to `corpus.toml`.
+`corpus-init` walks you through 5 prompts (data path, format, embedder provider, etc.) and writes a working `corpus.toml`. No need to hand-edit anything to get started.
 
 ## Configuration
 
-Everything that varies between deployments lives in `corpus.toml`. See `corpus.toml.example` for the annotated template.
+Everything that varies between deployments lives in `corpus.toml`. The wizard generates a starter file; edit by hand from there.
 
 ```toml
 [corpus]
 db_path = "./corpus.db"
 
 [embedder]
-provider = "voyage"
+provider = "voyage"           # or "gemini"
 model = "voyage-3-large"
-dim = 1024                # must match the model's output dim
+dim = 1024                    # must match the model's output dim
 
 [retriever]
 top_k = 5
-max_per_source_type = 3   # diversity cap
-hybrid = true             # vector + BM25 via RRF
+max_per_source_type = 3       # diversity cap
+hybrid = true                 # vector + BM25 via RRF
 
 [[sources]]
-name = "notes"            # free-form; used as source_type everywhere
-type = "markdown"         # which built-in connector to use
+name = "notes"                # free-form; used as source_type everywhere
+type = "markdown"             # which built-in connector to use
 path = "~/Documents/notes"
 glob = "**/*.md"
 
@@ -89,15 +92,19 @@ Wire `corpus` into Claude Code by adding to `~/.claude.json`:
   "mcpServers": {
     "corpus": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["--directory", "/path/to/your/corpus", "run", "corpus-mcp"],
+      "command": "corpus-mcp",
+      "args": [],
       "env": {}
     }
   }
 }
 ```
 
-Eight tools exposed:
+After `pip install corpus-rag`, `corpus-mcp` is on your PATH. Claude Code spawns it on demand.
+
+Run `corpus-mcp` from a directory that contains your `corpus.toml`, or set the `corpus` env block to pass an absolute path. The server reads `corpus.toml` from the working directory.
+
+Seven tools exposed:
 
 | Tool | Purpose |
 |---|---|
@@ -105,7 +112,6 @@ Eight tools exposed:
 | `expand_context` | Chase references from a chunk — siblings, cited docs, parent |
 | `get_doc` | Pull every chunk of a specific document |
 | `timeline` | Search results reordered chronologically |
-| `who_did_what` | Chunks involving a specific person (needs author metadata) |
 | `recent_activity` | Chunks updated in the last N days |
 | `get_summary` | Cached Claude-Haiku summary (after running `corpus-summarize`) |
 | `corpus_stats` | Health check — total chunks + per-source counts |
@@ -115,15 +121,21 @@ The **investigation pattern** is the high-leverage flow: Claude calls `search_kn
 ## CLI reference
 
 ```sh
-corpus-ingest --source notes -v              # ingest one source
-corpus-ingest --all                          # ingest everything in corpus.toml
-corpus-query "your question" -k 10           # ad-hoc search
-corpus-query "question" --source notes       # source-filtered
-corpus-query "question" --rerank             # local BGE reranker (opt-in)
-corpus-eval --queries tests/eval_queries.py  # recall@k against your queries
+corpus-init                              # interactive setup wizard
+corpus-list                              # show configured sources + chunk counts
+corpus-ingest --source notes -v          # ingest one source
+corpus-ingest --all                      # ingest everything in corpus.toml
+corpus-query "your question" -k 10       # ad-hoc search
+corpus-query "question" --source notes   # source-filtered
+corpus-query "question" --rerank         # local BGE reranker (opt-in)
+corpus-eval --queries my_queries.py      # recall@k against your queries
+corpus-benchmark --runs 20               # latency profile
+corpus-benchmark --compare voyage gemini # embed-latency A/B
 corpus-summarize --source notes --dry-run    # estimate Haiku spend
 corpus-summarize --source notes              # run it
-corpus-mcp                                   # stdio MCP server (Claude spawns)
+corpus-reset --source notes              # drop one source's chunks
+corpus-reset --all                       # delete the whole DB
+corpus-mcp                               # stdio MCP server (Claude spawns it)
 ```
 
 ## Built-in connectors
@@ -132,26 +144,47 @@ corpus-mcp                                   # stdio MCP server (Claude spawns)
 |---|---|---|---|
 | `markdown` | `**/*.md` | — | YAML frontmatter parsed (`title`, `id`, `url`, dates) |
 | `text` | `**/*.txt` | — | Plain text; title from filename stem |
-| `pdf` | `**/*.pdf` | `pip install corpus-rag[pdf]` | Uses `pypdf`. Scanned PDFs need OCR first. |
-| `html` | `**/*.html` | `pip install corpus-rag[html]` | Uses `trafilatura` for boilerplate-stripped main-content extraction |
+| `pdf` | `**/*.pdf` | `pip install 'corpus-rag[pdf]'` | Uses `pypdf`. Scanned PDFs need OCR first. |
+| `html` | `**/*.{html,htm}` | `pip install 'corpus-rag[html]'` | Uses `trafilatura` for boilerplate-stripped main-content extraction |
 
 ## Adding a new source type
 
-For Slack exports, JSON dumps, an internal API archive, EPUB books — write your own connector. The shipped connectors at `src/corpus/connectors/` are the reference implementations; copy any of them as a starting point.
-
-See [`docs/adding_a_source.md`](docs/adding_a_source.md) for the walkthrough with a worked JSON-files example.
+For Slack exports, JSON dumps, an internal API archive, EPUB books — write your own connector. See [`docs/adding_a_source.md`](docs/adding_a_source.md) for the walkthrough with a worked JSON-files example.
 
 ## Eval
 
 `corpus-eval` runs hand-written known-answer queries against the live corpus and reports recall@K. It's a regression signal — run it after changing chunking, switching embedders, or tweaking retrieval.
 
-Write your queries in a Python module exporting `EVAL_QUERIES` (the shipped `tests/eval_queries.py` is a commented placeholder template). Each `EvalQuery` has a `query`, a list of `expected_keys` (any one in top-K = pass), an optional `source_filter`, and a `note`. Tips: paraphrase away from doc titles to stress semantic retrieval; list multiple `expected_keys` when several docs are valid answers; add a few negative queries (empty `expected_keys`) to confirm the corpus correctly fails on absent topics.
+Write your queries in any Python file that defines `EVAL_QUERIES`, then pass `--queries path/to/your_queries.py`:
+
+```python
+# my_queries.py
+from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class EvalQuery:
+    query: str
+    expected_keys: list[str] = field(default_factory=list)
+    source_filter: list[str] | None = None
+    note: str = ""
+
+EVAL_QUERIES = [
+    EvalQuery(
+        query="how does the payment flow work?",
+        expected_keys=["payment-design-doc"],
+        note="paraphrased to stress semantic retrieval",
+    ),
+    # add more...
+]
+```
 
 ```sh
-corpus-eval --top-k 5            # baseline
-corpus-eval --rerank             # with the BGE reranker
-corpus-eval --no-hybrid          # vector-only baseline
+corpus-eval --queries my_queries.py --top-k 5     # baseline
+corpus-eval --queries my_queries.py --rerank      # with the BGE reranker
+corpus-eval --queries my_queries.py --no-hybrid   # vector-only baseline
 ```
+
+Tips: paraphrase away from doc titles to stress semantic retrieval; list multiple `expected_keys` when several docs are valid answers; add a few negative queries (empty `expected_keys`) to confirm the corpus correctly fails on absent topics.
 
 ## Benchmarking
 
@@ -159,7 +192,7 @@ corpus-eval --no-hybrid          # vector-only baseline
 
 ```sh
 corpus-benchmark --runs 20                      # latency profile
-corpus-benchmark --queries tests/eval_queries.py
+corpus-benchmark --queries my_queries.py        # use your own query set
 corpus-benchmark --compare voyage gemini        # embed-latency A/B
 corpus-benchmark --json out.json
 ```
@@ -168,61 +201,31 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 
 `--compare` measures embedder-API latency only — it does **not** compare retrieval quality, because two providers' vectors aren't comparable against one DB. For quality, ingest each provider into its own corpus and run `corpus-eval` against each.
 
-## Project layout
-
-```
-src/corpus/
-  types.py              # Pydantic models (Chunk, ChunkMetadata, SourceDocument, ChunkKind)
-  config.py             # corpus.toml loader
-  retriever.py          # query → embed → hybrid search → dedupe → diversity → rerank
-  ingester.py           # orchestrator: connector → chunker → embed → upsert
-  mcp_server.py         # FastMCP stdio server (8 tools)
-  db/sqlite.py          # ChunkStore — UPSERT, FTS5, vec0, summaries, embedding-dim guard
-  embedder/
-    base.py                    # Embedder protocol
-    voyage.py  gemini.py       # Provider implementations
-    factory.py                 # make_embedder(provider, model) dispatch
-  reranker/local.py     # BGE cross-encoder (optional, lazy-loaded)
-  summarizer/anthropic_summarizer.py  # Claude Haiku per-doc summaries (optional)
-  connectors/
-    base.py                    # Connector + Chunker protocols
-    markdown.py                # YAML-frontmatter markdown (default ref impl)
-    text.py                    # Plain .txt files
-    pdf.py                     # PDFs via pypdf (optional [pdf] extra)
-    html.py                    # HTML via trafilatura (optional [html] extra)
-    registry.py                # Maps `type` string → (Connector, Chunker) factory
-  chunkers/
-    markdown.py                # Shared markdown chunking logic
-  util/
-    hash.py        scrub.py        # SHA-256, deterministic chunk IDs, secret regex
-    dedup.py       rrf.py          # Near-dup fingerprinting, reciprocal rank fusion
-    tokens.py                      # Char-based token heuristic for chunking decisions
-  cli/
-    init.py  ingest.py  query.py  eval.py        # 9 console scripts
-    summarize.py  benchmark.py  list_sources.py  reset.py
-tests/
-docs/
-examples/sample_corpus/    # Synthetic markdown for try-before-you-config
-```
-
-## Tests
-
-```sh
-uv run pytest tests/ -q
-```
-
-Unit tests cover the storage layer, embedder (mocked), retriever (dedupe/diversity/references), all four connectors (markdown / text / pdf / html), RRF, scrub, dedup, config loader, the init wizard, factory dispatch, and benchmark helpers. Run `uv run pytest tests/ -q` to see the current count.
-
 ## Documentation
 
 | Doc | What it covers |
 |---|---|
 | [`docs/configuration.md`](docs/configuration.md) | Every `corpus.toml` setting + env var, including the Voyage-vs-Gemini embedder choice |
-| [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code wiring + all 8 tools, the investigation pattern |
+| [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code wiring + all 7 tools, the investigation pattern |
 | [`docs/adding_a_source.md`](docs/adding_a_source.md) | Walkthrough for writing a custom connector |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and the actual fixes |
 
 Architecture overview, benchmarking, and eval methodology are covered inline in this README (sections above).
+
+## Develop locally
+
+Want to hack on the framework, write a new connector, or run the tests? Clone and use [uv](https://docs.astral.sh/uv/):
+
+```sh
+git clone https://github.com/monahand1023/corpus.git
+cd corpus
+uv sync                              # creates .venv with all deps
+uv run pytest tests/ -q              # run the suite
+uv run ruff check src/ tests/        # lint
+uv run corpus-init                   # the CLI scripts are also available via `uv run`
+```
+
+The repo includes `examples/sample_corpus/` (synthetic markdown notes) and `examples/corpus.toml.example` (wired to point at it) for try-before-you-config experiments.
 
 ## License
 

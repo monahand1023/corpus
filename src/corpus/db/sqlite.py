@@ -423,56 +423,6 @@ class ChunkStore:
             for row in rows
         ]
 
-    def find_by_person(
-        self,
-        person: str,
-        since: str | None = None,
-        until: str | None = None,
-        limit: int = 50,
-    ) -> list[StoredChunk]:
-        """Find chunks where `person` appears as author/assignee/reporter.
-
-        Depends on connectors populating those metadata fields — works out of
-        the box for sources that populate them, returns empty otherwise.
-        """
-        like = f"%{person}%"
-        clauses = [
-            "LOWER(author) LIKE LOWER(?)",
-            "LOWER(IFNULL(json_extract(metadata, '$.extra.assignee'), '')) LIKE LOWER(?)",
-            "LOWER(IFNULL(json_extract(metadata, '$.extra.reporter'), '')) LIKE LOWER(?)",
-        ]
-        params: list[Any] = [like, like, like]
-        date_clauses = []
-        if since:
-            date_clauses.append("updated_at >= ?")
-            params.append(since)
-        if until:
-            date_clauses.append("updated_at <= ?")
-            params.append(until)
-
-        sql = f"""
-            SELECT id, source_type, source_key, content, metadata, title, url, updated_at
-            FROM chunks
-            WHERE ({" OR ".join(clauses)})
-              {("AND " + " AND ".join(date_clauses)) if date_clauses else ""}
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """
-        params.append(limit)
-        rows = self._conn.execute(sql, tuple(params)).fetchall()
-        return [
-            StoredChunk(
-                id=r["id"],
-                source_type=r["source_type"],
-                source_key=r["source_key"],
-                content=r["content"],
-                metadata=json.loads(r["metadata"]),
-                title=r["title"],
-                url=r["url"],
-            )
-            for r in rows
-        ]
-
     def find_recent(
         self,
         since: str,

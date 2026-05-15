@@ -5,7 +5,7 @@ id: mcp-tools
 
 # MCP tools
 
-When wired to Claude Code, `corpus` exposes 8 tools:
+When wired to Claude Code, `corpus` exposes 7 tools:
 
 ## search_knowledge
 
@@ -25,9 +25,9 @@ This is what enables multi-hop investigation: Claude searches, finds an entry po
 
 Pull every chunk of a specific `(source_type, source_key)`. Use when you want to read a whole doc in order rather than the highest-scoring fragments.
 
-## timeline / who_did_what / recent_activity
+## timeline / recent_activity
 
-Specialized non-semantic queries: chronological-by-date, author-filtered, and last-N-days-by-source.
+Specialized non-semantic queries: chronological-by-date and last-N-days-by-source.
 
 ## get_summary
 
