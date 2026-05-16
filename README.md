@@ -14,6 +14,7 @@ Point it at any directory of markdown / PDF / HTML / text files and get:
 **Stack:** Python 3.12 • Voyage or Gemini embeddings • SQLite + sqlite-vec • FastMCP. No AWS, no Docker, no Terraform.
 
 [![PyPI](https://img.shields.io/pypi/v/corpus-rag.svg)](https://pypi.org/project/corpus-rag/)
+[![CI](https://github.com/monahand1023/corpus/actions/workflows/ci.yml/badge.svg)](https://github.com/monahand1023/corpus/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
