@@ -4,7 +4,24 @@
 
 ## Wiring it up
 
-Add to `~/.claude.json`:
+Add to `~/.claude.json`. **Pass the absolute path to your `corpus.toml`** via `--config`:
+
+```json
+{
+  "mcpServers": {
+    "corpus": {
+      "type": "stdio",
+      "command": "corpus-mcp",
+      "args": ["--config", "/absolute/path/to/your/corpus.toml"],
+      "env": {}
+    }
+  }
+}
+```
+
+Why the absolute path? Claude Code spawns the MCP server from an arbitrary CWD (often `$HOME`). Without `--config`, `corpus-mcp` looks for `./corpus.toml` in that CWD — which usually isn't where your config lives.
+
+If you'd rather avoid `--config` and you're a uv user, the alternative is to spawn through `uv`, which sets the CWD for you:
 
 ```json
 {
@@ -12,19 +29,13 @@ Add to `~/.claude.json`:
     "corpus": {
       "type": "stdio",
       "command": "uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/your/corpus",
-        "run",
-        "corpus-mcp"
-      ],
-      "env": {}
+      "args": ["--directory", "/path/to/repo", "run", "corpus-mcp"]
     }
   }
 }
 ```
 
-Use an **absolute path** to your corpus repo — Claude Code spawns from an arbitrary CWD and won't resolve relative paths reliably. Use an absolute path to `uv` too if your `uv` isn't on Claude Code's `PATH` (`/opt/homebrew/bin/uv` on Mac Homebrew).
+Use an absolute path to `uv` (`/opt/homebrew/bin/uv` on Mac Homebrew) if Claude Code's PATH doesn't include it.
 
 After editing `~/.claude.json`, restart Claude Code. The eight MCP tools will appear in `/mcp`.
 

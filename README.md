@@ -85,7 +85,7 @@ Schema hazard: changing `embedder.dim` after data has been ingested would silent
 
 ## MCP server (Claude Code integration)
 
-Wire `corpus` into Claude Code by adding to `~/.claude.json`:
+Wire `corpus` into Claude Code by adding to `~/.claude.json`. **Pass the absolute path to your `corpus.toml`** via `--config` — Claude Code spawns the MCP server from an arbitrary CWD, so a relative path won't reliably find your config:
 
 ```json
 {
@@ -93,7 +93,7 @@ Wire `corpus` into Claude Code by adding to `~/.claude.json`:
     "corpus": {
       "type": "stdio",
       "command": "corpus-mcp",
-      "args": [],
+      "args": ["--config", "/absolute/path/to/your/corpus.toml"],
       "env": {}
     }
   }
@@ -101,8 +101,6 @@ Wire `corpus` into Claude Code by adding to `~/.claude.json`:
 ```
 
 After `pip install corpus-rag`, `corpus-mcp` is on your PATH. Claude Code spawns it on demand.
-
-Run `corpus-mcp` from a directory that contains your `corpus.toml`, or set the `corpus` env block to pass an absolute path. The server reads `corpus.toml` from the working directory.
 
 Seven tools exposed:
 

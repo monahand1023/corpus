@@ -55,12 +55,13 @@ _store: ChunkStore | None = None
 _embedder: Embedder | None = None
 _retriever: Retriever | None = None
 _config: CorpusConfig | None = None
+_config_path_override: str | None = None  # set by main() from --config flag
 
 
 def _init() -> tuple[ChunkStore, Embedder, Retriever, CorpusConfig]:
     global _store, _embedder, _retriever, _config
     if _config is None:
-        _config = CorpusConfig.load()
+        _config = CorpusConfig.load(_config_path_override)
     if _store is None:
         _store = ChunkStore(_config.db_path, embedding_dim=_config.embedder.dim)
     if _embedder is None:
@@ -223,8 +224,30 @@ async def corpus_stats() -> str:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="corpus MCP stdio server (spawned by Claude Code)"
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Absolute path to corpus.toml. RECOMMENDED when wiring via "
+            "~/.claude.json — Claude Code spawns the server from an arbitrary "
+            "CWD, so a relative path won't find the right config. Defaults to "
+            "./corpus.toml in the current working directory."
+        ),
+    )
+    args = parser.parse_args()
+
+    # Cache the config path so _init() loads from the same place when MCP
+    # tools are invoked.
+    global _config_path_override
+    _config_path_override = args.config
+
     try:
-        config = CorpusConfig.load()
+        config = CorpusConfig.load(args.config)
     except FileNotFoundError as e:
         logger.error("%s", e)
         sys.exit(2)
