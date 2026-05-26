@@ -1,6 +1,8 @@
 # corpus-rag
 
-Single-user, local-first RAG framework for personal archives. MCP-native.
+Your personal archive — notes, PDFs, docs — queryable in plain English, running entirely on your machine.
+
+A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or trusting your files to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server. Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
 
 Point it at any directory of markdown / PDF / HTML / text files and get:
 
@@ -18,12 +20,6 @@ Point it at any directory of markdown / PDF / HTML / text files and get:
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
-
-## Why this exists
-
-A useful personal knowledge system shouldn't require running a vector database service, paying for a SaaS, or trusting your archive to someone else's cloud. `corpus` runs entirely on your machine: one Python process, one SQLite file, one MCP server. The whole system is small enough to read end-to-end.
-
-You add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search it.
 
 ## Quick start
 
