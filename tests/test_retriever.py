@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -149,3 +150,143 @@ def test_auto_fts_weight_no_patterns_uses_generic_hints_only(tmp_path: Path) -> 
     # But quoted phrases still trigger the generic hint
     assert r._auto_fts_weight('search for "exact phrase"') == 1.0
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for timeline / recent_activity tests
+# ---------------------------------------------------------------------------
+
+
+def make_chunk_with_date(
+    source_type: str,
+    source_key: str,
+    idx: int,
+    content: str,
+    days_ago: int,
+) -> Chunk:
+    now = datetime.now(UTC)
+    updated_at = (now - timedelta(days=days_ago)).isoformat()
+    return Chunk(
+        id=chunk_id(source_type, source_key, ChunkKind.HEADER, idx),
+        content=content,
+        content_hash=sha256(content),
+        metadata=ChunkMetadata(
+            source_type=source_type,
+            source_key=source_key,
+            chunk_kind=ChunkKind.HEADER,
+            chunk_index=idx,
+            title=f"{source_type}:{source_key}",
+            updated_at=updated_at,
+        ),
+    )
+
+
+@pytest.fixture
+def retriever_with_dates(tmp_path: Path) -> Retriever:
+    """Fixture with chunks that have known updated_at dates for timeline/recent_activity tests."""
+    store = ChunkStore(tmp_path / "dated.db", embedding_dim=DIM)
+    items = [
+        # notes: varying ages
+        (make_chunk_with_date("notes", "old-doc", 0, "old note content", 30), fake_embedding(0)),
+        (make_chunk_with_date("notes", "mid-doc", 0, "mid note content", 10), fake_embedding(1)),
+        (make_chunk_with_date("notes", "new-doc", 0, "new note content", 2), fake_embedding(2)),
+        # papers: also recent
+        (make_chunk_with_date("papers", "paper-a", 0, "paper content a", 3), fake_embedding(3)),
+        (make_chunk_with_date("papers", "paper-b", 0, "paper content b", 25), fake_embedding(4)),
+        # notes: multiple chunks for same source_key (for dedup test)
+        (make_chunk_with_date("notes", "multi-doc", 0, "multi doc chunk 0", 1), fake_embedding(5)),
+        (make_chunk_with_date("notes", "multi-doc", 1, "multi doc chunk 1", 1), fake_embedding(6)),
+        (make_chunk_with_date("notes", "multi-doc", 2, "multi doc chunk 2", 1), fake_embedding(7)),
+    ]
+    store.upsert_batch(items)
+
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+    yield r
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# timeline() tests
+# ---------------------------------------------------------------------------
+
+
+def test_timeline_sorts_ascending_by_date(retriever_with_dates: Retriever) -> None:
+    """timeline() returns chunks sorted oldest-first by updated_at."""
+    results = retriever_with_dates.timeline("note content", top_k=20)
+    dates = [c.metadata.get("updated_at") or "" for c in results]
+    assert dates == sorted(dates), "timeline results should be sorted ascending by updated_at"
+
+
+def test_timeline_since_filters_old(retriever_with_dates: Retriever) -> None:
+    """Passing since= excludes chunks older than the cutoff date."""
+    since = (datetime.now(UTC) - timedelta(days=15)).date().isoformat()
+    results = retriever_with_dates.timeline("note content", top_k=20, since=since)
+    source_keys = {c.source_key for c in results}
+    # old-doc is 30 days ago — should be excluded
+    assert "old-doc" not in source_keys
+    # paper-b is 25 days ago — should be excluded
+    assert "paper-b" not in source_keys
+
+
+def test_timeline_until_filters_future(retriever_with_dates: Retriever) -> None:
+    """Passing until= excludes chunks more recent than the cutoff date."""
+    until = (datetime.now(UTC) - timedelta(days=5)).date().isoformat()
+    results = retriever_with_dates.timeline("note content", top_k=20, until=until)
+    source_keys = {c.source_key for c in results}
+    # new-doc is 2 days ago — should be excluded
+    assert "new-doc" not in source_keys
+    # multi-doc is 1 day ago — should be excluded
+    assert "multi-doc" not in source_keys
+
+
+def test_timeline_empty_when_no_candidates(tmp_path: Path) -> None:
+    """timeline() on an empty store returns an empty list."""
+    store = ChunkStore(tmp_path / "empty.db", embedding_dim=DIM)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+    results = r.timeline("anything at all", top_k=10)
+    assert results == []
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# recent_activity() tests
+# ---------------------------------------------------------------------------
+
+
+def test_recent_activity_returns_within_window(retriever_with_dates: Retriever) -> None:
+    """Chunks updated within the window appear; older chunks don't."""
+    results = retriever_with_dates.recent_activity(days=7)
+    source_keys = {c.source_key for c in results}
+    # Within 7 days: new-doc (2d), paper-a (3d), multi-doc (1d)
+    assert "new-doc" in source_keys
+    assert "paper-a" in source_keys
+    assert "multi-doc" in source_keys
+    # Outside 7 days: old-doc (30d), mid-doc (10d), paper-b (25d)
+    assert "old-doc" not in source_keys
+    assert "mid-doc" not in source_keys
+    assert "paper-b" not in source_keys
+
+
+def test_recent_activity_dedupes_by_source_key(retriever_with_dates: Retriever) -> None:
+    """multi-doc has 3 chunks but recent_activity should include it only once."""
+    results = retriever_with_dates.recent_activity(days=7)
+    multi_doc_entries = [c for c in results if c.source_key == "multi-doc"]
+    assert len(multi_doc_entries) == 1, "same source_key should appear at most once"
+
+
+def test_recent_activity_filter_sources(retriever_with_dates: Retriever) -> None:
+    """filter_sources=["notes"] should exclude papers chunks."""
+    results = retriever_with_dates.recent_activity(days=30, filter_sources=["notes"])
+    source_types = {c.source_type for c in results}
+    assert "papers" not in source_types
+    assert "notes" in source_types
+
+
+def test_recent_activity_top_k_caps_output(retriever_with_dates: Retriever) -> None:
+    """top_k limits the number of returned chunks."""
+    results = retriever_with_dates.recent_activity(days=365, top_k=2)
+    assert len(results) <= 2
