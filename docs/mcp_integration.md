@@ -37,9 +37,33 @@ If you'd rather avoid `--config` and you're a uv user, the alternative is to spa
 
 Use an absolute path to `uv` (`/opt/homebrew/bin/uv` on Mac Homebrew) if Claude Code's PATH doesn't include it.
 
-After editing `~/.claude.json`, restart Claude Code. The eight MCP tools will appear in `/mcp`.
+After editing `~/.claude.json`, restart Claude Code. The seven MCP tools will appear in `/mcp`.
 
-## The eight tools
+## Claude Desktop wiring
+
+Claude Desktop also supports stdio MCP servers using the same mechanism. Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent path on your OS:
+
+```json
+{
+  "mcpServers": {
+    "corpus": {
+      "command": "uv",
+      "args": [
+        "--directory", "/absolute/path/to/your/corpus",
+        "run", "corpus-mcp"
+      ]
+    }
+  }
+}
+```
+
+Use the absolute path to `uv` if Claude Desktop's PATH doesn't include it (e.g. `/opt/homebrew/bin/uv` on Mac Homebrew, `~/.cargo/bin/uv` on Linux).
+
+Restart Claude Desktop after editing the config. The corpus tools appear in the tool panel alongside any other MCP servers you have configured.
+
+> **Note:** Claude Desktop uses stdio (it spawns the server process itself) — not HTTP/SSE. If you try to use a `"url"` field, Claude Desktop will reject the config entry. Stdio works on macOS, Windows, and Linux without any extra server setup.
+
+## The seven tools
 
 ### `search_knowledge`
 

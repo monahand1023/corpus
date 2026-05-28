@@ -41,7 +41,7 @@ corpus-ingest --source notes -v
 # 5. Try it from the CLI
 corpus-query "the question you wish you could ask your archive"
 
-# 6. Wire it to Claude Code — see "MCP server" below
+# 6. Wire it to Claude Code or Claude Desktop — see "MCP server" below
 ```
 
 `corpus-init` walks you through 5 prompts (data path, format, embedder provider, etc.) and writes a working `corpus.toml`. No need to hand-edit anything to get started.
@@ -80,9 +80,11 @@ description = "Jira-style ticket keys"
 
 Schema hazard: changing `embedder.dim` after data has been ingested would silently corrupt retrieval. `corpus` validates the dim against the existing schema at startup and refuses to proceed on mismatch.
 
-## MCP server (Claude Code integration)
+## MCP server
 
-Wire `corpus` into Claude Code by adding to `~/.claude.json`. **Pass the absolute path to your `corpus.toml`** via `--config` — Claude Code spawns the MCP server from an arbitrary CWD, so a relative path won't reliably find your config:
+Wire `corpus` into **Claude Code** or **Claude Desktop** — both use stdio and the same config format. **Pass the absolute path to your `corpus.toml`** via `--config` — the client spawns the MCP server from an arbitrary CWD, so a relative path won't reliably find your config.
+
+**Claude Code** — add to `~/.claude.json`:
 
 ```json
 {
@@ -97,7 +99,25 @@ Wire `corpus` into Claude Code by adding to `~/.claude.json`. **Pass the absolut
 }
 ```
 
-After `pip install corpus-rag`, `corpus-mcp` is on your PATH. Claude Code spawns it on demand.
+After `pip install corpus-rag`, `corpus-mcp` is on your PATH. The client spawns it on demand.
+
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
+
+```json
+{
+  "mcpServers": {
+    "corpus": {
+      "command": "uv",
+      "args": [
+        "--directory", "/absolute/path/to/your/corpus",
+        "run", "corpus-mcp"
+      ]
+    }
+  }
+}
+```
+
+Use an absolute path to `uv` if it's not on the client's PATH. See [`docs/mcp_integration.md`](docs/mcp_integration.md) for more detail, including multiple-corpus setups.
 
 Seven tools exposed:
 
@@ -201,7 +221,7 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 | Doc | What it covers |
 |---|---|
 | [`docs/configuration.md`](docs/configuration.md) | Every `corpus.toml` setting + env var, including the Voyage-vs-Gemini embedder choice |
-| [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code wiring + all 7 tools, the investigation pattern |
+| [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code + Claude Desktop wiring, all 7 tools, the investigation pattern |
 | [`docs/adding_a_source.md`](docs/adding_a_source.md) | Walkthrough for writing a custom connector |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and the actual fixes |
 
