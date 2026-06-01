@@ -106,6 +106,32 @@ def test_delete_orphans_clears_vec_and_fts(store: ChunkStore) -> None:
     assert conn.execute("SELECT COUNT(*) c FROM chunks_fts").fetchone()["c"] == 2
 
 
+def test_delete_orphans_handles_many_rows(store: ChunkStore) -> None:
+    """>1000 orphans must delete without hitting SQLite's bind-variable cap.
+
+    The old implementation deleted `chunks` via a single
+    `WHERE id IN (?,?,...)` with one bind variable per orphan — that crashes
+    with 'too many SQL variables' past ~32k. Per-rowid deletes in the loop have
+    no such limit. 1001 rows proves the loop path is taken and stays correct."""
+    n = 1001
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"orphan {i}"), fake_embedding(i))
+        for i in range(n)
+    ]
+    store.upsert_batch(items)
+    assert store.stats()["total"] == n
+
+    # Keep only one — everything else is an orphan.
+    seen_ids = {items[0][0].id}
+    deleted = store.delete_orphans("notes", seen_ids)
+    assert deleted == n - 1
+
+    conn = store._conn
+    assert conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM chunks_vec").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM chunks_fts").fetchone()["c"] == 1
+
+
 def test_delete_by_source_clears_vec_and_fts(store: ChunkStore) -> None:
     items = [
         (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
