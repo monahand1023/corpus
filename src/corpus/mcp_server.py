@@ -42,12 +42,31 @@ logger = logging.getLogger("corpus.mcp")
 mcp = FastMCP(
     name="corpus",
     instructions=(
-        "Search a personal archive. Use `search_knowledge` for natural-language "
-        "questions; `expand_context` to chase references from a chunk; "
-        "`get_doc` to pull every chunk of a specific document; "
-        "`timeline` and `recent_activity` for non-semantic queries; "
-        "`get_summary` for a Claude-generated one-paragraph summary "
-        "of a doc (only available after running `corpus-summarize`)."
+        "Search the user's personal knowledge archive — a generalized RAG over "
+        "their own notes, documents, papers, web clippings, and similar material "
+        "(the configured source types vary per install; call `corpus_stats` to see "
+        "which exist). Answer plain-language questions by choosing the right tool; "
+        "the user does NOT pass parameters — infer them from the question.\n"
+        "• Any topic / 'what do I have on X', 'find where I wrote about Y', "
+        "conceptual or keyword lookup → `search_knowledge` (semantic + BM25 hybrid; "
+        "pass source_types to scope to one kind of material).\n"
+        "• 'Show me the whole note/doc', 'read all of <X>', 'pull up the full <doc>' → "
+        "`get_doc` (every chunk of one document, in order) — usually after a "
+        "search_knowledge hit gives you its source_type + source_key.\n"
+        "• 'What's around this', 'related sections', 'what does it reference', "
+        "neighbors/siblings of a result → `expand_context` on a chunk_id.\n"
+        "• 'When did X happen', 'how did Y evolve', anything chronological → "
+        "`timeline`.\n"
+        "• 'What have I added/changed lately', 'what's new this week' → "
+        "`recent_activity`.\n"
+        "• 'Give me the gist of <doc>', a one-paragraph TL;DR of a single document → "
+        "`get_summary` (only populated after running `corpus-summarize`; falls back "
+        "to a hint if absent).\n"
+        "• 'How big is the archive', 'what's in here', counts per source → "
+        "`corpus_stats`.\n"
+        "Typical flow: `search_knowledge` to locate material → `get_doc` / "
+        "`expand_context` to read it in full → cite concrete details (names, dates, "
+        "identifiers) from the source text."
     ),
 )
 

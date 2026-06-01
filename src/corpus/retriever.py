@@ -67,6 +67,19 @@ class Retriever:
                 return 1.0
         return 0.25
 
+    def _attach_summaries(self, chunks: list[StoredChunk]) -> None:
+        """Populate each chunk's `.summary` from the per-doc `summaries` table so
+        the reranker can score against summary+content (query-time only — NO
+        re-embedding of the corpus). Lookups are cached by (source_type,
+        source_key) so a pool of N chunks from M docs costs M queries, not N."""
+        cache: dict[tuple[str, str], str | None] = {}
+        for c in chunks:
+            key = (c.source_type, c.source_key)
+            if key not in cache:
+                row = self._store.get_summary(c.source_type, c.source_key)
+                cache[key] = row["summary"] if row else None
+            c.summary = cache[key]
+
     def query(
         self,
         question: str,
@@ -102,7 +115,9 @@ class Retriever:
             fused = list(vector_hits)
 
         if rerank and self._reranker is not None:
-            fused = self._reranker.rerank(question, fused[:rerank_pool_size])
+            pool = fused[:rerank_pool_size]
+            self._attach_summaries(pool)
+            fused = self._reranker.rerank(question, pool)
 
         if not dedupe_by_source and max_per_source_type is None:
             return RetrievalResult(query=question, chunks=fused[:top_k])

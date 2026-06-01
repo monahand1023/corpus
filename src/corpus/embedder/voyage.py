@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -24,6 +26,14 @@ logger = logging.getLogger(__name__)
 # Conservative 400K-char batch budget (~100K tokens estimate) leaves headroom.
 MAX_INPUTS_PER_BATCH = 128
 MAX_CHARS_PER_BATCH = 400_000
+
+# Voyage projects have a per-minute token limit (3,000,000 TPM for voyage-3-large
+# at time of writing). Firing requests blindly on a large ingest blows past it and
+# degrades into a wall of 429 retries that can stall the run. We proactively pace
+# under a target below the hard limit, sleeping when the rolling 60s window is full.
+# Override via CORPUS_TPM_TARGET (raise it if your project's limit is higher).
+TPM_TARGET = int(os.environ.get("CORPUS_TPM_TARGET") or 2_600_000)
+_TPM_WINDOW_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,26 @@ class VoyageEmbedder:
         self._client = voyageai.Client(api_key=key, max_retries=max_retries, timeout=timeout)
         self._model = model
         self.total_tokens_used = 0
+        # Rolling window of (monotonic_ts, tokens) for proactive TPM throttling.
+        self._token_window: deque[tuple[float, int]] = deque()
+
+    def _throttle(self, est_tokens: int) -> None:
+        """Sleep if sending `est_tokens` now would exceed the rolling 60s TPM target.
+
+        Keeps ingestion smoothly under Voyage's per-minute token limit instead of
+        firing blindly and thrashing on 429 rate-limit retries."""
+        now = time.monotonic()
+        while self._token_window and now - self._token_window[0][0] > _TPM_WINDOW_SECONDS:
+            self._token_window.popleft()
+        used = sum(t for _, t in self._token_window)
+        if used + est_tokens > TPM_TARGET and self._token_window:
+            sleep_for = _TPM_WINDOW_SECONDS - (now - self._token_window[0][0]) + 0.5
+            if sleep_for > 0:
+                logger.info(
+                    "TPM throttle: %d tokens in window + %d est > %d target; sleeping %.1fs",
+                    used, est_tokens, TPM_TARGET, sleep_for,
+                )
+                time.sleep(sleep_for)
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float] | None]:
         """`input_type='document'` is mandatory for voyage-3-large asymmetric
@@ -118,6 +148,10 @@ class VoyageEmbedder:
             return left + right
 
     def _embed_batch(self, texts: list[str], input_type: str) -> EmbedResult:
+        # Estimate tokens from chars (~3 chars/token, conservative for mixed-language
+        # content) and pace under the TPM target before firing the request.
+        est_tokens = sum(len(t) for t in texts) // 3
+        self._throttle(est_tokens)
         response = self._client.embed(
             texts=texts,
             model=self._model,
@@ -125,6 +159,7 @@ class VoyageEmbedder:
             truncation=True,
         )
         self.total_tokens_used += response.total_tokens
+        self._token_window.append((time.monotonic(), response.total_tokens))
         return EmbedResult(embeddings=response.embeddings, total_tokens=response.total_tokens)
 
     def count_tokens(self, texts: Sequence[str]) -> int:

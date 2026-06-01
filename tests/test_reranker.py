@@ -4,13 +4,13 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from corpus.reranker.local import BGEReranker
+from corpus.reranker.local import _MAX_RERANK_CHARS, BGEReranker, _rerank_text
 
 
-def fake_chunk(content: str) -> SimpleNamespace:
-    return SimpleNamespace(content=content, source_key="doc-1", source_type="notes")
+def fake_chunk(content: str, summary: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        content=content, source_key="doc-1", source_type="notes", summary=summary
+    )
 
 
 def make_reranker_with_mock_model() -> tuple[BGEReranker, MagicMock]:
@@ -117,3 +117,38 @@ def test_rerank_lazy_load_calls_cross_encoder() -> None:
 
     mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3")
     assert reranker._model is mock_ce_instance
+
+
+# ---------------------------------------------------------------------------
+# 7. _rerank_text: summary prepended when present, bare content otherwise
+# ---------------------------------------------------------------------------
+
+def test_rerank_text_prepends_summary_when_present() -> None:
+    c = fake_chunk("the chunk body", summary="doc-level summary")
+    text = _rerank_text(c)
+    assert text == "doc-level summary\n\nthe chunk body"
+
+
+def test_rerank_text_bare_content_when_no_summary() -> None:
+    c = fake_chunk("just the body")
+    text = _rerank_text(c)
+    assert text == "just the body"
+
+
+def test_rerank_text_truncates_to_max_chars() -> None:
+    c = fake_chunk("x" * (_MAX_RERANK_CHARS + 5000), summary="s")
+    text = _rerank_text(c)
+    assert len(text) == _MAX_RERANK_CHARS
+
+
+def test_rerank_scores_against_summary_text() -> None:
+    """The cross-encoder must be fed summary+content, not bare content, when a
+    summary is attached."""
+    reranker, mock_model = make_reranker_with_mock_model()
+    chunks = [fake_chunk("body", summary="SUMMARY")]
+    mock_model.predict.return_value = [0.5]
+
+    reranker.rerank("query", chunks)
+
+    pairs = mock_model.predict.call_args.args[0]
+    assert pairs[0][1] == "SUMMARY\n\nbody"

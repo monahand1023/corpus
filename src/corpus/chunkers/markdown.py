@@ -135,9 +135,36 @@ def _split_long_section(section: str, max_chars: int) -> list[str]:
     return pieces
 
 
+def _coalesce_small(chunks: list[str], max_chars: int) -> list[str]:
+    """Pack consecutive small chunks together up to max_chars.
+
+    Heading-heavy content — e.g. a data table rendered as markdown with many
+    '## row' headers — otherwise explodes into a flood of tiny one-line sections.
+    Packing adjacent fragments back up to the normal chunk size kills that
+    low-signal fragmentation WITHOUT dropping any content (genuinely large
+    documents still split into many full-size chunks) and preserves order."""
+    out: list[str] = []
+    buf = ""
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        if not buf:
+            buf = c
+        elif len(buf) + 2 + len(c) <= max_chars:
+            buf = f"{buf}\n\n{c}"
+        else:
+            out.append(buf)
+            buf = c
+    if buf:
+        out.append(buf)
+    return out
+
+
 def chunk_markdown_body(body: str) -> list[str]:
     sections = _split_into_sections(body)
     chunks: list[str] = []
     for section in sections:
         chunks.extend(_split_long_section(section, MAX_CHUNK_CHARS))
-    return [c for c in chunks if c.strip()]
+    chunks = [c for c in chunks if c.strip()]
+    return _coalesce_small(chunks, MAX_CHUNK_CHARS)

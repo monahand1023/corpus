@@ -39,6 +39,10 @@ class StoredChunk:
     title: str | None
     url: str | None
     distance: float | None = None
+    # Per-DOC summary (from the `summaries` table), attached at query time by the
+    # Retriever so the reranker can score against summary+content. NOT persisted on
+    # the chunk row; None unless the retriever populated it.
+    summary: str | None = None
 
 
 class EmbeddingDimMismatch(RuntimeError):
@@ -274,15 +278,15 @@ class ChunkStore:
         orphans = [(row["id"], row["rowid"]) for row in existing if row["id"] not in seen_ids]
         if not orphans:
             return 0
+        # Delete chunks by rowid in the loop (same as vec/fts) rather than a single
+        # `WHERE id IN (?,?,...)` — a one-shot IN clause blows SQLite's variable cap
+        # (~32k) when a re-ingest produces hundreds of thousands of orphans (e.g. a
+        # full re-chunk). Per-rowid deletes have no such limit.
         with self._txn():
             for _id, rowid in orphans:
                 self._conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
                 self._conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
-            placeholders = ",".join("?" for _ in orphans)
-            self._conn.execute(
-                f"DELETE FROM chunks WHERE id IN ({placeholders})",
-                tuple(o[0] for o in orphans),
-            )
+                self._conn.execute("DELETE FROM chunks WHERE rowid = ?", (rowid,))
         return len(orphans)
 
     def fts_search(

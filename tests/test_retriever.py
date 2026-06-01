@@ -290,3 +290,71 @@ def test_recent_activity_top_k_caps_output(retriever_with_dates: Retriever) -> N
     """top_k limits the number of returned chunks."""
     results = retriever_with_dates.recent_activity(days=365, top_k=2)
     assert len(results) <= 2
+
+
+# ---------------------------------------------------------------------------
+# _attach_summaries() — context-aware reranking support (#4)
+# ---------------------------------------------------------------------------
+
+
+def test_attach_summaries_populates_and_caches_by_source_key(tmp_path: Path) -> None:
+    """Per-doc summary is attached to each chunk; lookups are cached by
+    (source_type, source_key) so M docs cost M queries regardless of N chunks."""
+    store = ChunkStore(tmp_path / "sum.db", embedding_dim=DIM)
+    items = [
+        (make_chunk("notes", "doc-A", 0, "A chunk 0"), fake_embedding(0)),
+        (make_chunk("notes", "doc-A", 1, "A chunk 1"), fake_embedding(1)),
+        (make_chunk("notes", "doc-B", 0, "B chunk 0"), fake_embedding(2)),
+    ]
+    store.upsert_batch(items)
+    store.upsert_summary("notes", "doc-A", "summary of A", "h", "model", 1)
+    # doc-B intentionally has no summary.
+
+    embedder = MagicMock()
+    r = Retriever(store=store, embedder=embedder)
+
+    chunks = store.get_by_source_key("notes", "doc-A") + store.get_by_source_key("notes", "doc-B")
+
+    calls: list[tuple[str, str]] = []
+    real_get = store.get_summary
+
+    def counting_get(stype: str, skey: str):
+        calls.append((stype, skey))
+        return real_get(stype, skey)
+
+    store.get_summary = counting_get  # type: ignore[method-assign]
+    r._attach_summaries(chunks)
+
+    by_key = {(c.source_key, c.metadata["chunk_index"]): c for c in chunks}
+    # Both doc-A chunks get the summary; doc-B gets None.
+    assert by_key[("doc-A", 0)].summary == "summary of A"
+    assert by_key[("doc-A", 1)].summary == "summary of A"
+    assert by_key[("doc-B", 0)].summary is None
+    # 3 chunks, 2 distinct docs → exactly 2 DB lookups (cached).
+    assert len(calls) == 2
+    store.close()
+
+
+def test_rerank_pool_gets_summaries_attached(tmp_path: Path) -> None:
+    """query(rerank=True) attaches summaries to the rerank pool before scoring."""
+    store = ChunkStore(tmp_path / "rr.db", embedding_dim=DIM)
+    items = [(make_chunk("notes", "doc-A", 0, "A body"), fake_embedding(0))]
+    store.upsert_batch(items)
+    store.upsert_summary("notes", "doc-A", "the summary", "h", "model", 1)
+
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+
+    captured: list = []
+
+    class SpyReranker:
+        def rerank(self, query, candidates, top_n=None):
+            captured.extend(candidates)
+            return candidates
+
+    r = Retriever(store=store, embedder=embedder, reranker=SpyReranker())
+    r.query("anything", top_k=5, hybrid=False, rerank=True)
+
+    assert captured, "reranker received no candidates"
+    assert captured[0].summary == "the summary"
+    store.close()

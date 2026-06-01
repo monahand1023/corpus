@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cross-encoders truncate long inputs anyway; keep the pair text bounded so a
+# huge chunk doesn't dominate the batch.
+_MAX_RERANK_CHARS = 4000
+
+
+def _rerank_text(c: StoredChunk) -> str:
+    """Text the cross-encoder scores against: the doc summary + content when a
+    per-doc summary has been attached (by the Retriever at query time), else bare
+    content. Prepending the summary gives the cross-encoder doc-level context so a
+    chunk that's relevant only in light of its document isn't judged on its bare
+    text and demoted out."""
+    summary = getattr(c, "summary", None)
+    text = f"{summary}\n\n{c.content}" if summary else c.content
+    return text[:_MAX_RERANK_CHARS]
+
 
 class BGEReranker:
     def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
@@ -46,7 +61,7 @@ class BGEReranker:
             return []
         self._ensure_loaded()
         assert self._model is not None
-        pairs = [[query, c.content] for c in candidates]
+        pairs = [[query, _rerank_text(c)] for c in candidates]
         scores = self._model.predict(pairs)
         reranked = sorted(zip(candidates, scores, strict=True), key=lambda x: -float(x[1]))
         out = [c for c, _ in reranked]

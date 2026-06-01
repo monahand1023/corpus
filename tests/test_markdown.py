@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from corpus.chunkers.markdown import (
+    MAX_CHUNK_CHARS,
+    _coalesce_small,
     chunk_markdown_body,
     parse_markdown,
 )
@@ -32,6 +34,37 @@ def test_chunk_preserves_code_fences() -> None:
     chunks = chunk_markdown_body(body)
     for c in chunks:
         assert c.count("```") % 2 == 0
+
+
+def test_coalesce_packs_tiny_fragments() -> None:
+    """Many tiny adjacent chunks should pack into far fewer ~max-size chunks,
+    losing no content and preserving order."""
+    tiny = [f"## row {i}" for i in range(500)]
+    coalesced = _coalesce_small(tiny, MAX_CHUNK_CHARS)
+    # Massive reduction in chunk count.
+    assert len(coalesced) < len(tiny)
+    # No chunk exceeds the cap.
+    assert all(len(c) <= MAX_CHUNK_CHARS for c in coalesced)
+    # Every original fragment survives, in order: joining all output back
+    # contains each row id in ascending sequence.
+    joined = "\n\n".join(coalesced)
+    for i in range(500):
+        assert f"## row {i}" in joined
+    positions = [joined.index(f"## row {i}") for i in range(500)]
+    assert positions == sorted(positions)
+
+
+def test_coalesce_drops_empty_fragments() -> None:
+    out = _coalesce_small(["a", "   ", "", "b"], MAX_CHUNK_CHARS)
+    assert out == ["a\n\nb"]
+
+
+def test_chunk_heading_heavy_body_coalesces() -> None:
+    """A heading-heavy body must not explode into hundreds of ~10-char chunks."""
+    body = "\n\n".join(f"## h{i}\nv{i}" for i in range(400))
+    chunks = chunk_markdown_body(body)
+    assert len(chunks) < 50  # would be ~400 without coalescing
+    assert all(len(c) <= MAX_CHUNK_CHARS for c in chunks)
 
 
 def test_connector_loads_markdown_files(tmp_path: Path) -> None:
