@@ -6,6 +6,25 @@ Your personal archive — notes, PDFs, docs — queryable in plain English, runn
 
 A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or trusting your files to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server. Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
 
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Ingest
+      Src["Notes · PDF · HTML · text"] --> Ch["Chunker"]
+      Ch --> Emb["Local embeddings"]
+      Emb --> DB[("SQLite<br/>vectors + BM25 FTS")]
+    end
+    subgraph Query
+      Q["Plain-English question"] --> Hy["Hybrid search<br/>semantic + BM25 · auto-fused"]
+      DB --> Hy
+      Hy --> RR["Cross-encoder re-rank<br/>(local BGE)"]
+      RR --> Exp["Multi-hop expand_context"]
+    end
+    Exp --> MCP["7-tool MCP server"]
+    MCP --> CC["Claude Code"]
+```
+
 Point it at any directory of markdown / PDF / HTML / text files and get:
 
 - Semantic + BM25 hybrid search with auto-tuned fusion weights
