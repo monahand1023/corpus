@@ -27,7 +27,6 @@ from corpus.mcp_server import (
     timeline,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -517,8 +516,8 @@ class TestCorpusStats:
 
         lines = out.splitlines()
         # alpha should appear before zebra
-        alpha_idx = next(i for i, l in enumerate(lines) if "alpha" in l)
-        zebra_idx = next(i for i, l in enumerate(lines) if "zebra" in l)
+        alpha_idx = next(i for i, line in enumerate(lines) if "alpha" in line)
+        zebra_idx = next(i for i, line in enumerate(lines) if "zebra" in line)
         assert alpha_idx < zebra_idx
 
     def test_empty_corpus(self):
