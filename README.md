@@ -1,5 +1,7 @@
 # corpus-rag
 
+[![PyPI](https://img.shields.io/pypi/v/corpus-rag)](https://pypi.org/project/corpus-rag/) [![Python](https://img.shields.io/pypi/pyversions/corpus-rag)](https://pypi.org/project/corpus-rag/) [![CI](https://github.com/monahand1023/corpus/actions/workflows/ci.yml/badge.svg)](https://github.com/monahand1023/corpus/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/monahand1023/corpus)](LICENSE)
+
 Your personal archive — notes, PDFs, docs — queryable in plain English, running entirely on your machine.
 
 A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or trusting your files to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server. Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
