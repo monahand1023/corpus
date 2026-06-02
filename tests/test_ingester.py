@@ -6,7 +6,7 @@ embedding APIs. build_pipeline is patched at its import site in ingester.py.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
