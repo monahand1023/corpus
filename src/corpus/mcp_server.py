@@ -22,7 +22,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from corpus.config import CorpusConfig
-from corpus.db.sqlite import ChunkStore
+from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
@@ -98,7 +98,7 @@ def _init() -> tuple[ChunkStore, Embedder, Retriever, CorpusConfig]:
     return _store, _embedder, _retriever, _config
 
 
-def _format_chunk_block(idx: int, c: object) -> str:
+def _format_chunk_block(idx: int, c: StoredChunk) -> str:
     distance = getattr(c, "distance", None)
     distance_str = f" d={distance:.4f}" if distance is not None else ""
     header = f"[{idx}] {c.source_type}:{c.source_key}{distance_str}"

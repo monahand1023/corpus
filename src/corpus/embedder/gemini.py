@@ -120,8 +120,17 @@ class GeminiEmbedder:
 
         response = self._client.models.embed_content(
             model=self._model,
-            contents=texts,
+            # SDK wants list[str | PIL.Image.Image | File | Part]; list invariance
+            # rejects a plain list[str], and spelling the union would drag in PIL.
+            contents=texts,  # type: ignore[arg-type]
             config=config,
         )
         # Response shape: response.embeddings = [ContentEmbedding(values=[...]), ...]
-        return _EmbedResult(embeddings=[e.values for e in response.embeddings])
+        if response.embeddings is None:
+            raise RuntimeError("Gemini embed_content returned no embeddings")
+        vectors: list[list[float]] = []
+        for e in response.embeddings:
+            if e.values is None:
+                raise RuntimeError("Gemini returned an embedding with no values")
+            vectors.append(list(e.values))
+        return _EmbedResult(embeddings=vectors)

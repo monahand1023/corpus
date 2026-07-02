@@ -45,7 +45,6 @@ def main() -> int:
         names = args.source
     else:
         parser.error("specify --source NAME (repeatable) or --all")
-        return 2  # unreachable
 
     if not names:
         print("No sources configured in corpus.toml. Add a [[sources]] block.")

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -172,7 +172,7 @@ class ChunkStore:
             )
 
     @contextmanager
-    def _txn(self):
+    def _txn(self) -> Iterator[sqlite3.Connection]:
         try:
             yield self._conn
             self._conn.commit()

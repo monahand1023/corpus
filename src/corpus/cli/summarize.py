@@ -16,11 +16,15 @@ import logging
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
 from corpus.config import CorpusConfig
-from corpus.db.sqlite import ChunkStore
+from corpus.db.sqlite import ChunkStore, StoredChunk
+
+if TYPE_CHECKING:
+    from corpus.summarizer.anthropic_summarizer import SummaryResult
 
 load_dotenv()
 
@@ -30,7 +34,7 @@ PRICE_OUTPUT = 5.0 / 1_000_000
 PRICE_CACHED = 0.10 / 1_000_000
 
 
-def _reconstruct_doc(chunks: list) -> tuple[str, str]:
+def _reconstruct_doc(chunks: list[StoredChunk]) -> tuple[str, str]:
     title = chunks[0].title or chunks[0].source_key
     return title, "\n\n".join(c.content for c in chunks)
 
@@ -58,7 +62,6 @@ def main() -> int:
         source_names = args.source
     else:
         parser.error("specify --source NAME (repeatable) or --all")
-        return 2  # unreachable
 
     store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
 
@@ -115,7 +118,7 @@ def main() -> int:
         def _do_one(
             item: tuple[str, str, str, str],
             source_name: str = name,
-        ) -> tuple[str, str, object | None, Exception | None]:
+        ) -> tuple[str, str, SummaryResult | None, Exception | None]:
             key, title, body, h = item
             try:
                 return key, h, summarizer.summarize(source_name, title, body), None

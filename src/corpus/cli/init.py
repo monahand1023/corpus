@@ -17,13 +17,22 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 # Built-in source types we know how to wire up. Keep in sync with
 # connectors/registry.py.
 KNOWN_SOURCE_TYPES = ["markdown", "text", "pdf", "html"]
 
+class _ProviderInfo(TypedDict):
+    default_model: str
+    default_dim: int
+    env_var: str
+    signup_url: str
+    extra_install: str | None
+
+
 # Providers we know how to dispatch via the embedder factory.
-KNOWN_PROVIDERS = {
+KNOWN_PROVIDERS: dict[str, _ProviderInfo] = {
     "voyage": {
         "default_model": "voyage-3-large",
         "default_dim": 1024,
