@@ -18,6 +18,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
+
     from corpus.db.sqlite import StoredChunk
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ def _rerank_text(c: StoredChunk) -> str:
 class BGEReranker:
     def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
         self._model_name = model_name
-        self._model = None  # lazy
+        self._model: CrossEncoder | None = None  # lazy
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -61,8 +63,10 @@ class BGEReranker:
             return []
         self._ensure_loaded()
         assert self._model is not None
-        pairs = [[query, _rerank_text(c)] for c in candidates]
-        scores = self._model.predict(pairs)
+        pairs = [(query, _rerank_text(c)) for c in candidates]
+        # CrossEncoder.predict accepts a batch of (query, text) pairs — documented
+        # usage — but its type stubs only admit a single pair or flat list.
+        scores = self._model.predict(pairs)  # type: ignore[arg-type]
         reranked = sorted(zip(candidates, scores, strict=True), key=lambda x: -float(x[1]))
         out = [c for c, _ in reranked]
         return out[:top_n] if top_n else out

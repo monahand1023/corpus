@@ -14,6 +14,7 @@ import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import voyageai
 import voyageai.error as ve
@@ -160,7 +161,10 @@ class VoyageEmbedder:
         )
         self.total_tokens_used += response.total_tokens
         self._token_window.append((time.monotonic(), response.total_tokens))
-        return EmbedResult(embeddings=response.embeddings, total_tokens=response.total_tokens)
+        # SDK types embeddings as list[list[float]] | list[list[int]]; the int
+        # variant only appears for quantized output dtypes, which we never request.
+        embeddings = cast("list[list[float]]", response.embeddings)
+        return EmbedResult(embeddings=embeddings, total_tokens=response.total_tokens)
 
     def count_tokens(self, texts: Sequence[str]) -> int:
         return self._client.count_tokens(texts=list(texts), model=self._model)

@@ -22,11 +22,12 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 from corpus.config import CorpusConfig
-from corpus.db.sqlite import ChunkStore
+from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
 from corpus.util.rrf import reciprocal_rank_fusion
@@ -120,7 +121,7 @@ def _instrumented_query(
     # Replicate the dedupe + diversity logic
     seen_sources: set[tuple[str, str]] = set()
     per_type_count: dict[str, int] = {}
-    result: list = []
+    result: list[StoredChunk] = []
     for c in fused:
         key = (c.source_type, c.source_key)
         if key in seen_sources:
@@ -150,7 +151,7 @@ def _run_benchmark(
     queries: list[str],
     runs_per_query: int,
     top_k: int,
-) -> dict:
+) -> dict[str, Any]:
     store = ChunkStore(config.db_path, embedding_dim=dim)
     embedder = make_embedder(provider=provider, model=model, dim=dim)
     retriever = Retriever(
@@ -194,7 +195,7 @@ def _benchmark_embed_only(
     dim: int,
     queries: list[str],
     runs_per_query: int,
-) -> dict:
+) -> dict[str, Any]:
     """Measure ONLY the embed-query step for a provider.
 
     The full retrieval pipeline can't be fairly A/B'd across providers against
@@ -226,7 +227,7 @@ def _benchmark_embed_only(
     }
 
 
-def _print_compare_report(report: dict) -> None:
+def _print_compare_report(report: dict[str, Any]) -> None:
     s = report["embed_latency"]
     print(f"  provider:   {report['provider']} ({report['model']}, {report['dim']}-dim)")
     print("  mode:       embed-only (see note below)")
@@ -249,7 +250,7 @@ def _load_queries(path: Path) -> list[str]:
     return [q.query for q in module.EVAL_QUERIES]
 
 
-def _print_report(report: dict) -> None:
+def _print_report(report: dict[str, Any]) -> None:
     print(f"  provider:   {report['provider']} ({report['model']}, {report['dim']}-dim)")
     print(f"  queries:    {report['queries']} unique × {report['runs_per_query']} runs = {report['total_calls']} calls")
     print(f"  throughput: {report['throughput_qps']} qps")

@@ -11,6 +11,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: Text Processing :: Indexing",
 ]
@@ -22,7 +23,6 @@ dependencies = [
     "mcp>=1.27.1,<2.0",
     "pydantic>=2.13.4,<3.0",
     "python-dotenv>=1.2.2,<2.0",
-    "tomli>=2.0; python_version < '3.11'",  # 3.12 has tomllib stdlib
 ]
 
 [project.optional-dependencies]
@@ -79,6 +79,16 @@ ignore = ["E501", "RUF001", "RUF003", "SIM108", "UP047", "SIM103"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+
+# sqlite-vec ships no stubs or py.typed marker.
+[[tool.mypy.overrides]]
+module = "sqlite_vec"
+ignore_missing_imports = true
+
+# voyageai has inline types but doesn't re-export `Client` explicitly.
+[[tool.mypy.overrides]]
+module = "voyageai"
+implicit_reexport = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

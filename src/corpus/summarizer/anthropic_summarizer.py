@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    pass
+    from anthropic.types import TextBlockParam
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class AnthropicSummarizer:
             "and identifiers (people, references, dates) that anchor it in your archive."
         )
         # cache_control on the static base prompt — saves cost on bulk runs.
-        system_blocks = [
+        system_blocks: list[TextBlockParam] = [
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": guidance},
         ]

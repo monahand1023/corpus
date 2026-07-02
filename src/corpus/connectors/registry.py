@@ -16,7 +16,7 @@ from corpus.connectors.markdown import MarkdownChunker, MarkdownConnector
 
 
 class _ConnectorFactory(Protocol):
-    def __call__(self, cfg: SourceConfig) -> Any: ...
+    def __call__(self, cfg: SourceConfig) -> tuple[Any, Any]: ...
 
 
 def _build_markdown(cfg: SourceConfig) -> tuple[MarkdownConnector, MarkdownChunker]:

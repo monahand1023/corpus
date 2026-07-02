@@ -6,7 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(no unreleased changes)
+### Added
+- Python 3.13 support (CI matrix + classifier).
+- Mypy strict passes and now runs in CI.
+
+### Changed
+- `GeminiEmbedder` raises a clear `RuntimeError` when the API returns no
+  embeddings instead of failing later with an opaque `TypeError`.
+
+### Removed
+- Dead `tomli` dependency marker (`python_version < '3.11'` can never match
+  under `requires-python >= 3.12`).
+- Duplicate badge block in the README.
 
 ## [0.1.2] — 2026-05-15
 

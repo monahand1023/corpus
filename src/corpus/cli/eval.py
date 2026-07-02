@@ -13,6 +13,7 @@ import importlib.util
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -24,7 +25,7 @@ from corpus.retriever import Retriever
 load_dotenv()
 
 
-def _load_queries(path: Path) -> list:
+def _load_queries(path: Path) -> list[Any]:
     spec = importlib.util.spec_from_file_location("eval_queries", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load {path}")
