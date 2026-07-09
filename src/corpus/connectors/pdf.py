@@ -23,6 +23,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
+from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
 
@@ -49,9 +50,7 @@ class PdfConnector:
             )
 
         seen: dict[str, str] = {}
-        for path in sorted(self._root.glob(self._glob)):
-            if not path.is_file():
-                continue
+        for path in discover_files(self._root, self._glob):
             try:
                 reader = PdfReader(str(path))
             except Exception as e:  # pypdf raises many subclasses; treat any read failure as skip

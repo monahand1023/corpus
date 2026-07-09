@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from corpus.chunkers.markdown import chunk_markdown_body, parse_markdown
+from corpus.connectors.discovery import discover_files
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.dedup import fingerprint
 from corpus.util.hash import chunk_id, sha256
@@ -48,9 +49,7 @@ class MarkdownConnector:
                 f"Markdown source '{self.source_type}': directory not found: {self._root}"
             )
         seen: dict[str, str] = {}
-        for md_path in sorted(self._root.glob(self._glob)):
-            if not md_path.is_file():
-                continue
+        for md_path in discover_files(self._root, self._glob):
             try:
                 text = md_path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
