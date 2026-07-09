@@ -2,9 +2,9 @@
 
 [![PyPI](https://img.shields.io/pypi/v/corpus-rag)](https://pypi.org/project/corpus-rag/) [![Python](https://img.shields.io/pypi/pyversions/corpus-rag)](https://pypi.org/project/corpus-rag/) [![CI](https://github.com/monahand1023/corpus/actions/workflows/ci.yml/badge.svg)](https://github.com/monahand1023/corpus/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/monahand1023/corpus)](LICENSE)
 
-Your personal archive — notes, PDFs, docs — queryable in plain English, running entirely on your machine.
+Your personal archive — notes, PDFs, docs — queryable in plain English, stored and searched entirely on your machine.
 
-A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or trusting your files to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server. Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
+A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or handing your whole archive to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server — the database, index, and search all run locally. (One honest caveat: the text you ingest or query is sent to your chosen embedding API — Voyage or Gemini — to be turned into vectors. See [what corpus doesn't do](#what-corpus-doesnt-do).) Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
 
 ## How it works
 
@@ -12,7 +12,7 @@ A personal knowledge system shouldn't require a vector database service, a SaaS 
 flowchart LR
     subgraph Ingest
       Src["Notes · PDF · HTML · text"] --> Ch["Chunker"]
-      Ch --> Emb["Local embeddings"]
+      Ch --> Emb["Embeddings<br/>(Voyage / Gemini API)"]
       Emb --> DB[("SQLite<br/>vectors + BM25 FTS")]
     end
     subgraph Query
@@ -99,6 +99,33 @@ description = "Jira-style ticket keys"
 ```
 
 Schema hazard: changing `embedder.dim` after data has been ingested would silently corrupt retrieval. `corpus` validates the dim against the existing schema at startup and refuses to proceed on mismatch.
+
+## Ingesting content
+
+Ingestion turns a directory of files into searchable chunks. Point a `[[sources]]` block in `corpus.toml` at your data, then run the ingester:
+
+```sh
+corpus-ingest --source notes -v      # one source, verbose
+corpus-ingest --all                  # every source in corpus.toml
+```
+
+What each run does:
+
+1. **Walks** the source `path` for files matching `glob`. Symlinks and any path that resolves outside the configured directory are skipped — a stray symlink can't pull in files you didn't mean to index.
+2. **Parses & chunks** each file with the connector for its `type` (frontmatter, headings, paragraph boundaries).
+3. **Scrubs** obvious secrets (API keys, private-key blocks) out of the chunk text *before* anything is embedded or stored.
+4. **Embeds** each chunk via your provider (Voyage or Gemini) and **stores** the vector + BM25 full-text index in SQLite.
+
+Ingestion is **idempotent and incremental** — re-running it:
+
+- **skips unchanged chunks** (matched by content hash — no re-embedding, no API cost),
+- **re-embeds only what's new or changed**,
+- **prunes orphans** — chunks whose source file was deleted are removed,
+- **skips near-duplicate files** (identical body under a different name) within a run.
+
+So the update loop is just: edit your files, re-run `corpus-ingest`. There's **no daemon or file watcher** — ingestion happens when you run the command. Dates come from frontmatter (`created`/`modified`) if present, else the file's modification time.
+
+Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html** (`[html]` extra) — see [Built-in connectors](#built-in-connectors). For anything else (Slack exports, JSON dumps, EPUB…), write a small connector: [`docs/adding_a_source.md`](docs/adding_a_source.md).
 
 ## MCP server
 
@@ -236,6 +263,21 @@ corpus-benchmark --json out.json
 Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates at 100–300ms (provider API round-trip), while `vector_search` / `fts_search` / `fusion` / `dedupe` are collectively under ~5ms. The optimization lever is "fewer or concurrent embed calls," not "faster SQLite." If `vector_search` exceeds ~50ms you've outgrown brute-force `vec0` (~100K chunks) and want HNSW indexing.
 
 `--compare` measures embedder-API latency only — it does **not** compare retrieval quality, because two providers' vectors aren't comparable against one DB. For quality, ingest each provider into its own corpus and run `corpus-eval` against each.
+
+## What corpus doesn't do
+
+`corpus` is deliberately small and single-purpose. The following are **non-goals, not missing features** — know them before you adopt it:
+
+- **Not multi-user.** One person, one machine. No accounts, auth, access control, sharing, or multi-tenancy.
+- **No network service.** It talks over stdio (the MCP server) and the CLI — there is no HTTP/REST/SSE API and no web UI.
+- **Embedding is not local.** Storage, the vector + full-text index, hybrid search, and the optional reranker all run on your machine — but turning text into vectors requires the **Voyage or Gemini API** (an API key + network at ingest and query time). There is no built-in offline embedder; the text you ingest and your queries are sent to the provider you pick. If that's a dealbreaker, this isn't the tool.
+- **Not built for huge corpora.** Vector search is a brute-force scan (sqlite-vec `vec0`), fast to roughly **100K chunks**. Beyond that you'd want ANN/HNSW indexing, which isn't included.
+- **No OCR.** Scanned or image-only PDFs produce no text — OCR them first.
+- **No live sync.** No file watcher and no real-time/incremental indexing daemon — you re-run `corpus-ingest` when content changes.
+- **Not an LLM or chatbot.** `corpus` only *retrieves* — it finds and returns the relevant chunks. The answering/reasoning is done by whatever model consumes them (e.g. Claude via the MCP server).
+- **Python 3.12+ only** (tested on 3.12, 3.13, and 3.14).
+
+If you need any of the above, `corpus` is the wrong starting point — though its pieces (the SQLite schema, connectors, retriever) are small enough to lift into something larger.
 
 ## Documentation
 
