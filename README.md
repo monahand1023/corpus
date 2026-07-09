@@ -157,6 +157,7 @@ The **investigation pattern** is the high-leverage flow: Claude calls `search_kn
 
 ```sh
 corpus-init                              # interactive setup wizard
+corpus-init --quiet                      # non-interactive (accept defaults; for CI)
 corpus-list                              # show configured sources + chunk counts
 corpus-ingest --source notes -v          # ingest one source
 corpus-ingest --all                      # ingest everything in corpus.toml

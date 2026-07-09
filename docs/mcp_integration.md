@@ -74,7 +74,7 @@ Hybrid BM25 + vector search.
 - `source_types` (list[str] or str, optional): restrict to specific source types
 - `top_k` (int, 1-20, default 5): result count
 
-**Returns:** top-K chunks, each formatted with `[i] source_type:source_key d=<distance>`, title, URL, and content.
+**Returns:** top-K chunks, each formatted with `[i] source_type:source_key d=<distance>`, title, URL, and content. The result is prefixed with an "untrusted retrieved content" banner (see Hygiene rules) — `get_doc`, `expand_context`, and `timeline` carry it too.
 
 **Use it for:** the entry-point query. "How does X work?" / "What did we decide about Y?"
 
@@ -160,6 +160,10 @@ Three things the server does that matter for stability:
 2. **Blocking calls wrapped in `asyncio.to_thread`.** SQLite + Voyage/Gemini SDKs are synchronous. Wrapping them in `to_thread` keeps the asyncio event loop responsive, so Claude isn't blocked by long-running queries.
 
 3. **API-key check at startup.** If your configured provider needs an API key that isn't set, the server exits with code 2 and a clear error rather than failing on the first tool call. This shows up as "server failed to start" in Claude Code, easier to debug than an opaque MCP timeout.
+
+4. **Sanitized tool errors.** If a tool handler hits an unexpected exception, it returns a generic "an internal error occurred (see server logs)" message and logs the detail to stderr — internal paths and state aren't leaked back to the model.
+
+5. **Untrusted-content labeling.** The content-returning tools (`search_knowledge`, `get_doc`, `expand_context`, `timeline`) prefix their output with a banner telling the model to treat retrieved corpus text as data, not instructions. It's a prompt-injection mitigation for adversarial corpus content — a speed bump, not a guarantee.
 
 ## When you change code
 

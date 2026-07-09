@@ -1,6 +1,6 @@
 # Adding a new source type
 
-`corpus` ships one built-in connector: `markdown`. For everything else — PDFs, HTML pages, Slack exports, Jira API dumps, your custom JSON format — you write the connector.
+`corpus` ships four built-in connectors — `markdown`, `text`, `pdf`, and `html`. For anything else — Slack exports, Jira API dumps, EPUB books, your custom JSON format — you write the connector. `markdown` is the reference implementation to copy from.
 
 This doc walks through it with a worked example: **a JSON-files connector** that reads a directory of `.json` files, each one containing one document.
 
@@ -35,6 +35,7 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 
+from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 
 
@@ -51,7 +52,11 @@ class JsonFilesConnector:
         self._glob = glob
 
     def load(self) -> Iterable[SourceDocument]:
-        for json_path in sorted(self._root.glob(self._glob)):
+        # discover_files walks the root safely: it skips symlinks and rejects
+        # any path that resolves outside the configured root. Use it instead of
+        # a bare self._root.glob() so your connector gets the same containment
+        # as the built-ins.
+        for json_path in discover_files(self._root, self._glob):
             data = json.loads(json_path.read_text())
             yield SourceDocument(
                 source_type=self.source_type,
@@ -142,6 +147,9 @@ def _build_json_files(cfg: SourceConfig) -> tuple[JsonFilesConnector, JsonFilesC
 
 CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "markdown": _build_markdown,
+    "text": _build_text,
+    "pdf": _build_pdf,
+    "html": _build_html,
     "json_files": _build_json_files,   # ← add this
 }
 ```
@@ -169,4 +177,5 @@ corpus-query "your question"
 - **Honor the size cap.** Chunks over ~2,000 chars start eating context budget on the Claude side. The chars/4 token heuristic is in `util/tokens.py`.
 - **Run scrub** in the chunker before computing `content_hash`. Otherwise dedup will think two near-identical docs are different just because secret patterns differ.
 - **Use deterministic `chunk_id`s.** `chunk_id(source_type, source_key, kind, index)` from `util/hash.py` does this — guarantees idempotent re-ingestion.
+- **Walk the filesystem with `discover_files`** (`corpus.connectors.discovery`), not a bare `Path.glob`. It skips symlinks and rejects paths that resolve outside the source root, so a planted symlink or a `..` glob can't pull arbitrary files into your corpus. All built-in connectors use it.
 - **Test your connector**: write a `tests/test_my_connector.py` that builds 2-3 fake files in a `tmp_path` and exercises load() + chunk().
