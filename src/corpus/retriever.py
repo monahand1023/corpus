@@ -22,6 +22,13 @@ if TYPE_CHECKING:
     from corpus.reranker.local import BGEReranker
 
 
+# User-supplied [[references]] regexes (from corpus.toml) run against query text
+# and chunk content. They're trusted config, but a catastrophic-backtracking
+# pattern on long input could stall the worker thread — so we cap the number of
+# characters any reference pattern is scanned against as a defensive bound.
+MAX_REGEX_SCAN_CHARS = 20_000
+
+
 @dataclass
 class RetrievalResult:
     query: str
@@ -62,8 +69,9 @@ class Retriever:
         """High BM25 weight when query looks identifier-shaped; low for prose."""
         if _has_generic_id_hint(query):
             return 1.0
+        scan = query[:MAX_REGEX_SCAN_CHARS]
         for pat, _ in self._refs:
-            if pat.search(query):
+            if pat.search(scan):
                 return 1.0
         return 0.25
 
@@ -211,7 +219,10 @@ class Retriever:
 
         if "references" in include_set and self._refs:
             for pattern, ref_source_type in self._refs:
-                matches = {m.group(0) for m in pattern.finditer(seed.content)}
+                matches = {
+                    m.group(0)
+                    for m in pattern.finditer(seed.content[:MAX_REGEX_SCAN_CHARS])
+                }
                 # Don't self-cite.
                 matches = {m for m in matches if m != seed.source_key}
                 for key in sorted(matches):

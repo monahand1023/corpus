@@ -358,3 +358,22 @@ def test_rerank_pool_gets_summaries_attached(tmp_path: Path) -> None:
     assert captured, "reranker received no candidates"
     assert captured[0].summary == "the summary"
     store.close()
+
+
+def test_auto_fts_weight_bounds_regex_scan_length() -> None:
+    """Reference patterns must run against a bounded slice of input, so a
+    catastrophic-backtracking pattern can't be fed an unbounded string
+    (ReDoS blast-radius limit)."""
+    from corpus.retriever import MAX_REGEX_SCAN_CHARS
+
+    seen: dict[str, int] = {}
+
+    class Spy:
+        def search(self, s: str) -> None:
+            seen["len"] = len(s)
+            return None
+
+    r = Retriever.__new__(Retriever)
+    r._refs = [(Spy(), "tickets")]  # type: ignore[list-item]
+    r._auto_fts_weight("x" * (MAX_REGEX_SCAN_CHARS + 5000))
+    assert seen["len"] <= MAX_REGEX_SCAN_CHARS
