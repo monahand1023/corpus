@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-08
+
 ### Added
 - Python 3.13 support (CI matrix + classifier).
 - **Python 3.14 support** (CI matrix + classifier). The `voyageai` pin was
@@ -51,6 +53,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content" banner (prompt-injection mitigation).
 - `[[references]]` regexes are scanned against a bounded input length
   (`MAX_REGEX_SCAN_CHARS`) to limit ReDoS blast radius.
+- Bumped `torch` to `>=2.13.0` in the `[reranker]`/`[all]` extras to clear
+  GHSA-rrmf-rvhw-rf47 (CVE-2025-3000, `torch.jit.script` memory corruption).
 
 ### Removed
 - Dead `tomli` dependency marker (`python_version < '3.11'` can never match
@@ -134,7 +138,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   adding_a_source, troubleshooting).
 - MIT license.
 
-[Unreleased]: https://github.com/monahand1023/corpus/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/monahand1023/corpus/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/monahand1023/corpus/releases/tag/v0.2.0
 [0.1.2]: https://github.com/monahand1023/corpus/releases/tag/v0.1.2
 [0.1.1]: https://github.com/monahand1023/corpus/releases/tag/v0.1.1
 [0.1.0]: https://github.com/monahand1023/corpus/releases/tag/v0.1.0
