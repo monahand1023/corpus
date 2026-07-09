@@ -1,6 +1,6 @@
 [project]
 name = "corpus-rag"
-version = "0.1.2"
+version = "0.2.0"
 description = "Single-user RAG framework for personal archives. Local-first, MCP-native."
 readme = "README.md"
 license = { text = "MIT" }
