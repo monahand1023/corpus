@@ -83,6 +83,44 @@ def reset_singletons():
 
 
 # ---------------------------------------------------------------------------
+# hardening: error sanitization + untrusted-content labeling
+# ---------------------------------------------------------------------------
+
+class TestHardening:
+    def test_tool_exception_is_sanitized(self):
+        """An unexpected exception must not leak internal detail to the LLM."""
+        with patch.object(
+            _mod, "_init",
+            side_effect=RuntimeError("secret-internal-detail /home/user/.env"),
+        ):
+            out = asyncio.run(corpus_stats())
+        assert "secret-internal-detail" not in out
+        assert "/home/user/.env" not in out
+        assert "error" in out.lower()
+
+    def test_search_results_labeled_untrusted(self):
+        store, embedder, retriever, config = _make_mocks()
+        chunk = _make_stored_chunk(content="hello world")
+        result_obj = MagicMock()
+        result_obj.chunks = [chunk]
+        retriever.query.return_value = result_obj
+        with _patch_init(store, embedder, retriever, config):
+            out = asyncio.run(search_knowledge(query="hello"))
+        assert "retrieved" in out.lower()  # untrusted-content banner present
+        assert "hello world" in out
+
+    def test_empty_results_not_labeled(self):
+        """The 'no results' message shouldn't carry the untrusted banner."""
+        store, embedder, retriever, config = _make_mocks()
+        result_obj = MagicMock()
+        result_obj.chunks = []
+        retriever.query.return_value = result_obj
+        with _patch_init(store, embedder, retriever, config):
+            out = asyncio.run(search_knowledge(query="nada"))
+        assert out == "No results for: nada"
+
+
+# ---------------------------------------------------------------------------
 # search_knowledge
 # ---------------------------------------------------------------------------
 
