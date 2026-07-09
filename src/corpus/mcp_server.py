@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from corpus.config import CorpusConfig
+from corpus.config import ConfigError, CorpusConfig
 from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
@@ -267,7 +267,7 @@ def main() -> None:
 
     try:
         config = CorpusConfig.load(args.config)
-    except FileNotFoundError as e:
+    except ConfigError as e:
         logger.error("%s", e)
         sys.exit(2)
 
