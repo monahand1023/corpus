@@ -26,6 +26,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from corpus.cli._common import load_config_or_exit
 from corpus.config import CorpusConfig
 from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.factory import make_embedder
@@ -290,7 +291,7 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
 
-    config = CorpusConfig.load(args.config)
+    config = load_config_or_exit(args.config)
 
     if args.queries:
         queries = _load_queries(Path(args.queries))

@@ -14,7 +14,7 @@ import textwrap
 
 from dotenv import load_dotenv
 
-from corpus.config import CorpusConfig
+from corpus.cli._common import load_config_or_exit
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
 
-    config = CorpusConfig.load(args.config)
+    config = load_config_or_exit(args.config)
     store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
     embedder = make_embedder(
         provider=config.embedder.provider,

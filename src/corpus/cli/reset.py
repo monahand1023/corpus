@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from corpus.config import CorpusConfig
+from corpus.cli._common import load_config_or_exit
 from corpus.db.sqlite import ChunkStore
 
 
@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
 
-    config = CorpusConfig.load(args.config)
+    config = load_config_or_exit(args.config)
     db_path = Path(config.db_path)
 
     if args.all:

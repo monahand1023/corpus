@@ -14,7 +14,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from corpus.config import CorpusConfig
+from corpus.cli._common import load_config_or_exit
 from corpus.ingester import Ingester
 
 load_dotenv()
@@ -38,7 +38,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    config = CorpusConfig.load(args.config)
+    config = load_config_or_exit(args.config)
     if args.all:
         names = [s.name for s in config.sources]
     elif args.source:
