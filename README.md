@@ -34,16 +34,19 @@ Point it at any directory of markdown / PDF / HTML / text files and get:
 - Optional per-document Claude-Haiku summaries
 - Seven MCP tools wired into Claude Code over stdio
 
-**Stack:** Python 3.12+ • Voyage or Gemini embeddings • SQLite + sqlite-vec • FastMCP. No AWS, no Docker, no Terraform.
+**Stack:** Python 3.12–3.14 • Voyage or Gemini embeddings (optional extras) • SQLite + sqlite-vec • FastMCP. No AWS, no Docker, no Terraform.
 
 ---
 
 ## Quick start
 
 ```sh
-# 1. Install
-pip install corpus-rag                # base
+# 1. Install — pick an embedder extra ([voyage] recommended, or [gemini])
+pip install 'corpus-rag[voyage]'      # base + Voyage embeddings (recommended)
 pip install 'corpus-rag[all]'         # + reranker, summarizer, pdf, html, gemini
+# Bare `pip install corpus-rag` is the minimal, provider-agnostic base — you
+# must add an embedder extra before you can ingest or query. Why it's split out:
+# see "Why embedders are optional" in docs/configuration.md.
 
 # 2. Interactive setup wizard — generates corpus.toml + .env
 corpus-init
@@ -116,7 +119,7 @@ Wire `corpus` into **Claude Code** or **Claude Desktop** — both use stdio and 
 }
 ```
 
-After `pip install corpus-rag`, `corpus-mcp` is on your PATH. The client spawns it on demand.
+After `pip install 'corpus-rag[voyage]'` (or another embedder extra), `corpus-mcp` is on your PATH. The client spawns it on demand.
 
 **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
@@ -251,7 +254,7 @@ Want to hack on the framework, write a new connector, or run the tests? Clone an
 ```sh
 git clone https://github.com/monahand1023/corpus.git
 cd corpus
-uv sync                              # creates .venv with all deps
+uv sync --all-extras                 # creates .venv with all deps (incl. embedders)
 uv run pytest tests/ -q              # run the suite
 uv run ruff check src/ tests/        # lint
 uv run corpus-init                   # the CLI scripts are also available via `uv run`

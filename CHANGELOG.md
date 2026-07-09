@@ -8,11 +8,49 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Python 3.13 support (CI matrix + classifier).
+- **Python 3.14 support** (CI matrix + classifier). The `voyageai` pin was
+  relaxed to `<0.5` so the 0.4.x line (which ships cp314 wheels) installs on
+  3.14; previously `pip install` failed there with a resolver error.
 - Mypy strict passes and now runs in CI.
+- `py.typed` marker (PEP 561) so the annotated public API is visible to
+  downstream type checkers.
+- `corpus-init --quiet` — non-interactive setup that accepts all defaults
+  (for CI/tests).
+- `[voyage]` optional extra (see Changed) and an actionable error when an
+  embedder SDK is missing (`pip install corpus-rag[voyage]` / `[gemini]`).
 
 ### Changed
+- **BREAKING (install only): the Voyage embedder is now an opt-in extra.**
+  `voyageai` moved out of the base dependencies into a `[voyage]` extra, so a
+  bare `pip install corpus-rag` no longer pulls Voyage's large transitive tree
+  (`langchain-core`, `pillow`, `ffmpeg-python`, `future`) — base install drops
+  from ~70 to ~34 packages. Install an embedder explicitly:
+  `pip install 'corpus-rag[voyage]'` (or `[gemini]`). No runtime API change.
+- Config errors (missing file, invalid TOML, bad values) now surface as a clean
+  one-line `error:` message + non-zero exit instead of a raw traceback. Added
+  `ConfigError`; `CorpusConfig.load` raises it and CLIs route through
+  `cli._common.load_config_or_exit`.
 - `GeminiEmbedder` raises a clear `RuntimeError` when the API returns no
   embeddings instead of failing later with an opaque `TypeError`.
+- The sdist no longer ships `uv.lock` / `.venv` / `dist` / `*.db`.
+
+### Fixed
+- `corpus-init` no longer hangs in an infinite loop when stdin hits EOF (piped
+  input or Ctrl-D); it aborts with a clear message. Use `--quiet` for defaults.
+- `corpus-init` escapes `"` and `\` when writing `corpus.toml`, so a data path
+  containing those characters no longer produces an unloadable config.
+- `embedder.dim` is validated as a positive integer (`> 0`).
+
+### Security
+- Ingestion no longer follows symlinks or reads outside a source's configured
+  `path` (a `..` glob or a `notes.md -> ~/.ssh/id_rsa` symlink is skipped),
+  preventing arbitrary local files from being ingested and surfaced to the LLM.
+- MCP tool handlers sanitize unexpected exceptions (generic message to the
+  client, details to stderr) instead of leaking internal state.
+- MCP content-returning tools prefix results with an "untrusted retrieved
+  content" banner (prompt-injection mitigation).
+- `[[references]]` regexes are scanned against a bounded input length
+  (`MAX_REGEX_SCAN_CHARS`) to limit ReDoS blast radius.
 
 ### Removed
 - Dead `tomli` dependency marker (`python_version < '3.11'` can never match

@@ -66,6 +66,39 @@ dim = 1536    # also valid: 768, 3072 — Matryoshka representation
 
 For Gemini, the `dim` choice is a real knob: `768` for tight storage, `1536` recommended balanced default, `3072` for highest recall on hard corpora. You can't change it after ingest — the dim guard refuses (see below).
 
+### Why embedders are optional extras
+
+Neither embedder ships in the base install. You pick one at install time:
+
+```sh
+pip install 'corpus-rag[voyage]'   # Voyage (recommended, best quality)
+pip install 'corpus-rag[gemini]'   # Gemini (free tier, no card)
+```
+
+An embedder is **mandatory** to ingest or query — the extra just makes *which*
+one explicit. Bare `pip install corpus-rag` gives you the minimal,
+provider-agnostic base; `corpus-ingest` will then tell you to add an embedder
+extra.
+
+**Why it's split out.** `voyageai` pulls in a large transitive dependency tree
+(`langchain-core`, `pillow`, `ffmpeg-python`, `future`) that `corpus` itself
+never imports. Baking it into the base meant every install — including
+Gemini-only users — carried that weight and its supply-chain surface. Making it
+opt-in keeps the base install small and provider-agnostic, matching the "one
+small local-first process" design.
+
+**Pros:** smaller, faster base install; smaller dependency & CVE surface;
+Gemini users don't pay for Voyage's tree; symmetric provider design.
+
+**Cons / tradeoffs:** a bare `pip install corpus-rag` no longer works end-to-end
+out of the box — you must add an embedder extra, one extra thing to remember.
+And if you choose `[voyage]`, its transitive tree still comes along; that's
+`voyageai`'s own dependency set, not something `corpus` can strip.
+
+**Guidance:** most people want `[voyage]` (quality) or `[gemini]` (free, no
+card). The bare base is for advanced users wiring a custom embedder (see
+"Adding a provider" below).
+
 ### The dim guard
 
 The DB stores `embedding_dim` in a `schema_meta` table on first open. If you change `dim` later (different model, different Matryoshka cut), the next open raises `EmbeddingDimMismatch` rather than silently corrupting retrieval. To switch: `corpus-reset --all` then re-ingest.
@@ -163,6 +196,13 @@ If `[[references]]` is empty or absent:
 - `expand_context` mode `references` returns nothing — siblings + parent only.
 - `_auto_fts_weight` falls back to a generic heuristic (looks for backtick-quoted code or quoted phrases) before defaulting to 0.25.
 
+**Note on trust:** `pattern` values are your own regexes, compiled and run
+against query text and chunk content on the query path. They're trusted config,
+but as a defensive bound each pattern is only scanned against the first
+`MAX_REGEX_SCAN_CHARS` (20K) characters of input, so a pathological
+catastrophic-backtracking pattern can't be fed an unbounded string. Avoid
+nested unbounded quantifiers like `(a+)+`.
+
 ## Environment variables
 
 | Var | Required? | Used by | Notes |
@@ -175,9 +215,13 @@ If `[[references]]` is empty or absent:
 
 ## Validation
 
-`CorpusConfig.load()` validates the file via Pydantic at startup. Common errors:
+`CorpusConfig.load()` validates the file via Pydantic at startup. Invalid TOML,
+a bad value, or a missing file raises `ConfigError`; the CLI entrypoints catch
+it and print a clean one-line `error: ...` message (no traceback) before
+exiting non-zero. Common errors:
 
-- **Source name pattern**: `name = "BAD-NAME"` → `ValidationError`. Names must be lowercase identifiers.
+- **Source name pattern**: `name = "BAD-NAME"` → `ConfigError`. Names must be lowercase identifiers (`^[a-z][a-z0-9_]*$`).
+- **Embedder dim**: `dim` must be a positive integer (`> 0`); `dim = 0` or negative → `ConfigError`.
 - **Reference source_type matches no source**: pattern validation passes, but `expand_context` will find no chunks. Not an error; documented behavior.
 - **Missing `[[sources]]`**: `corpus-ingest` errors with "No source named X" when called.
-- **Embedder dim mismatch**: caught at `ChunkStore.__init__` open time, not config load.
+- **Embedder dim mismatch** (vs an existing DB): caught at `ChunkStore.__init__` open time, not config load.
