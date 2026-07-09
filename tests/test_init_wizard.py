@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
+from corpus.cli import init
 from corpus.cli.init import (
     WizardAnswers,
     _normalize_source_name,
@@ -93,6 +95,46 @@ def test_main_writes_files_with_force(tmp_path: Path) -> None:
     # And it should parse cleanly
     config = CorpusConfig.load(tmp_path / "corpus.toml")
     assert config.sources[0].name == "my_archive"
+
+
+def test_eof_aborts_instead_of_looping(tmp_path: Path) -> None:
+    """stdin at EOF must abort (rc=1), not spin in an infinite loop."""
+    def _raise_eof(_prompt: str) -> str:
+        raise EOFError()
+
+    with patch("sys.argv", ["corpus-init", "--out-dir", str(tmp_path)]), \
+         patch("builtins.input", _raise_eof):
+        rc = init.main_with_args(["--out-dir", str(tmp_path)])
+    assert rc == 1
+    assert not (tmp_path / "corpus.toml").exists()
+
+
+def test_quiet_writes_valid_defaults(tmp_path: Path) -> None:
+    """--quiet is non-interactive: accepts defaults and writes a loadable config."""
+    rc = init.main_with_args(["--quiet", "--out-dir", str(tmp_path)])
+    assert rc == 0
+    data = tomllib.loads((tmp_path / "corpus.toml").read_text())
+    assert data["embedder"]["provider"] == "voyage"
+    assert data["sources"][0]["type"] == "markdown"
+    # And it round-trips through the real loader.
+    config = CorpusConfig.load(tmp_path / "corpus.toml")
+    assert config.sources[0].name == "notes"
+
+
+def test_paths_with_quotes_render_valid_toml() -> None:
+    """A data path containing a double-quote or backslash must still produce
+    valid, loadable TOML (finding: unescaped interpolation)."""
+    a = WizardAnswers(
+        db_path=Path('/tmp/we"ird/corpus.db'),
+        source_name="notes",
+        source_type="markdown",
+        source_path=Path('/tmp/a"b\\c'),
+        provider="voyage",
+        model="voyage-3-large",
+        dim=1024,
+    )
+    parsed = tomllib.loads(_render_corpus_toml(a))  # must not raise
+    assert parsed["sources"][0]["path"] == '/tmp/a"b\\c'
 
 
 def test_mcp_server_honors_config_flag(tmp_path: Path) -> None:
