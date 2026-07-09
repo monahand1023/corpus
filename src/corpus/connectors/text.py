@@ -14,6 +14,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
+from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
 
@@ -37,9 +38,7 @@ class TextConnector:
                 f"Text source '{self.source_type}': directory not found: {self._root}"
             )
         seen: dict[str, str] = {}
-        for path in sorted(self._root.glob(self._glob)):
-            if not path.is_file():
-                continue
+        for path in discover_files(self._root, self._glob):
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:

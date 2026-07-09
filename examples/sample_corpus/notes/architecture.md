@@ -21,4 +21,4 @@ At query time:
 4. **Diversity cap** (`max_per_source_type=3`) ensures multi-source results.
 5. **Optional re-rank** via local BGE cross-encoder.
 
-The MCP server exposes 8 tools to Claude Code over stdio.
+The MCP server exposes 7 tools to Claude Code over stdio.

@@ -12,17 +12,22 @@ import re
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from corpus.types import SOURCE_TYPE_PATTERN
 
 DEFAULT_CONFIG_PATH = Path("corpus.toml")
 
 
+class ConfigError(Exception):
+    """A user-facing configuration problem: missing file, invalid TOML, or
+    values that fail validation. Carries a readable message (no traceback)."""
+
+
 class EmbedderConfig(BaseModel):
     provider: str = "voyage"
     model: str = "voyage-3-large"
-    dim: int = 1024
+    dim: int = Field(default=1024, gt=0)
 
 
 class RetrieverConfig(BaseModel):
@@ -65,11 +70,14 @@ class CorpusConfig(BaseModel):
     def load(cls, path: Path | str | None = None) -> CorpusConfig:
         config_path = Path(path) if path else DEFAULT_CONFIG_PATH
         if not config_path.is_file():
-            raise FileNotFoundError(
+            raise ConfigError(
                 f"corpus.toml not found at {config_path}. "
                 "Copy corpus.toml.example to corpus.toml and edit."
             )
-        raw = tomllib.loads(config_path.read_text())
+        try:
+            raw = tomllib.loads(config_path.read_text())
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"corpus.toml at {config_path} is not valid TOML: {e}") from e
         # Top-level [corpus] section maps to db_path etc.
         corpus_section = raw.get("corpus", {})
         merged = {
@@ -79,7 +87,10 @@ class CorpusConfig(BaseModel):
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }
-        return cls.model_validate(merged)
+        try:
+            return cls.model_validate(merged)
+        except ValidationError as e:
+            raise ConfigError(f"corpus.toml at {config_path} has invalid values:\n{e}") from e
 
     def source_by_name(self, name: str) -> SourceConfig | None:
         return next((s for s in self.sources if s.name == name), None)

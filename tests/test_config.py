@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from corpus.config import CorpusConfig
+from corpus.config import ConfigError, CorpusConfig
 
 
 def test_load_minimal_config(tmp_path: Path) -> None:
@@ -46,14 +46,12 @@ description = "Doc-style IDs"
 
 
 def test_missing_config_raises(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ConfigError):
         CorpusConfig.load(tmp_path / "nonexistent.toml")
 
 
 def test_invalid_source_name_pattern(tmp_path: Path) -> None:
     """source_type names must be lowercase identifiers — UPPERCASE rejected."""
-    from pydantic import ValidationError
-
     cfg = tmp_path / "corpus.toml"
     cfg.write_text("""
 [corpus]
@@ -64,8 +62,45 @@ name = "BAD-NAME"
 type = "markdown"
 path = "~/notes"
 """)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError):
         CorpusConfig.load(cfg)
+
+
+def test_embedder_dim_must_be_positive() -> None:
+    from pydantic import ValidationError
+
+    from corpus.config import EmbedderConfig
+
+    with pytest.raises(ValidationError):
+        EmbedderConfig(dim=0)
+    with pytest.raises(ValidationError):
+        EmbedderConfig(dim=-5)
+
+
+def test_load_config_or_exit_clean_message_on_bad_toml(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from corpus.cli._common import load_config_or_exit
+
+    bad = tmp_path / "corpus.toml"
+    bad.write_text("this is = = not valid toml")
+    with pytest.raises(SystemExit) as e:
+        load_config_or_exit(bad)
+    assert e.value.code == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "corpus.toml" in err
+
+
+def test_load_config_or_exit_clean_message_on_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from corpus.cli._common import load_config_or_exit
+
+    with pytest.raises(SystemExit) as e:
+        load_config_or_exit(tmp_path / "nope.toml")
+    assert e.value.code == 1
+    assert "Traceback" not in capsys.readouterr().err
 
 
 def test_defaults_apply(tmp_path: Path) -> None:

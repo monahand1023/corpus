@@ -4,15 +4,29 @@ Common problems and the actual fix, not the canned "did you try restarting?"
 
 ## Setup errors
 
-### `FileNotFoundError: corpus.toml not found`
+### `error: corpus.toml not found` (or `... is not valid TOML` / `... has invalid values`)
 
-You ran a CLI before generating the config. Either:
+You ran a CLI before generating the config, or the file has a syntax/validation
+problem. The CLIs print a clean one-line `error:` message and exit non-zero
+(no traceback). Generate or fix it:
 
 ```sh
 corpus-init                                      # interactive wizard
+corpus-init --quiet                              # non-interactive (defaults; for CI)
 # or
 cp corpus.toml.example corpus.toml               # manual
 ```
+
+### `ImportError: The 'voyage' embedder requires the voyageai SDK`
+
+The embedders are optional extras (see [configuration.md](configuration.md#why-embedders-are-optional-extras)).
+You installed the bare base but no embedder. Add one:
+
+```sh
+pip install corpus-rag[voyage]      # or: corpus-rag[gemini]
+```
+
+Same message shape for `gemini` (`google-genai`).
 
 ### `VOYAGE_API_KEY missing` / `GEMINI_API_KEY missing`
 
@@ -133,6 +147,22 @@ corpus-query "Snowflake setup" -k 5
 
 The exact thresholds depend on the embedder; calibrate against known-good queries.
 
+### `recent_activity` returns nothing for plain markdown/text
+
+Dates come from frontmatter (`created` / `modified` / `updated`) if present,
+otherwise the connector falls back to the file's modification time. Files from a
+`git clone` all share the checkout time, which may be older than the window you
+asked for (e.g. the default 7 days), so `recent_activity(days=7)` looks empty.
+Fixes: widen the window (`recent_activity` with a larger `days`), or add date
+frontmatter to your docs:
+
+```markdown
+---
+title: My note
+modified: 2026-07-01
+---
+```
+
 ### Re-rank made retrieval worse on my eval
 
 This is a real and common observation. Cross-encoder rerankers optimize for full-content semantic relevance — they can pick a chunk with rich content over a chunk with a perfect title-match. If your eval queries are paraphrases of titles, plain hybrid search may outperform reranker-augmented hybrid search.
@@ -204,6 +234,19 @@ ls -lh corpus.db
 ```
 
 Most of the size is embeddings (1024 floats × 4 bytes × chunk count). 50K chunks ≈ 200 MB. Compressed not. Acceptable for personal use; if you need to ship the DB around, gzip cuts it ~3x.
+
+## Security notes
+
+- **`corpus-eval` / `corpus-benchmark` execute the `--queries` file you pass.**
+  They `import` it as a Python module to read `EVAL_QUERIES`, so only point them
+  at query files you trust (same as running any Python script).
+- **Ingestion won't follow symlinks or read outside a source's `path`.** A
+  symlink inside a source directory, or a `..` in a `glob`, is skipped — so a
+  planted `notes.md -> ~/.ssh/id_rsa` can't be ingested and surfaced to Claude.
+- **Retrieved corpus content is labeled untrusted to the MCP client.** Search /
+  doc / timeline results are prefixed with a banner telling the model to treat
+  them as data, not instructions — a mitigation, not a guarantee, against
+  prompt injection from adversarial corpus content.
 
 ## When you really need help
 

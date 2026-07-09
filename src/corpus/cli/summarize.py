@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
-from corpus.config import CorpusConfig
+from corpus.cli._common import load_config_or_exit
 from corpus.db.sqlite import ChunkStore, StoredChunk
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    config = CorpusConfig.load(args.config)
+    config = load_config_or_exit(args.config)
     if args.all:
         source_names = [s.name for s in config.sources]
     elif args.source:
