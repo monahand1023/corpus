@@ -21,12 +21,24 @@ def make_embedder(
     dim: int | None = None,
 ) -> Embedder:
     if provider == "voyage":
-        from corpus.embedder.voyage import VoyageEmbedder
+        try:
+            from corpus.embedder.voyage import VoyageEmbedder
+        except ImportError as e:
+            raise ImportError(
+                "The 'voyage' embedder requires the voyageai SDK, which is not "
+                "installed. Install it with `pip install corpus-rag[voyage]`."
+            ) from e
 
         return VoyageEmbedder(model=model, api_key=api_key)
 
     if provider == "gemini":
-        from corpus.embedder.gemini import GeminiEmbedder
+        try:
+            from corpus.embedder.gemini import GeminiEmbedder
+        except ImportError as e:
+            raise ImportError(
+                "The 'gemini' embedder requires the google-genai SDK, which is not "
+                "installed. Install it with `pip install corpus-rag[gemini]`."
+            ) from e
 
         return GeminiEmbedder(model=model, api_key=api_key, dim=dim)
 
