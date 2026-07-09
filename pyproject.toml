@@ -35,7 +35,10 @@ dependencies = [
 voyage = ["voyageai>=0.3.7,<0.5"]
 # Optional: local cross-encoder re-ranker. ~2GB of deps (torch + transformers
 # + sentence-transformers); only install if you actually want re-ranking.
-reranker = ["sentence-transformers>=5.5.0,<6.0"]
+# torch>=2.13.0 keeps us above the GHSA-rrmf-rvhw-rf47 (CVE-2025-3000) range
+# (torch.jit.script memory corruption; <= 2.12.0). corpus never calls jit.script,
+# but the floor stops the lock regressing into the vulnerable range.
+reranker = ["sentence-transformers>=5.5.0,<6.0", "torch>=2.13.0"]
 # Optional: Claude Haiku per-doc summaries.
 summarizer = ["anthropic>=0.50,<1.0"]
 pdf = ["pypdf>=6.11.0,<7.0"]
@@ -44,6 +47,7 @@ gemini = ["google-genai>=2.2.0,<3.0"]
 all = [
     "voyageai>=0.3.7,<0.5",
     "sentence-transformers>=5.5.0,<6.0",
+    "torch>=2.13.0",
     "anthropic>=0.50,<1.0",
     "pypdf>=6.11.0,<7.0",
     "trafilatura>=2.0.0,<3.0",
