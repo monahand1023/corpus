@@ -9,6 +9,13 @@ thus the Anthropic SDK — lazily via `corpus.eval.judge`.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from corpus.eval.judge import JUDGE_DEFAULT_MODEL, judge_answer
+
+if TYPE_CHECKING:
+    from anthropic import Anthropic
 
 
 def cohens_kappa(a: Sequence[bool], b: Sequence[bool]) -> float:
@@ -31,3 +38,68 @@ def cohens_kappa(a: Sequence[bool], b: Sequence[bool]) -> float:
     if pe == 1.0:
         return 1.0
     return (po - pe) / (1 - pe)
+
+
+@dataclass(frozen=True)
+class JudgeCase:
+    """One frozen validation case. `context` is stored so `--validate` needs no
+    DB — the judge sees exactly these (source_key, text) pairs. All content is
+    self-authored public text (no private-corpus data)."""
+
+    query: str
+    answer: str
+    cited_keys: list[str]
+    context: list[tuple[str, str]]
+    human_faithful: bool | None = None
+    adversarial: bool = False
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    kappa: float
+    raw_agreement: float
+    n: int
+    adversarial_total: int
+    adversarial_caught: int
+
+    @property
+    def adversarial_ok(self) -> bool:
+        return self.adversarial_caught == self.adversarial_total
+
+
+def run_validation_study(
+    cases: Sequence[JudgeCase],
+    *,
+    model: str = JUDGE_DEFAULT_MODEL,
+    client: Anthropic | None = None,
+) -> ValidationReport:
+    """Run the judge over the labeled cases and report κ (judge faithfulness vs
+    human) + raw agreement + the adversarial-catch check."""
+    labeled = [c for c in cases if c.human_faithful is not None]
+    if not labeled:
+        raise ValueError("no labeled cases (human_faithful is None for all)")
+    human: list[bool] = []
+    judge: list[bool] = []
+    adversarial_total = 0
+    adversarial_caught = 0
+    for case in labeled:
+        verdict = judge_answer(
+            case.query, case.answer, case.cited_keys, case.context, model=model, client=client
+        )
+        judged_faithful = verdict.faithfulness.passed
+        assert case.human_faithful is not None  # narrowed by the `labeled` filter
+        human.append(case.human_faithful)
+        judge.append(judged_faithful)
+        if case.adversarial:
+            adversarial_total += 1
+            if not judged_faithful:
+                adversarial_caught += 1
+    raw = sum(1 for h, j in zip(human, judge, strict=True) if h == j) / len(labeled)
+    return ValidationReport(
+        kappa=cohens_kappa(human, judge),
+        raw_agreement=raw,
+        n=len(labeled),
+        adversarial_total=adversarial_total,
+        adversarial_caught=adversarial_caught,
+    )
