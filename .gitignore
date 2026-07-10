@@ -24,3 +24,7 @@ build/
 corpus.toml
 # ...but the committed sample/CI config is intentionally tracked:
 !examples/sample_corpus/corpus.toml
+
+# Local-only AI-workflow process docs (design specs, implementation plans).
+# Kept out of the public repo and the published sdist by design.
+docs/superpowers/
