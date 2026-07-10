@@ -189,9 +189,7 @@ def test_doc_hash_differs_for_different_input():
 
 def test_summarize_retries_transient_failure(summarizer, monkeypatch):
     """A transient error on messages.create is retried, not fatal."""
-    import corpus.summarizer.anthropic_summarizer as mod
-
-    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)  # no real backoff wait
+    monkeypatch.setattr("corpus._anthropic.time.sleep", lambda *_: None)  # no real backoff wait
     summarizer._client.messages.create.side_effect = [
         RuntimeError("503 overloaded"),
         fake_response("recovered summary"),
@@ -205,7 +203,7 @@ def test_summarize_raises_after_exhausting_retries(summarizer, monkeypatch):
     """Persistent failures eventually surface (after RETRY_ATTEMPTS tries)."""
     import corpus.summarizer.anthropic_summarizer as mod
 
-    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr("corpus._anthropic.time.sleep", lambda *_: None)
     summarizer._client.messages.create.side_effect = RuntimeError("429 always")
     with pytest.raises(RuntimeError, match="429"):
         summarizer.summarize("notes", "doc", "body")

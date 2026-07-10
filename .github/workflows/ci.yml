@@ -50,7 +50,7 @@ jobs:
   # with the zero-dependency `hash` embedder (no API key, no extras — just
   # `uv sync --dev`) and fails the build if recall@5 / nDCG@5 drop below the
   # floors in examples/sample_corpus/thresholds.json. See docs/eval.md.
-  # (The API-key-gated LLM-as-judge job is deferred to Phase 2 — not built yet.)
+  # (The API-key-gated LLM-as-judge validation runs in the separate 'judge-gate' job below.)
   eval-gate:
     runs-on: ubuntu-latest
 
@@ -75,3 +75,44 @@ jobs:
 
       - name: Eval regression gate
         run: uv run corpus-eval --config examples/sample_corpus/corpus.toml --check examples/sample_corpus/thresholds.json
+
+  # Opt-in LLM-as-judge validation gate. Gated on the ANTHROPIC_API_KEY secret:
+  # if it isn't set (forks, or before the secret is configured), every real step
+  # is skipped and the job passes cleanly. When set, it runs the judge over the
+  # frozen public fixture and fails if Cohen's kappa drops below the committed
+  # floor or any adversarial case is missed. No DB/ingest needed — the fixture is
+  # self-contained. See docs/judge.md.
+  judge-gate:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Skip notice
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: echo "ANTHROPIC_API_KEY not set — skipping judge validation gate."
+
+      - name: Install uv
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: judge-gate
+
+      - name: Set up Python 3.12
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: uv python install 3.12
+
+      - name: Install dependencies (summarizer extra for the anthropic SDK)
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: uv sync --extra summarizer --dev
+
+      - name: Judge validation + adversarial gate
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: >-
+          uv run corpus-judge --validate
+          --fixture tests/judge_fixture.py
+          --check examples/sample_corpus/judge_thresholds.json
