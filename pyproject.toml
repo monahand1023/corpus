@@ -87,7 +87,7 @@ include = [
     "LICENSE",
     "pyproject.toml",
 ]
-exclude = ["uv.lock", ".venv", "dist", "*.db", ".superpowers", "**/*.diff"]
+exclude = ["uv.lock", ".venv", "dist", "*.db", ".superpowers", "docs/superpowers", "**/*.diff"]
 
 [dependency-groups]
 dev = [
