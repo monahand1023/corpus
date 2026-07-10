@@ -1,0 +1,31 @@
+# Committed config for the bundled sample corpus. Uses the zero-dependency
+# `hash` embedder so the eval + CI regression gate run with NO API key.
+#
+# Run from the repo root:
+#   uv run corpus-ingest --config examples/sample_corpus/corpus.toml --all
+#   uv run corpus-eval   --config examples/sample_corpus/corpus.toml --json
+
+[corpus]
+db_path = "examples/sample_corpus/corpus.db"
+
+[embedder]
+provider = "hash"
+model = "hash-v1"
+dim = 256
+
+[retriever]
+top_k = 5
+max_per_source_type = 3
+hybrid = true
+
+[[sources]]
+name = "note"
+type = "markdown"
+path = "./examples/sample_corpus/notes"
+glob = "**/*.md"
+
+[[sources]]
+name = "faq"
+type = "markdown"
+path = "./examples/sample_corpus/faqs"
+glob = "**/*.md"

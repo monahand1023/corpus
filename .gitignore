@@ -22,3 +22,5 @@ build/
 # User-configured per-instance file — don't commit. Sample lives in
 # corpus.toml.example.
 corpus.toml
+# ...but the committed sample/CI config is intentionally tracked:
+!examples/sample_corpus/corpus.toml
