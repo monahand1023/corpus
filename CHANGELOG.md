@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Generation-quality eval via a validated LLM-as-judge.** A feature-flagged
+  `answer_from_context` generator (`corpus.eval.generation`), a 3-axis
+  LLM-as-judge with forced tool-schema output and position-bias control
+  (`corpus.eval.judge`), and a validation study that certifies the judge against
+  human faithfulness labels via Cohen's κ (`corpus.eval.validation`). New
+  `corpus-judge` CLI (default generate+judge / `--validate` / `--build-fixture`),
+  a frozen self-contained public fixture, and an opt-in, key-gated `judge-gate`
+  CI job that fails on κ regression or a missed adversarial case. Client
+  construction + retry are shared with the summarizer via `corpus._anthropic`.
+  See `docs/judge.md`.
+
 ## [0.2.1] — 2026-07-09
 
 ### Added
