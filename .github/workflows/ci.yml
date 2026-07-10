@@ -45,3 +45,33 @@ jobs:
 
       - name: Pytest
         run: uv run pytest tests/ -q
+
+  # Keyless retrieval-regression gate: ingests the committed sample corpus
+  # with the zero-dependency `hash` embedder (no API key, no extras — just
+  # `uv sync --dev`) and fails the build if recall@5 / nDCG@5 drop below the
+  # floors in examples/sample_corpus/thresholds.json. See docs/eval.md.
+  # (The API-key-gated LLM-as-judge job is deferred to Phase 2 — not built yet.)
+  eval-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: eval-gate
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies (base only, no extras, no API key)
+        run: uv sync --dev
+
+      - name: Ingest sample corpus
+        run: uv run corpus-ingest --config examples/sample_corpus/corpus.toml --all
+
+      - name: Eval regression gate
+        run: uv run corpus-eval --config examples/sample_corpus/corpus.toml --check examples/sample_corpus/thresholds.json

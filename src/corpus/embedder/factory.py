@@ -3,6 +3,7 @@
 Built-in providers:
   - voyage  — Voyage AI (default; voyage-3-large, 1024-dim)
   - gemini  — Google Gemini (gemini-embedding-001, 768/1536/3072-dim)
+  - hash    — deterministic zero-dep hashing embedder (no API key; tests/CI only)
 
 Add a new provider by writing an `Embedder`-conforming class and registering
 it here. The Embedder Protocol is in `embedder/base.py`.
@@ -42,8 +43,13 @@ def make_embedder(
 
         return GeminiEmbedder(model=model, api_key=api_key, dim=dim)
 
+    if provider == "hash":
+        from corpus.embedder.hash import HashEmbedder
+
+        return HashEmbedder(dim=dim or 256)
+
     raise ValueError(
         f"Unknown embedder provider '{provider}'. "
-        "Built-in providers: voyage, gemini. "
+        "Built-in providers: voyage, gemini, hash. "
         "Add yours in src/corpus/embedder/factory.py."
     )

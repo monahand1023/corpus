@@ -247,6 +247,10 @@ def _load_queries(path: Path) -> list[str]:
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load {path}")
     module = importlib.util.module_from_spec(spec)
+    # Register in sys.modules before exec: dataclasses with `from __future__
+    # import annotations` resolve string annotations via
+    # sys.modules[cls.__module__], which raises AttributeError otherwise.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return [q.query for q in module.EVAL_QUERIES]
 

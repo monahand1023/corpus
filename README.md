@@ -216,9 +216,32 @@ For Slack exports, JSON dumps, an internal API archive, EPUB books — write you
 
 ## Eval
 
-`corpus-eval` runs hand-written known-answer queries against the live corpus and reports recall@K. It's a regression signal — run it after changing chunking, switching embedders, or tweaking retrieval.
+`corpus-eval` runs hand-written known-answer queries against the live corpus and reports **recall@K, MRR, and nDCG@K**, plus an aggregate table, a per-source-type breakdown, and `--json`. It's a regression signal — run it after changing chunking, switching embedders, or tweaking retrieval.
 
-Write your queries in any Python file that defines `EVAL_QUERIES`, then pass `--queries path/to/your_queries.py`:
+**Zero setup, no API key:** `corpus` ships a committed sample corpus (`examples/sample_corpus/` — 20 docs, two source types) and a keyless `hash` embedder (`provider="hash"`) so you can try the whole eval loop with nothing installed and no key on file:
+
+```sh
+uv run corpus-ingest --config examples/sample_corpus/corpus.toml --all
+uv run corpus-eval   --config examples/sample_corpus/corpus.toml
+```
+
+```
+=== Aggregate (n=30) ===
+  recall@5: 1.000
+  MRR:       0.865
+  nDCG@5:   0.898
+
+=== By source_type ===
+  source_type         n   recall      mrr     ndcg
+  faq                11    1.000    0.955    0.966
+  note               19    1.000    0.813    0.859
+```
+
+The `hash` embedder is a **reproducibility substrate, not a semantic-quality model** — it approximates lexical overlap, not meaning. It exists so the eval (and CI) has a deterministic, free baseline. Absolute retrieval quality is measured on your real corpus with `voyage` or `gemini`. See [`docs/eval.md`](docs/eval.md) for the exact metric formulas and that distinction in full.
+
+CI runs this same keyless flow as a regression gate (`eval-gate` in `.github/workflows/ci.yml`): it fails the build if the sample corpus's recall@5 or nDCG@5 drops below the floors in `examples/sample_corpus/thresholds.json` — see [docs/eval.md](docs/eval.md#ci-gate-phase-3) for details.
+
+Write your own queries in any Python file that defines `EVAL_QUERIES`, then pass `--queries path/to/your_queries.py`:
 
 ```python
 # my_queries.py
@@ -229,12 +252,14 @@ class EvalQuery:
     query: str
     expected_keys: list[str] = field(default_factory=list)
     source_filter: list[str] | None = None
+    source_type: str | None = None   # bucket tag for the per-source-type breakdown
     note: str = ""
 
 EVAL_QUERIES = [
     EvalQuery(
         query="how does the payment flow work?",
         expected_keys=["payment-design-doc"],
+        source_type="doc",
         note="paraphrased to stress semantic retrieval",
     ),
     # add more...
@@ -245,9 +270,24 @@ EVAL_QUERIES = [
 corpus-eval --queries my_queries.py --top-k 5     # baseline
 corpus-eval --queries my_queries.py --rerank      # with the BGE reranker
 corpus-eval --queries my_queries.py --no-hybrid   # vector-only baseline
+corpus-eval --queries my_queries.py --compare     # metric x config table (hybrid vs vector-only vs +rerank)
+corpus-eval --queries my_queries.py --json        # structured output for tooling / CI
 ```
 
-Tips: paraphrase away from doc titles to stress semantic retrieval; list multiple `expected_keys` when several docs are valid answers; add a few negative queries (empty `expected_keys`) to confirm the corpus correctly fails on absent topics.
+`--compare` runs the whole query set under several retrieval configs in one invocation:
+
+```
+=== Config comparison (top_k=5) ===
+  config             recall      mrr     ndcg
+  hybrid              1.000    0.865    0.898
+  vector-only         0.933    0.838    0.861
+```
+
+**Finding:** on this corpus, hybrid beats vector-only on all three metrics — recall 1.000 vs. 0.933, MRR 0.865 vs. 0.838, nDCG@5 0.898 vs. 0.861 — so fusing BM25 with vectors earns its place even on a purely lexical `hash` embedder ([full writeup](docs/eval.md#results)).
+
+Tips: paraphrase away from doc titles to stress semantic retrieval on a real embedder (the shipped sample-corpus queries deliberately do the opposite, since the `hash` embedder has only lexical overlap to work with); list multiple `expected_keys` when several docs are valid answers; add a few negative queries (empty `expected_keys`) to confirm the corpus correctly fails on absent topics.
+
+See [`docs/eval.md`](docs/eval.md) for the full methodology — precise metric definitions, the `EvalQuery` schema, and reading the reports and `--json` shape.
 
 ## Benchmarking
 
@@ -270,7 +310,7 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 
 - **Not multi-user.** One person, one machine. No accounts, auth, access control, sharing, or multi-tenancy.
 - **No network service.** It talks over stdio (the MCP server) and the CLI — there is no HTTP/REST/SSE API and no web UI.
-- **Embedding is not local.** Storage, the vector + full-text index, hybrid search, and the optional reranker all run on your machine — but turning text into vectors requires the **Voyage or Gemini API** (an API key + network at ingest and query time). There is no built-in offline embedder; the text you ingest and your queries are sent to the provider you pick. If that's a dealbreaker, this isn't the tool.
+- **Embedding is not local, for real retrieval.** Storage, the vector + full-text index, hybrid search, and the optional reranker all run on your machine — but turning text into vectors for actual semantic search requires the **Voyage or Gemini API** (an API key + network at ingest and query time). The only built-in offline embedder, `provider="hash"` (see [Eval](#eval)), is a keyless lexical-overlap substrate for eval/CI reproducibility, not a semantic-quality model — for real retrieval, the text you ingest and your queries are sent to whichever provider you pick. If that's a dealbreaker, this isn't the tool.
 - **Not built for huge corpora.** Vector search is a brute-force scan (sqlite-vec `vec0`), fast to roughly **100K chunks**. Beyond that you'd want ANN/HNSW indexing, which isn't included.
 - **No OCR.** Scanned or image-only PDFs produce no text — OCR them first.
 - **No live sync.** No file watcher and no real-time/incremental indexing daemon — you re-run `corpus-ingest` when content changes.
