@@ -1,6 +1,6 @@
 [project]
 name = "corpus-rag"
-version = "0.2.0"
+version = "0.2.1"
 description = "Single-user RAG framework for personal archives. Local-first, MCP-native."
 readme = "README.md"
 license = { text = "MIT" }
@@ -73,9 +73,21 @@ build-backend = "hatchling.build"
 packages = ["src/corpus"]
 
 [tool.hatch.build.targets.sdist]
-# Keep tests/docs/examples in the sdist (useful for downstream), but drop dev
-# cruft that bloats it and isn't needed to build or use the package.
-exclude = ["uv.lock", ".venv", "dist", "*.db"]
+# Explicit ALLOWLIST: ship ONLY these paths. hatchling would otherwise sweep in
+# untracked local scratch (agent notes under .superpowers/, review .diff files,
+# reports) that is gitignored but NOT git-excluded from the sdist — a real leak
+# vector. Keep tests/docs/examples for downstream users; everything else is dropped.
+include = [
+    "src",
+    "tests",
+    "docs",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+exclude = ["uv.lock", ".venv", "dist", "*.db", ".superpowers", "**/*.diff"]
 
 [dependency-groups]
 dev = [

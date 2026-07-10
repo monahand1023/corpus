@@ -6,6 +6,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-07-09
+
+### Added
+- **Retrieval-quality eval harness.** A pure, dependency-free metrics module
+  (`corpus.eval.metrics`: recall@K / MRR / nDCG@K), a zero-dependency
+  deterministic `hash` embedder (`provider="hash"`) so the retrieval pipeline
+  runs with no API key, an expanded two-source-type sample corpus, an extended
+  `corpus-eval` CLI (per-source-type breakdown, `--json`, `--compare`, and a
+  `--check` regression gate), and a keyless `eval-gate` CI job that fails the
+  build on recall@5 / nDCG@5 regression below committed thresholds.
+- `docs/eval.md` — eval methodology, metric definitions, and the keyless CI gate.
+
+### Fixed
+- `corpus-eval` / `corpus-benchmark` no longer crash on an `EVAL_QUERIES` module
+  that uses `from __future__ import annotations` (the dynamically-loaded module
+  is now registered in `sys.modules` before execution).
+
 ## [0.2.0] — 2026-07-08
 
 ### Added
