@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Lets the judge-gate job (below) be triggered by hand from the Actions tab,
+  # so LLM-as-judge validation never spends API credits on ordinary pushes/PRs.
+  workflow_dispatch:
 
 # Cancel older runs on the same branch when a new commit lands.
 concurrency:
@@ -76,14 +79,19 @@ jobs:
       - name: Eval regression gate
         run: uv run corpus-eval --config examples/sample_corpus/corpus.toml --check examples/sample_corpus/thresholds.json
 
-  # Opt-in LLM-as-judge validation gate. Gated on the ANTHROPIC_API_KEY secret:
-  # if it isn't set (forks, or before the secret is configured), every real step
-  # is skipped and the job passes cleanly. When set, it runs the judge over the
-  # frozen public fixture and fails if Cohen's kappa drops below the committed
-  # floor or any adversarial case is missed. No DB/ingest needed — the fixture is
-  # self-contained. See docs/judge.md.
+  # Opt-in LLM-as-judge validation gate. Runs on MANUAL dispatch only
+  # (workflow_dispatch) so it never spends Opus/Sonnet API credits on ordinary
+  # pushes or PRs — trigger it from the Actions tab to re-validate the judge.
+  # Additionally gated on the ANTHROPIC_API_KEY secret: if it isn't set, every
+  # real step is skipped and the job passes cleanly. When set, it runs the judge
+  # over the frozen public fixture and fails if Cohen's kappa drops below the
+  # committed floor or any adversarial case is missed. No DB/ingest needed — the
+  # fixture is self-contained. To validate on a cadence instead, add a `schedule:`
+  # cron to `on:` above and add `|| github.event_name == 'schedule'` to the if.
+  # See docs/judge.md.
   judge-gate:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
