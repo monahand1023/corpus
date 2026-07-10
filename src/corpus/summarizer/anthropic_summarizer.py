@@ -17,23 +17,18 @@ for corpus's scale.
 from __future__ import annotations
 
 import hashlib
-import logging
-import os
-import time
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from corpus._anthropic import RETRY_ATTEMPTS, make_client, retry
 
 if TYPE_CHECKING:
     from anthropic.types import TextBlockParam
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_INPUT_CHARS = 80_000
-# Exponential-backoff retry around each per-doc API call. ~5 attempts absorbs a
-# transient 429/503/network blip without crashing a long bulk run.
-RETRY_ATTEMPTS = 5
+
+__all__ = ["DEFAULT_MODEL", "RETRY_ATTEMPTS", "AnthropicSummarizer", "SummaryResult", "doc_hash"]
 
 SYSTEM_PROMPT = """You write tight, factual summaries of documents from a personal archive.
 
@@ -57,33 +52,8 @@ class SummaryResult:
 
 class AnthropicSummarizer:
     def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL):
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY missing. Set in .env or pass api_key= to AnthropicSummarizer."
-            )
-        from anthropic import Anthropic
-
-        self._client = Anthropic(api_key=key)
+        self._client = make_client(api_key)
         self._model = model
-
-    @staticmethod
-    def _retry(fn: Callable[[], Any], what: str) -> Any:
-        """Retry a network call with exponential backoff so a transient blip
-        (429/503/connection reset) doesn't crash an otherwise-resumable run."""
-        delay = 2.0
-        for attempt in range(RETRY_ATTEMPTS):
-            try:
-                return fn()
-            except Exception as e:  # SDK/network errors are heterogeneous
-                if attempt == RETRY_ATTEMPTS - 1:
-                    raise
-                logger.warning(
-                    "%s failed (attempt %d/%d): %s — retrying in %.0fs",
-                    what, attempt + 1, RETRY_ATTEMPTS, e, delay,
-                )
-                time.sleep(delay)
-                delay = min(delay * 2, 60)
 
     def summarize(
         self,
@@ -107,7 +77,7 @@ class AnthropicSummarizer:
             f"Document content:\n---\n{truncated}\n---\n\n"
             f"Write the summary now. No preamble."
         )
-        response = self._retry(
+        response = retry(
             lambda: self._client.messages.create(
                 model=self._model,
                 max_tokens=400,
