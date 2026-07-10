@@ -50,7 +50,7 @@ jobs:
   # with the zero-dependency `hash` embedder (no API key, no extras — just
   # `uv sync --dev`) and fails the build if recall@5 / nDCG@5 drop below the
   # floors in examples/sample_corpus/thresholds.json. See docs/eval.md.
-  # (The API-key-gated LLM-as-judge job is deferred to Phase 2 — not built yet.)
+  # (The API-key-gated LLM-as-judge validation runs in the separate 'judge-gate' job below.)
   eval-gate:
     runs-on: ubuntu-latest
 
