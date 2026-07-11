@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from corpus.eval.judge import JUDGE_DEFAULT_MODEL, judge_answer
+from .judge import JUDGE_DEFAULT_MODEL, judge_answer
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
