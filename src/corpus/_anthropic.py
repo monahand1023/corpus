@@ -31,8 +31,7 @@ def make_client(api_key: str | None = None) -> Anthropic:
     key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY missing. Set it in .env (or the environment), "
-            "or install the optional extra: pip install 'corpus-rag[summarizer]'."
+            "ANTHROPIC_API_KEY missing. Set it in .env (or the environment)."
         )
     from anthropic import Anthropic
 
