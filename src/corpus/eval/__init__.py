@@ -6,15 +6,15 @@ across separate RAG deployments — do not add corpus-specific imports to it.
 
 from __future__ import annotations
 
-from corpus.eval.generation import GENERATOR_DEFAULT_MODEL, Answer, answer_from_context
-from corpus.eval.judge import (
+from .generation import GENERATOR_DEFAULT_MODEL, Answer, answer_from_context
+from .judge import (
     JUDGE_DEFAULT_MODEL,
     AxisVerdict,
     JudgeVerdict,
     aggregate_verdicts,
     judge_answer,
 )
-from corpus.eval.metrics import (
+from .metrics import (
     MetricSummary,
     QueryScore,
     aggregate,
@@ -23,7 +23,7 @@ from corpus.eval.metrics import (
     recall_at_k,
     score_query,
 )
-from corpus.eval.validation import (
+from .validation import (
     JudgeCase,
     ValidationReport,
     cohens_kappa,

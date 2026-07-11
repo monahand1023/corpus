@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from corpus._anthropic import extract_tool_input, make_client, retry
+from .._anthropic import extract_tool_input, make_client, retry
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
