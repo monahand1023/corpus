@@ -289,6 +289,28 @@ Tips: paraphrase away from doc titles to stress semantic retrieval on a real emb
 
 See [`docs/eval.md`](docs/eval.md) for the full methodology — precise metric definitions, the `EvalQuery` schema, and reading the reports and `--json` shape.
 
+## Generation quality (LLM-as-judge)
+
+`corpus-eval` scores *retrieval*; `corpus-judge` scores the *answer generated
+from* what was retrieved. It runs retrieve → answer-from-context → judge, rating
+each answer on three axes — **faithfulness**, **answer relevance**, and
+**citation correctness** — with a stronger model judging than generating. The
+judge itself is validated against human labels via Cohen's κ (`--validate`), so
+its verdicts are trustworthy before you rely on them. Requires
+`ANTHROPIC_API_KEY`; it never runs over a private corpus in CI (see
+[`docs/judge.md`](docs/judge.md)).
+
+```sh
+corpus-judge --queries my_queries.py --config corpus.toml            # 3-axis aggregate
+corpus-judge --queries my_queries.py --config corpus.toml --rerank   # +BGE reranker
+corpus-judge --validate --fixture tests/judge_fixture.py             # certify the judge (κ)
+```
+
+Because the judge scores answers against the retrieved context, the loop also
+**measures whether a retrieval change helps generation**: run with and without
+`--rerank` (or vary `--top-k`) and compare the aggregates — the signal is the
+delta between configs, not any single absolute rate.
+
 ## Benchmarking
 
 `corpus-benchmark` measures per-stage retrieval latency (embed / vector / FTS / fusion / dedupe) with p50/p95/p99 + throughput.
