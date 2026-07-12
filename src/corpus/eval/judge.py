@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 JUDGE_DEFAULT_MODEL = "claude-opus-4-8"
 _MAX_TOKENS = 1024
-_AXES = ("faithfulness", "answer_relevance", "citation_correctness")
 
 _THINKING_OFF: ThinkingConfigParam = {"type": "disabled"}
 _RECORD_VERDICT_TOOL: ToolParam = {
@@ -128,14 +127,14 @@ def judge_answer(
         f"judge_answer({query[:40]!r})",
     )
     data = extract_tool_input(response, "record_verdict")
-    for axis_name in _AXES:
-        for suffix in ("_passed", "_rationale"):
-            if f"{axis_name}{suffix}" not in data:
-                raise RuntimeError(f"judge verdict missing field: {axis_name}{suffix}")
 
     def axis(name: str) -> AxisVerdict:
+        # Forced tool_choice guarantees record_verdict is called but not that
+        # every required field is populated; default a missing verdict field to a
+        # conservative fail rather than crashing the run (found live on real data).
         return AxisVerdict(
-            passed=bool(data[f"{name}_passed"]), rationale=str(data[f"{name}_rationale"])
+            passed=bool(data.get(f"{name}_passed", False)),
+            rationale=str(data.get(f"{name}_rationale", "")),
         )
 
     return JudgeVerdict(
