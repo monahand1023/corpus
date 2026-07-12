@@ -43,7 +43,9 @@ _SUBMIT_ANSWER_TOOL: ToolParam = {
             },
         },
         "required": ["answer", "cited_keys"],
+        "additionalProperties": False,
     },
+    "strict": True,
 }
 _SUBMIT_ANSWER_CHOICE: ToolChoiceToolParam = {"type": "tool", "name": "submit_answer"}
 

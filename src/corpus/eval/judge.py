@@ -59,7 +59,9 @@ _RECORD_VERDICT_TOOL: ToolParam = {
             "citation_correctness_rationale",
             "citation_correctness_passed",
         ],
+        "additionalProperties": False,
     },
+    "strict": True,
 }
 _RECORD_VERDICT_CHOICE: ToolChoiceToolParam = {"type": "tool", "name": "record_verdict"}
 
