@@ -94,7 +94,7 @@ def answer_from_context(
     )
     data = extract_tool_input(response, "submit_answer")
     return Answer(
-        text=str(data["answer"]),
+        text=str(data.get("answer", "")),
         cited_keys=[str(k) for k in data.get("cited_keys", [])],
         model=model,
         input_tokens=getattr(response.usage, "input_tokens", 0),

@@ -30,6 +30,18 @@ def test_answer_from_context_parses_tool_output():
     assert result.output_tokens == 7
 
 
+def test_answer_from_context_missing_answer_field_is_empty():
+    # Forced tool_choice guarantees submit_answer is called, but without strict
+    # mode it does NOT guarantee required fields are populated. A tool call that
+    # omits "answer" must yield an empty answer, not crash the run (found live on
+    # real data).
+    resp = _fake_tool_response("submit_answer", {"cited_keys": ["k1"]})
+    client = _mock_client(resp)
+    result = answer_from_context("Q?", [("k1", "ctx")], client=client)
+    assert result.text == ""
+    assert result.cited_keys == ["k1"]
+
+
 def test_answer_from_context_request_shape():
     resp = _fake_tool_response("submit_answer", {"answer": "x", "cited_keys": []})
     client = _mock_client(resp)
