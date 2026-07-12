@@ -21,6 +21,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   construction + retry are shared with the summarizer via `corpus._anthropic`.
   See `docs/judge.md`.
 
+- **`docs/understanding-evals.md`** — a from-scratch conceptual guide to RAG and
+  AI evaluation for readers with no prior background: retrieval vs generation,
+  automated metrics vs LLM-as-judge, Cohen's κ validation, baseline-vs-delta,
+  the noise floor, and using `--rerank` to measure a retrieval change's effect on
+  generation. Linked as the "start here" doc; complements the reference-level
+  `docs/eval.md` and `docs/judge.md`.
+
 ### Changed
 - **Judge/generator robustness + portability.** The `submit_answer` and
   `record_verdict` tools now use `strict: true` (+ `additionalProperties: false`)
