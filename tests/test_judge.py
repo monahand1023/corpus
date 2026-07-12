@@ -33,6 +33,20 @@ def _mock_client(response):
     return SimpleNamespace(messages=SimpleNamespace(create=MagicMock(return_value=response)))
 
 
+def test_judge_answer_missing_verdict_field_defaults():
+    # Forced tool_choice guarantees record_verdict is called but not that every
+    # required field is populated; a partial verdict must default (missing -> a
+    # conservative fail), not crash the run (found live on real data).
+    partial = dict(_VERDICT_INPUT)
+    del partial["citation_correctness_passed"]
+    del partial["faithfulness_rationale"]
+    client = _mock_client(_fake_verdict_response(partial))
+    verdict = judge_answer("Q?", "A.", ["k1"], [("k1", "ctx")], client=client)
+    assert verdict.citation_correctness.passed is False  # missing -> default fail
+    assert verdict.faithfulness.rationale == ""  # missing -> default empty
+    assert verdict.answer_relevance.passed is True  # present field unaffected
+
+
 def test_judge_answer_parses_three_axes():
     client = _mock_client(_fake_verdict_response(_VERDICT_INPUT))
     verdict = judge_answer("Q?", "A.", ["k1"], [("k1", "ctx")], client=client)
