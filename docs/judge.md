@@ -23,6 +23,25 @@ is itself **validated** against human labels.
 No `temperature` is set anywhere: the current judge/generator models reject it.
 Determinism comes from disabled thinking + forced structured output.
 
+## Robustness: complete forced-tool output
+
+Forced `tool_choice` guarantees the model *calls* the tool, but **not** that it
+populates every `required` field. On small inputs this never surfaces; on larger
+real-world archives it does — the generator occasionally returned `submit_answer`
+with no `answer` field, and the judge occasionally returned `record_verdict`
+missing a verdict field, enough to abort a batch run. Two layers prevent that:
+
+- **`strict: true` + `additionalProperties: false`** on both tool schemas, so the
+  API guarantees a schema-complete response (all required fields, correct types).
+- **Defensive defaults** in the parsers (`data.get(...)`) as belt-and-suspenders,
+  so a malformed response degrades to an empty answer / a conservative "fail"
+  verdict instead of raising — a batch run over many queries never aborts on one
+  bad response.
+
+The eval modules (`_anthropic`, `generation`, `judge`, `validation`) use relative
+imports, so they are reusable verbatim across separate deployments (a `diff` is
+the drift check).
+
 ## The validation study
 
 `tests/judge_fixture.py` holds frozen `JUDGE_CASES` — each carries its own

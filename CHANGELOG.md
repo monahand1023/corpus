@@ -18,6 +18,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   construction + retry are shared with the summarizer via `corpus._anthropic`.
   See `docs/judge.md`.
 
+### Changed
+- **Judge/generator robustness + portability.** The `submit_answer` and
+  `record_verdict` tools now use `strict: true` (+ `additionalProperties: false`)
+  so forced-tool output is always schema-complete, and the parsers default
+  missing fields defensively — a batch generate+judge run no longer aborts if the
+  model returns an incomplete tool call (forced `tool_choice` invokes the tool but
+  does not guarantee its required fields are populated). The `corpus.eval`
+  generation/judge/validation modules use relative imports so they can be reused
+  verbatim across separate deployments.
+
 ## [0.2.1] — 2026-07-09
 
 ### Added
