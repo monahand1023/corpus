@@ -69,6 +69,25 @@ retrieves, answers, and judges each query, printing a 3-axis aggregate.
 `--build-fixture --out PATH` writes a draft fixture (with `human_faithful=None`)
 for hand-labeling.
 
+### Retrieval levers: measuring their effect on generation
+
+Because the judge scores the answer against the *retrieved* context, the loop
+doubles as a way to measure whether a retrieval change actually improves
+generation. The judge is the fixed instrument; vary retrieval and read the
+delta. The built-in lever is the cross-encoder re-ranker:
+
+```bash
+# needs the [reranker] extra; re-orders the retrieved pool by BGE relevance,
+# then the same top-k feeds the generator — isolates retrieval quality, not size
+uv run corpus-judge --queries tests/eval_queries.py \
+  --config examples/sample_corpus/corpus.toml --rerank
+```
+
+Run once without `--rerank` and once with, and compare the two aggregates.
+`--top-k` is the other cheap knob. Treat any single aggregate as a baseline on
+one config and query set — the value is the **delta** between configs, not the
+absolute rate.
+
 ## CI gate
 
 The opt-in `judge-gate` CI job is **gated on the `ANTHROPIC_API_KEY` secret**.

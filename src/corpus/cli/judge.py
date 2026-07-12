@@ -80,7 +80,7 @@ def _run_validate(args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
-def _retriever_from_config(config_path: str | None) -> Any:
+def _retriever_from_config(config_path: str | None, rerank: bool = False) -> Any:
     from corpus.db.sqlite import ChunkStore
     from corpus.embedder.factory import make_embedder
     from corpus.retriever import Retriever
@@ -92,16 +92,23 @@ def _retriever_from_config(config_path: str | None) -> Any:
         model=config.embedder.model,
         dim=config.embedder.dim,
     )
+    reranker = None
+    if rerank:
+        from corpus.reranker.local import BGEReranker
+
+        reranker = BGEReranker()
     return Retriever(
         store=store,
         embedder=embedder,
-        reranker=None,
+        reranker=reranker,
         reference_patterns=config.compiled_references(),
     )
 
 
-def _context_for(retriever: Any, query: str, top_k: int) -> list[tuple[str, str]]:
-    result = retriever.query(query, top_k=top_k, hybrid=True, rerank=False)
+def _context_for(
+    retriever: Any, query: str, top_k: int, rerank: bool = False
+) -> list[tuple[str, str]]:
+    result = retriever.query(query, top_k=top_k, hybrid=True, rerank=rerank)
     return [(c.source_key, c.content) for c in result.chunks]
 
 
@@ -112,12 +119,12 @@ def _run_default(args: argparse.Namespace) -> int:
         return 2
     queries = list(load_python_export(queries_path, "EVAL_QUERIES"))
     client = make_client()
-    retriever = _retriever_from_config(args.config)
+    retriever = _retriever_from_config(args.config, args.rerank)
     try:
         verdicts = []
         rows = []
         for q in queries:
-            context = _context_for(retriever, q.query, args.top_k)
+            context = _context_for(retriever, q.query, args.top_k, rerank=args.rerank)
             answer = answer_from_context(
                 q.query, context, model=args.generator_model, client=client
             )
@@ -157,11 +164,11 @@ def _run_build_fixture(args: argparse.Namespace) -> int:
         return 2
     queries = list(load_python_export(queries_path, "EVAL_QUERIES"))
     client = make_client()
-    retriever = _retriever_from_config(args.config)
+    retriever = _retriever_from_config(args.config, args.rerank)
     try:
         cases: list[JudgeCase] = []
         for q in queries:
-            context = _context_for(retriever, q.query, args.top_k)
+            context = _context_for(retriever, q.query, args.top_k, rerank=args.rerank)
             answer = answer_from_context(
                 q.query, context, model=args.generator_model, client=client
             )
@@ -216,6 +223,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--generator-model", default=GENERATOR_DEFAULT_MODEL)
     parser.add_argument("--judge-model", default=JUDGE_DEFAULT_MODEL)
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--rerank", action="store_true", help="Enable the local BGE cross-encoder re-ranker (needs the [reranker] extra) over the retrieved pool before generation")
     parser.add_argument("--out", default=None, help="Output path for --build-fixture")
     parser.add_argument("--check", default=None, metavar="PATH", help='JSON kappa floor, e.g. {"kappa": 0.6}')
     parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the aggregate as JSON")
