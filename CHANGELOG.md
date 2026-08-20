@@ -6,6 +6,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-20
+
+### Fixed
+- **Voyage batches are packed by real token count, not characters.** Voyage
+  enforces a hard 120,000 tokens per `/embed` request. Batches were packed
+  against a 400,000-char budget annotated "~100K tokens" — the chars/4 rule of
+  thumb — which does not hold, because token density is not a constant.
+  Measured on a mixed corpus, density ranged from 3.66 chars/token (plain
+  prose) to 1.51 (dense or structured text, and CJK is denser still): a 2.4x
+  spread. At 1.51 that budget is 264K tokens, more than double the cap, and
+  Voyage responds `InvalidRequestError: The max allowed tokens per submitted
+  batch is 120000`. Each rejection triggers recursive halving, so a large
+  ingest degrades to a fraction of the API's real throughput — observed at
+  0.5 chunks/s against an achievable 146/s on a 1.4M-chunk corpus.
+
+  Packing now uses Voyage's local tokenizer (~2,100 texts/s, no API cost) with
+  a 100,000-token ceiling. When the tokenizer is unavailable it falls back to a
+  deliberately pessimistic 1.3 chars/token — below the densest ratio observed,
+  so the fallback can only over-split, never overflow. A tokenizer returning
+  the wrong arity also falls back rather than crashing packing, and the warning
+  fires once per embedder rather than per batch. `_embed_batch`'s TPM estimate
+  uses the same real counts instead of chars/3.
+
+  Note: `gemini.py` keeps its own char budget; its API limits differ and it is
+  unaffected by this change.
+
 ### Added
 - **Generation-quality eval via a validated LLM-as-judge.** A feature-flagged
   `answer_from_context` generator (`corpus.eval.generation`), a 3-axis
