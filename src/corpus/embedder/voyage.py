@@ -23,10 +23,24 @@ logger = logging.getLogger(__name__)
 
 # Voyage limits as of 2026 (verify on docs.voyageai.com — they've changed mid-0.x):
 #   - up to 128 inputs per /embed request
-#   - up to ~120K tokens per /embed request
-# Conservative 400K-char batch budget (~100K tokens estimate) leaves headroom.
+#   - a HARD 120,000 tokens per /embed request. Exceeding it returns
+#     InvalidRequestError: "The max allowed tokens per submitted batch is 120000."
+#
+# Pack by REAL tokens, not by characters. Token density is not a constant: on a
+# mixed personal/work corpus it ranged from 3.66 chars/token (plain prose) to
+# 1.51 (dense or structured text) — a 2.4x spread. A char budget sized for prose
+# silently becomes a 2x overrun on dense content, and every oversized batch is
+# rejected and recursively halved, which is far slower than embedding itself.
+# (A previous 400,000-char budget, annotated "~100K tokens", is 264K tokens at
+# 1.51 chars/token — more than double the cap.)
 MAX_INPUTS_PER_BATCH = 128
-MAX_CHARS_PER_BATCH = 400_000
+MAX_TOKENS_PER_BATCH = 100_000
+
+# Fallback when the local tokenizer is unavailable. Deliberately pessimistic:
+# below the densest ratio observed (1.51) so it can only over-split, never
+# overflow. Over-splitting costs a few extra requests; overflowing costs a
+# rejection plus a recursive-halving cascade.
+FALLBACK_CHARS_PER_TOKEN = 1.3
 
 # Voyage projects have a per-minute token limit (3,000,000 TPM for voyage-3-large
 # at time of writing). Firing requests blindly on a large ingest blows past it and
@@ -59,6 +73,8 @@ class VoyageEmbedder:
         self._client = voyageai.Client(api_key=key, max_retries=max_retries, timeout=timeout)
         self._model = model
         self.total_tokens_used = 0
+        # None until first use; False if the tokenizer is unavailable here.
+        self._tokenizer_ok: bool | None = None
         # Rolling window of (monotonic_ts, tokens) for proactive TPM throttling.
         self._token_window: deque[tuple[float, int]] = deque()
 
@@ -113,23 +129,55 @@ class VoyageEmbedder:
                 results[idx] = vec
         return results
 
+    def token_counts(self, texts: list[str]) -> list[int]:
+        """Per-text token counts from Voyage's LOCAL tokenizer (no API cost).
+
+        Falls back to a pessimistic char estimate if the tokenizer cannot be
+        reached (offline, older SDK), so packing degrades rather than breaks.
+        """
+        if self._tokenizer_ok is not False:
+            try:
+                counts = [len(e) for e in self._client.tokenize(texts, model=self._model)]
+                # A tokenizer that returns the wrong arity is not usable. Fall
+                # back rather than propagate a length mismatch into packing.
+                if len(counts) != len(texts):
+                    raise ValueError(
+                        f"tokenizer returned {len(counts)} counts for {len(texts)} texts"
+                    )
+                self._tokenizer_ok = True
+                return counts
+            except Exception as e:
+                if self._tokenizer_ok is None:
+                    logger.warning(
+                        "Voyage tokenizer unavailable (%s); packing batches with a "
+                        "conservative char estimate instead.", e,
+                    )
+                self._tokenizer_ok = False
+        return [max(1, int(len(t) / FALLBACK_CHARS_PER_TOKEN)) for t in texts]
+
     def _pack_batches(
         self, indices: list[int], texts: list[str]
     ) -> list[tuple[list[int], list[str]]]:
+        """Group inputs under BOTH per-request caps: 128 inputs and 120K tokens.
+
+        Packing on input count alone is not enough — 128 dense inputs can exceed
+        the token cap on their own.
+        """
+        counts = self.token_counts(texts)
         batches: list[tuple[list[int], list[str]]] = []
         cur_idx: list[int] = []
         cur_txt: list[str] = []
-        cur_chars = 0
-        for i, t in zip(indices, texts, strict=True):
-            t_chars = len(t)
+        cur_tokens = 0
+        for i, t, n_tok in zip(indices, texts, counts, strict=True):
             if cur_txt and (
-                len(cur_txt) >= MAX_INPUTS_PER_BATCH or cur_chars + t_chars > MAX_CHARS_PER_BATCH
+                len(cur_txt) >= MAX_INPUTS_PER_BATCH
+                or cur_tokens + n_tok > MAX_TOKENS_PER_BATCH
             ):
                 batches.append((cur_idx, cur_txt))
-                cur_idx, cur_txt, cur_chars = [], [], 0
+                cur_idx, cur_txt, cur_tokens = [], [], 0
             cur_idx.append(i)
             cur_txt.append(t)
-            cur_chars += t_chars
+            cur_tokens += n_tok
         if cur_txt:
             batches.append((cur_idx, cur_txt))
         return batches
@@ -151,7 +199,7 @@ class VoyageEmbedder:
     def _embed_batch(self, texts: list[str], input_type: str) -> EmbedResult:
         # Estimate tokens from chars (~3 chars/token, conservative for mixed-language
         # content) and pace under the TPM target before firing the request.
-        est_tokens = sum(len(t) for t in texts) // 3
+        est_tokens = sum(self.token_counts(texts))
         self._throttle(est_tokens)
         response = self._client.embed(
             texts=texts,
