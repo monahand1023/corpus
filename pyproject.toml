@@ -22,7 +22,7 @@ dependencies = [
     # they live in optional extras so the base install stays minimal and
     # provider-agnostic (see [project.optional-dependencies]).
     "sqlite-vec>=0.1.9,<0.2",
-    "mcp>=1.27.1,<2.0",
+    "mcp>=1.28.1,<2.0",
     "pydantic>=2.13.4,<3.0",
     "python-dotenv>=1.2.2,<2.0",
 ]
