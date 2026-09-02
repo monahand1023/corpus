@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- Bumped `transformers` 5.8.1 → 5.16.1 in `uv.lock` (GHSA-xrqw-3rrv-vx5w, path
+  traversal in `save_pretrained`). Transitive via `sentence-transformers`, so it
+  only affects the `[reranker]`/`[all]` extras; the published package's
+  constraints already resolve to a patched release.
+
 ## [0.2.3] - 2026-08-22
 
 ### Security
