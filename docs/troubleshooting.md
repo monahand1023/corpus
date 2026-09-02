@@ -128,7 +128,7 @@ The dedupe-by-source-key post-filter should prevent this. If it isn't:
 Either the corpus is empty or the query matches nothing.
 
 ```sh
-corpus-stats                    # via MCP, or:
+corpus-list                     # chunk counts per source (CLI); the MCP equivalent is the corpus_stats tool. Or directly:
 sqlite3 corpus.db "SELECT source_type, COUNT(*) FROM chunks GROUP BY source_type"
 ```
 
