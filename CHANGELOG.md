@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-22
+
+### Security
+- Bumped dependencies to close 30 open Dependabot alerts (some duplicate
+  CVEs against the same package): `mcp` 1.27.1 → 1.29.0, `cryptography`
+  48.0.1 → 50.0.0, `aiohttp` 3.14.1 → 3.14.3, `pyasn1` 0.6.3 → 0.6.4,
+  `pypdf` 6.13.3 → 6.16.1, `pillow` 12.2.0 → 12.3.0, `setuptools` 81.0.0 →
+  84.0.0 (transitive, via `torch`). No API or behavior changes; full test
+  suite (ruff, mypy, pytest, eval-gate) verified green against the bumped
+  versions.
+
 ## [0.2.2] - 2026-08-20
 
 ### Fixed
