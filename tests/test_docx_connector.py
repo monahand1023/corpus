@@ -72,3 +72,31 @@ def test_dedupes_identical_documents(tmp_path: Path) -> None:
     with patch("docx.Document", return_value=_make_mock_docx(["Same body."])):
         docs = list(DocxConnector(source_type="docs", path=tmp_path).load())
     assert len(docs) == 1
+
+
+def test_lazy_parse_failure_is_contained_to_the_file(tmp_path: Path) -> None:
+    """python-docx parses lazily too: a malformed file can construct fine and
+    only raise when `.paragraphs` is touched. That access must be inside the
+    per-file guard, or one bad file aborts the whole source."""
+    (tmp_path / "broken.docx").write_bytes(b"PK fake")
+    (tmp_path / "fine.docx").write_bytes(b"PK fake")
+
+    def doc_factory(path: str) -> MagicMock:
+        d = MagicMock()
+        if Path(path).name == "broken.docx":
+            type(d).paragraphs = property(
+                lambda self: (_ for _ in ()).throw(KeyError("word/document.xml"))
+            )
+        else:
+            d.paragraphs = [MagicMock(text="Readable body.")]
+            d.tables = []
+            d.core_properties = MagicMock(title=None)
+        return d
+
+    conn = DocxConnector(source_type="docs", path=tmp_path)
+    with patch("docx.Document", side_effect=doc_factory):
+        docs = list(conn.load())
+
+    assert len(docs) == 1, "the readable docx must still be ingested"
+    assert docs[0].title == "fine"
+    assert conn.failed_files == 1

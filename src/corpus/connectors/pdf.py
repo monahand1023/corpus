@@ -61,6 +61,15 @@ class PdfConnector:
         for path in discover_files(self._root, self._glob):
             try:
                 reader = PdfReader(str(path))
+                # pypdf parses LAZILY: the constructor succeeds for an encrypted
+                # or malformed file and the failure only surfaces when `.pages`
+                # is first touched (FileNotDecryptedError, and friends). Force
+                # that here, inside the per-file guard — outside it, one bad PDF
+                # aborts the entire source, and since pypdf's errors derive from
+                # Exception rather than ValueError/OSError, cli/ingest.py's
+                # per-source handler would not catch it either, taking down an
+                # entire `--all` run.
+                pages = list(reader.pages)
             except Exception as e:  # pypdf raises many subclasses; treat any read failure as skip
                 logger.warning("PDF source '%s': cannot open %s: %s", self.source_type, path, e)
                 self.failed_files += 1
@@ -68,7 +77,7 @@ class PdfConnector:
 
             page_texts: list[str] = []
             page_failed = False
-            for i, page in enumerate(reader.pages):
+            for i, page in enumerate(pages):
                 try:
                     page_text = page.extract_text() or ""
                 except Exception as e:
@@ -121,5 +130,5 @@ class PdfConnector:
                 source_key=source_key,
                 title=title,
                 url=None,
-                raw={"body": body, "path": str(path), "page_count": len(reader.pages)},
+                raw={"body": body, "path": str(path), "page_count": len(pages)},
             )

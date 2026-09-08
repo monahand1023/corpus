@@ -136,3 +136,34 @@ def test_failed_files_resets_between_runs(tmp_path: Path) -> None:
         docs = list(conn.load())
     assert len(docs) == 1
     assert conn.failed_files == 0, "counter must reset at the start of load()"
+
+
+def test_lazy_parse_failure_is_contained_to_the_file(tmp_path: Path) -> None:
+    """pypdf parses lazily: an encrypted or malformed PDF constructs fine and
+    only raises when `.pages` is first touched. That access must be inside the
+    per-file guard, or one bad file aborts the whole source — and because
+    pypdf's errors derive from Exception (not ValueError/OSError), the CLI's
+    per-source handler would not catch it either, taking down `--all`."""
+    from pypdf.errors import FileNotDecryptedError
+
+    (tmp_path / "encrypted.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "fine.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    def reader_factory(path: str) -> MagicMock:
+        r = MagicMock()
+        if Path(path).name == "encrypted.pdf":
+            type(r).pages = property(
+                lambda self: (_ for _ in ()).throw(FileNotDecryptedError("File has not been decrypted"))
+            )
+        else:
+            r.pages = [MagicMock(extract_text=MagicMock(return_value="Readable body."))]
+            r.metadata = None
+        return r
+
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+    with patch("pypdf.PdfReader", side_effect=reader_factory):
+        docs = list(conn.load())
+
+    assert len(docs) == 1, "the readable PDF must still be ingested"
+    assert docs[0].title == "fine"
+    assert conn.failed_files == 1

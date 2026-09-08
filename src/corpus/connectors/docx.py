@@ -61,13 +61,19 @@ class DocxConnector:
         for path in discover_files(self._root, self._glob):
             try:
                 document = docx.Document(str(path))
+                # python-docx parses lazily as well: a malformed package can
+                # construct fine and only raise when the body is first touched.
+                # Materialize inside the per-file guard so one bad file cannot
+                # abort the whole source. See the equivalent note in pdf.py.
+                paragraphs = list(document.paragraphs)
+                tables = list(document.tables)
             except Exception as e:  # python-docx raises many types for bad files
                 logger.warning("Docx source '%s': cannot open %s: %s", self.source_type, path, e)
                 self.failed_files += 1
                 continue
 
-            parts = [p.text.strip() for p in document.paragraphs if p.text.strip()]
-            for table in document.tables:
+            parts = [p.text.strip() for p in paragraphs if p.text.strip()]
+            for table in tables:
                 for row in table.rows:
                     cells = [c.text.strip() for c in row.cells]
                     if any(cells):
