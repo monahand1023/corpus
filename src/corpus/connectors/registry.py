@@ -14,6 +14,21 @@ from typing import Any, Protocol
 from corpus.config import SourceConfig
 from corpus.connectors.markdown import MarkdownChunker, MarkdownConnector
 
+# Default glob per connector type. Single source of truth: the factories below
+# read it, and `corpus.util.autodetect` scans a folder with it to work out which
+# connectors apply. Adding a connector without an entry here means `--path`
+# silently never finds its files, so `tests/test_autodetect.py` asserts this
+# mapping covers every registered type.
+DEFAULT_GLOBS: dict[str, str] = {
+    "markdown": "**/*.md",
+    "text": "**/*.txt",
+    "pdf": "**/*.pdf",
+    "html": "**/*.html",
+    "docx": "**/*.docx",
+    "xlsx": "**/*.xlsx",
+    "rtf": "**/*.rtf",
+}
+
 
 class _ConnectorFactory(Protocol):
     def __call__(self, cfg: SourceConfig) -> tuple[Any, Any]: ...
@@ -23,7 +38,7 @@ def _build_markdown(cfg: SourceConfig) -> tuple[MarkdownConnector, MarkdownChunk
     connector = MarkdownConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.md",
+        glob=cfg.glob or DEFAULT_GLOBS["markdown"],
     )
     chunker = MarkdownChunker(source_type=cfg.name)
     return connector, chunker
@@ -35,7 +50,7 @@ def _build_text(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = TextConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.txt",
+        glob=cfg.glob or DEFAULT_GLOBS["text"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -53,7 +68,7 @@ def _build_pdf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = PdfConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.pdf",
+        glob=cfg.glob or DEFAULT_GLOBS["pdf"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -71,7 +86,7 @@ def _build_html(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = HtmlConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.html",
+        glob=cfg.glob or DEFAULT_GLOBS["html"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -89,7 +104,7 @@ def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = DocxConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.docx",
+        glob=cfg.glob or DEFAULT_GLOBS["docx"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -107,7 +122,7 @@ def _build_xlsx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = XlsxConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.xlsx",
+        glob=cfg.glob or DEFAULT_GLOBS["xlsx"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -125,7 +140,7 @@ def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     connector = RtfConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.rtf",
+        glob=cfg.glob or DEFAULT_GLOBS["rtf"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 

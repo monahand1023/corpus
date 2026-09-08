@@ -4,6 +4,30 @@ All notable changes to `corpus-rag` are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
+  built-in connectors apply and ingests each matching file type as its own
+  source, with no `[[sources]]` block to write. `corpus.toml` still supplies the
+  database path, embedder, and retriever settings; only the sources are
+  superseded. Detected sources are namespaced by folder (`documents_pdf`,
+  `inbox_pdf`) because orphan pruning is scoped by source type — two folders
+  sharing a bare `pdf` name in one database would delete each other's chunks.
+  Cannot be combined with `--source` or `--all`.
+
+### Fixed
+- **One unreadable PDF no longer aborts an entire source.** `pypdf` and
+  `python-docx` parse lazily: the constructor succeeds on a file that cannot
+  actually be read, and the failure surfaces later on first access to `.pages`
+  or `.paragraphs`. Both accesses sat outside the per-file guard, so an
+  encrypted PDF took down the whole source — and since
+  `pypdf.errors.FileNotDecryptedError` derives from `Exception` rather than
+  `ValueError`/`OSError`, it escaped the CLI's per-source handler too and would
+  abort an entire `--all` run. Found by ingesting 3,247 real PDFs, where a
+  single encrypted file left the source with zero chunks; after the fix, 2,719
+  documents and 22,444 chunks.
+
 ## [0.3.0] - 2026-09-08
 
 ### Added

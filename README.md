@@ -240,6 +240,22 @@ corpus-reset --all                       # delete the whole DB
 corpus-mcp                               # stdio MCP server (Claude spawns it)
 ```
 
+## Ingesting a folder
+
+Point corpus at a directory and it works out which connectors apply:
+
+```bash
+corpus-ingest --path ~/Documents
+```
+
+It detects every supported file type present and ingests each as its own
+source, so you never hand-write a `[[sources]]` block. `corpus.toml` still
+supplies the database path and embedder — only the sources are superseded.
+
+Source names are namespaced by folder (`documents_pdf`, `inbox_pdf`), which
+matters: orphan pruning is scoped by source type, so two folders sharing a bare
+`pdf` name in one database would delete each other's chunks.
+
 ## Built-in connectors
 
 | `type` | Default glob | Extra needed | Notes |

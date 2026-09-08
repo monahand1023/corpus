@@ -15,7 +15,9 @@ import sys
 from dotenv import load_dotenv
 
 from corpus.cli._common import load_config_or_exit
+from corpus.connectors.registry import DEFAULT_GLOBS
 from corpus.ingester import Ingester
+from corpus.util.autodetect import detect_sources
 
 load_dotenv()
 
@@ -29,6 +31,17 @@ def main() -> int:
         help="Source name from corpus.toml (repeatable)",
     )
     parser.add_argument("--all", action="store_true", help="Ingest every configured source")
+    parser.add_argument(
+        "--path",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Ingest whatever is in DIR: detect which built-in connectors apply "
+            "and ingest each matching file type as its own source. Needs no "
+            "[[sources]] block; corpus.toml still supplies the database path "
+            "and embedder. Cannot be combined with --source or --all."
+        ),
+    )
     parser.add_argument(
         "--prune-anyway",
         action="store_true",
@@ -46,6 +59,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    if args.path and (args.all or args.source):
+        print("--path cannot be combined with --source or --all.")
+        return 2
+
     # --prune-anyway forces a destructive sweep past the safety gate, so it is
     # deliberately not available across every source at once: the operator has
     # to have looked at which files failed, for a source they named.
@@ -58,12 +75,33 @@ def main() -> int:
         return 2
 
     config = load_config_or_exit(args.config)
-    if args.all:
+    if args.path:
+        # Replace the configured sources with what is actually in the folder.
+        # corpus.toml still provides db_path, embedder and retriever settings;
+        # only [[sources]] is superseded.
+        try:
+            detected = detect_sources(args.path)
+        except FileNotFoundError as e:
+            print(f"ERROR: {e}")
+            return 1
+        if not detected:
+            print(
+                f"Nothing ingestable found in {args.path}. Supported types: "
+                + ", ".join(sorted(DEFAULT_GLOBS))
+            )
+            return 1
+        config = config.model_copy(update={"sources": detected})
+        names = [s.name for s in detected]
+        print(f"Detected {len(detected)} source(s) in {args.path}:")
+        for s_ in detected:
+            print(f"  {s_.name:32s} {s_.type}")
+        print()
+    elif args.all:
         names = [s.name for s in config.sources]
     elif args.source:
         names = args.source
     else:
-        parser.error("specify --source NAME (repeatable) or --all")
+        parser.error("specify --source NAME (repeatable), --all, or --path DIR")
 
     if not names:
         print("No sources configured in corpus.toml. Add a [[sources]] block.")
