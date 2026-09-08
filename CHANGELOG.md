@@ -6,6 +6,75 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Multilingual / CJK full-text search.** `unicode61` (FTS5's tokenizer)
+  cannot segment Japanese, Chinese, or Korean-adjacent scripts — with no
+  spaces between words, a whole sentence became one token and a query like
+  `東京` never matched inside it. CJK runs (Hiragana, Katakana, Halfwidth
+  Katakana, CJK Unified Ideographs + Extension A, CJK Compatibility
+  Ideographs — Hangul deliberately excluded) are now rewritten as
+  overlapping character bigrams on both the index and query paths
+  (`corpus.util.fts_normalize`), so two-character CJK words match. Query
+  terms are also de-duplicated and capped at 64 to bound worst-case query
+  latency and keep repeated terms from skewing BM25 rank. **Measured index
+  growth on the FTS table: ~2.4x for Japanese content, 0% for English** —
+  size accordingly if a large fraction of your corpus is CJK.
+- **`docx`, `xlsx`, and `rtf` connectors** (`pip install 'corpus-rag[docx]'` /
+  `[xlsx]` / `[rtf]`, or `[all]`), bringing the built-in connector count to
+  seven. `docx` extracts body paragraphs and tables via `python-docx`; `xlsx`
+  extracts each sheet's non-empty rows via `openpyxl` (formulas read as
+  cached values); `rtf` extracts plain text via `striprtf` (pure Python).
+  See [`docs/adding_a_source.md`](docs/adding_a_source.md) and the README's
+  "Built-in connectors" table.
+- **Per-source candidate budgets in the retriever.** Vector search now fetches
+  candidates per source type (sized off `top_k` and the number of source
+  types) before fusing globally, instead of one flat global fetch — a
+  dominant source type could otherwise consume the entire candidate pool by
+  sheer volume (every chunk has *some* distance to the query) and starve a
+  small source out of the results entirely, regardless of relevance. BM25/FTS
+  deliberately keeps a single global query rather than the same per-source
+  loop — see the comment on `ChunkStore.fts_search` for the measured ~1561x
+  regression that a per-source pre-filter caused there.
+
+### Fixed
+- **A missing optional-extra install no longer aborts `corpus-ingest --all`.**
+  Each connector imports its third-party library lazily inside `load()`, so
+  the "install `corpus-rag[docx]`"-style friendly error in the registry's
+  `_build_*` factories was unreachable dead code — a user missing an extra
+  got a raw `ModuleNotFoundError` traceback, and because the CLI only caught
+  `(ValueError, FileNotFoundError)`, `--all` aborted and silently skipped
+  every source configured after the broken one. The registry factories now
+  probe the real import, and the CLI's catch widens to also catch `OSError`
+  (of which `FileNotFoundError` is a subclass) and `ImportError` — one
+  misconfigured source now fails with an actionable message and `--all`
+  continues to the rest.
+- Broken multilingual full-text search (see "Multilingual / CJK full-text
+  search" above) — CJK queries previously matched nothing.
+- FTS index migration streams the cursor instead of `.fetchall()`-ing every
+  row up front (measured 2.90s / ~146MB RSS at 72,158 chunks), and the DB
+  connection now sets a 5-second `busy_timeout` so opening the store while an
+  MCP server holds it open waits briefly instead of raising `database is
+  locked` immediately.
+
+### Changed
+- **Ingestion enumeration completeness is now an explicit contract.** A
+  connector that cannot fully enumerate its source (missing directory,
+  unmounted volume) must raise rather than yield a partial list — a partial
+  enumeration previously looked identical to "these files were deleted" and
+  triggered orphan deletion against content that was never actually gone.
+
+### Migration notes
+- **Existing databases are migrated automatically, in place, the first time
+  they're opened after upgrading.** Opening a pre-upgrade DB detects a stale
+  `fts_version` in `schema_meta`, rebuilds the `chunks_fts` full-text index
+  from the stored chunk content (no re-embedding, no API cost), and stamps
+  the new version — this happens transparently inside `ChunkStore.__init__`,
+  with no separate CLI command to remember or skip. It runs once; subsequent
+  opens are a no-op version check. If the process is killed mid-migration,
+  the version stamp is only written after every row is reinserted, in the
+  same transaction, so the migration retries cleanly on next open rather than
+  leaving a half-rebuilt index.
+
 ### Security
 - Bumped `transformers` 5.8.1 → 5.16.1 in `uv.lock` (GHSA-xrqw-3rrv-vx5w, path
   traversal in `save_pretrained`). Transitive via `sentence-transformers`, so it

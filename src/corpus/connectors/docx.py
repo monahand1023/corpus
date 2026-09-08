@@ -1,8 +1,11 @@
 """Word `.docx` connector via `python-docx` (MIT).
 
 Each file becomes one SourceDocument whose body is the document's paragraphs
-followed by its tables, in document order. Chunking is delegated to the shared
-markdown chunker.
+followed by its tables. Paragraphs and tables are separate top-level
+collections in the underlying XML, not interleaved in reading order, so a
+table that appears between two paragraphs in the original document still
+lands after ALL paragraphs here — this is not full document-order fidelity.
+Chunking is delegated to the shared markdown chunker.
 
 Limitations:
   - Headers, footers, footnotes, comments, and tracked-change markup are not

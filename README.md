@@ -125,7 +125,46 @@ Ingestion is **idempotent and incremental** — re-running it:
 
 So the update loop is just: edit your files, re-run `corpus-ingest`. There's **no daemon or file watcher** — ingestion happens when you run the command. Dates come from frontmatter (`created`/`modified`) if present, else the file's modification time.
 
-Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html** (`[html]` extra) — see [Built-in connectors](#built-in-connectors). For anything else (Slack exports, JSON dumps, EPUB…), write a small connector: [`docs/adding_a_source.md`](docs/adding_a_source.md).
+Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html** (`[html]` extra), **docx** (`[docx]` extra), **xlsx** (`[xlsx]` extra), **rtf** (`[rtf]` extra) — see [Built-in connectors](#built-in-connectors). For anything else (Slack exports, JSON dumps, EPUB…), write a small connector: [`docs/adding_a_source.md`](docs/adding_a_source.md).
+
+> **Upgrading?** `corpus` migrates its own SQLite database **automatically and
+> in place** the first time you open it after an upgrade that changes how the
+> full-text index is built (e.g. adding CJK support below) — there's no
+> separate migration command to run or forget. It's a one-time rebuild of the
+> `chunks_fts` table from content already stored in `chunks` (no
+> re-embedding, no API cost, no network access), and it's crash-safe: if the
+> process is killed mid-migration, it retries cleanly on the next open
+> instead of leaving a half-rebuilt index. You'll see a one-line log message
+> (`rebuilt FTS index for N chunks`) the first time it runs.
+
+## Search behavior
+
+Full-text (BM25/FTS5) search is Latin-script-first by default, with one
+important exception: **CJK text (Japanese, Chinese, Korean-adjacent scripts)
+is specially handled** because `unicode61` — the tokenizer FTS5 uses — can't
+segment it. Japanese in particular has no spaces between words, so without
+help a whole sentence indexes as a single token and a query like `東京`
+would never match inside it.
+
+`corpus` rewrites CJK runs into overlapping character bigrams (`東京で会議` →
+`東京 京で で会 会議`) on **both** the index and query paths, so two-character
+CJK words and phrases match the way whole words do for English. This trades
+some ranking precision for coverage — an OR-joined bigram query can also
+match documents that only share one bigram incidentally — so ranked order,
+not just presence of a match, is what's asserted in tests
+(`tests/test_db.py`). Query terms are de-duplicated and capped at 64 to bound
+worst-case latency on long or repeated CJK queries.
+
+**Measured cost:** indexing CJK content grows the FTS table by roughly
+**2.4x** versus the equivalent English text; pure-English corpora see no
+measurable growth (0%). This is a property of the `chunks_fts` table only —
+your document content and vector index are unaffected.
+
+Deliberately out of scope: Hangul (Korean) is excluded from the CJK bigram
+handling — Korean isn't a target language and would need its own tokenizer
+strategy — and NFKD/combining-mark normalization is deliberately *not*
+applied, because it would map visually-similar-but-distinct Japanese kana
+onto each other (e.g. がっこう "school" onto かっこう "cuckoo").
 
 ## MCP server
 
