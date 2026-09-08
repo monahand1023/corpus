@@ -503,3 +503,51 @@ def test_duplicate_filter_sources_do_not_double_fetch_or_change_results(tmp_path
     )
     assert [c.id for c in result_dup.chunks] == [c.id for c in result_deduped.chunks]
     store.close()
+
+
+def test_fts_search_called_once_not_per_source_type(tmp_path: Path) -> None:
+    """FTS must be issued as ONE global query, not once per source type.
+
+    ChunkStore.fts_search's docstring/comment records why: a per-source
+    rowid pre-filter was tried and measured ~1561x slower at 40k chunks / 4
+    source types (it defeats FTS5's rank-ordered LIMIT short-circuit). That
+    guard lives in fts_search's implementation, but nothing pins the
+    CALL COUNT from the retriever side -- a future refactor to a per-source
+    loop that keeps the post-filter would still return correct results (so
+    every correctness test would keep passing) while costing ~96ms vs ~24ms
+    at 40k chunks. Spy on fts_search to catch that regression directly,
+    following the pattern in
+    test_duplicate_filter_sources_do_not_double_fetch_or_change_results."""
+    store = ChunkStore(tmp_path / "fts_calls.db", embedding_dim=DIM)
+    items = []
+    for i in range(3):
+        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i} about testing"), fake_embedding(i)))
+    for i in range(3):
+        items.append((make_chunk("papers", f"p-{i}", 0, f"paper {i} about testing"), fake_embedding(i + 10)))
+    for i in range(3):
+        items.append((make_chunk("photos", f"ph-{i}", 0, f"photo {i} about testing"), fake_embedding(i + 20)))
+    store.upsert_batch(items)
+
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+
+    calls: list[list[str] | None] = []
+    real_fts_search = store.fts_search
+
+    def counting_fts_search(query, top_k, filter_sources=None):  # type: ignore[no-untyped-def]
+        calls.append(list(filter_sources) if filter_sources else None)
+        return real_fts_search(query, top_k, filter_sources=filter_sources)
+
+    store.fts_search = counting_fts_search  # type: ignore[method-assign]
+
+    # No filter_sources -> source_types() resolves to all 3 registered types.
+    # A per-source loop (the regression this test guards against) would call
+    # fts_search 3 times here instead of once.
+    r.query("testing", top_k=5, hybrid=True)
+    assert len(calls) == 1, f"fts_search called {len(calls)} times, expected exactly 1: {calls}"
+
+    calls.clear()
+    r.query("testing", top_k=5, filter_sources=["notes", "papers"], hybrid=True)
+    assert len(calls) == 1, f"fts_search called {len(calls)} times, expected exactly 1: {calls}"
+    store.close()
