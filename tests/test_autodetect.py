@@ -9,9 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from corpus.util.autodetect import detect_sources, normalize_source_name
 
 from corpus.connectors.registry import DEFAULT_GLOBS
+from corpus.util.autodetect import detect_sources, normalize_source_name
 
 
 def _touch(root: Path, rel: str) -> Path:
