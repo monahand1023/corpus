@@ -56,6 +56,9 @@ all = [
 docx = [
     "python-docx>=1.2.0",
 ]
+xlsx = [
+    "openpyxl>=3.1.5",
+]
 
 [project.scripts]
 corpus-init = "corpus.cli.init:main"
