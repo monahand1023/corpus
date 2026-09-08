@@ -288,8 +288,35 @@ def test_fts_does_not_raise_on_operator_like_query(store: ChunkStore) -> None:
         (make_chunk("en", 0, ChunkKind.BODY, "cats and dogs"), fake_embedding(3)),
     ])
     # Previously raised fts5 syntax errors that were swallowed as "no hits".
-    assert store.fts_search("cats OR AND OR dogs", top_k=5) is not None
-    assert store.fts_search("NOT", top_k=5) is not None
+    # Operator-like tokens must be treated as literal TERMS, not FTS5
+    # operators: "OR"/"AND" become quoted terms that don't match "cats and
+    # dogs" (no literal "or"/"and" word in it) but don't break the query
+    # either, so the doc is still found via "cats"/"dogs". A bare "NOT" is
+    # quoted to a literal term with nothing to match, giving zero hits
+    # rather than raising or silently matching everything.
+    assert len(store.fts_search("cats OR AND OR dogs", top_k=5)) == 1
+    assert store.fts_search("NOT", top_k=5) == []
+
+
+def test_fts_ranks_true_cjk_match_above_incidental_bigram_matches(store: ChunkStore) -> None:
+    """A CJK query is OR-joined bigrams (東京の会議 -> 東京/京の/の会/会議), so any
+    document sharing just ONE bigram with the query also matches -- match
+    alone doesn't prove the ranking is useful. This asserts ranked ORDER: the
+    document that actually contains the query phrase (matching all four
+    bigrams) must outrank documents that only incidentally share a single
+    bigram with the query."""
+    store.upsert_batch([
+        (make_chunk("true", 0, ChunkKind.BODY, "東京の会議は来週開催されます"), fake_embedding(1)),
+        (make_chunk("incidental1", 0, ChunkKind.BODY, "彼は東京に出張に行きました"), fake_embedding(2)),
+        (make_chunk("incidental2", 0, ChunkKind.BODY, "午後の会議室は予約済みです"), fake_embedding(3)),
+        (make_chunk("incidental3", 0, ChunkKind.BODY, "会議の議題については後で連絡します"), fake_embedding(4)),
+    ])
+    results = store.fts_search("東京の会議", top_k=10)
+    assert len(results) == 4, "all four docs share at least one bigram and should match"
+    assert results[0].source_key == "true", (
+        f"expected the true phrase match to rank first, got order: "
+        f"{[r.source_key for r in results]}"
+    )
 
 
 def test_fts_english_stemming_still_works(store: ChunkStore) -> None:
