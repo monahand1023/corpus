@@ -10,9 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from corpus.config import CorpusConfig
+from corpus.connectors.markdown import MarkdownChunker
+from corpus.connectors.registry import CONNECTOR_REGISTRY
 from corpus.db.sqlite import ChunkStore
 from corpus.ingester import Ingester, IngestResult
-from corpus.types import Chunk, ChunkKind, ChunkMetadata
+from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.hash import chunk_id, sha256
 
 DIM = 1024
@@ -69,6 +72,23 @@ def make_ingester(
     config = make_config(source_name=source_name, return_source=return_source)
     ingester = Ingester(config=config, store=store, embedder=emb)
     return ingester, store, config
+
+
+def make_ingester_with_config(
+    tmp_path: Path,
+    sources: list[dict[str, object]],
+    embedder: MagicMock | None = None,
+) -> tuple[Ingester, ChunkStore]:
+    """Build an Ingester backed by a REAL CorpusConfig (not the MagicMock config
+    of make_ingester() above), so build_pipeline() actually resolves a connector
+    through CONNECTOR_REGISTRY by the source's configured `type`. Needed for tests
+    that register a fake connector in CONNECTOR_REGISTRY rather than patching
+    corpus.ingester.build_pipeline directly."""
+    config = CorpusConfig.model_validate({"db_path": tmp_path / "config_test.db", "sources": sources})
+    store = ChunkStore(tmp_path / "test.db", embedding_dim=DIM)
+    emb = embedder or fake_embedder()
+    ingester = Ingester(config=config, store=store, embedder=emb)
+    return ingester, store
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +316,58 @@ def test_ingest_result_fields_populated(tmp_path: Path) -> None:
         assert isinstance(result, IngestResult)
     finally:
         store.close()
+
+
+def test_incomplete_enumeration_does_not_delete_orphans(tmp_path: Path) -> None:
+    """An unmounted volume must never be read as 'every document was deleted'.
+
+    Uses a REAL CorpusConfig + CONNECTOR_REGISTRY entry (rather than patching
+    corpus.ingester.build_pipeline like the tests above) so this exercises the
+    actual connector-resolution path a real unmounted-volume connector would
+    go through.
+    """
+    calls = {"n": 0}
+
+    class FlakyConnector:
+        source_type = "flaky"
+
+        def load(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                yield SourceDocument(
+                    source_type="flaky", source_key="a.txt", title="a",
+                    raw={"body": "hello world", "path": "a.txt"},
+                )
+            else:
+                raise FileNotFoundError("volume not mounted")
+
+    CONNECTOR_REGISTRY["flaky"] = lambda cfg: (
+        FlakyConnector(),
+        MarkdownChunker(source_type="flaky"),
+    )
+    try:
+        ingester, store = make_ingester_with_config(
+            tmp_path, sources=[{"name": "flaky", "type": "flaky", "path": str(tmp_path)}]
+        )
+        try:
+            first = ingester.ingest("flaky")
+            assert first.chunks_upserted > 0
+
+            def chunk_count() -> int:
+                row = store._conn.execute(
+                    "SELECT COUNT(*) AS c FROM chunks WHERE source_type = 'flaky'"
+                ).fetchone()
+                return int(row["c"])
+
+            before = chunk_count()
+            assert before > 0
+
+            with pytest.raises(FileNotFoundError):
+                ingester.ingest("flaky")
+
+            # The chunks from run 1 must survive the failed run, NOT be swept as orphans.
+            assert chunk_count() == before
+        finally:
+            store.close()
+    finally:
+        CONNECTOR_REGISTRY.pop("flaky", None)

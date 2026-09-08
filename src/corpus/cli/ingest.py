@@ -58,7 +58,11 @@ def main() -> int:
             try:
                 r = ingester.ingest(name)
             except (ValueError, FileNotFoundError) as e:
-                print(f"  ERROR: {e}")
+                # A source that cannot be enumerated (missing directory,
+                # unmounted volume) fails THIS source only; --all continues.
+                # Orphan pruning never ran for it, so its indexed content is
+                # left intact rather than deleted.
+                print(f"  ERROR: {e}  (index left intact; skipping this source)")
                 exit_code = 1
                 continue
             print(f"  documents:        {r.documents:,}")

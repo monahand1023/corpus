@@ -32,6 +32,12 @@ class IngestResult:
     orphans_deleted: int
     tokens_used: int
     elapsed_seconds: float
+    # Always True today: a connector that enumerates incompletely must raise
+    # (see the comment at the delete_orphans call site below), so ingest()
+    # never returns an IngestResult for an incomplete run at all. This field
+    # is a contract point for a future connector that can detect a partial
+    # enumeration WITHOUT raising and still needs to report it.
+    enumeration_complete: bool = True
 
 
 class Ingester:
@@ -94,6 +100,12 @@ class Ingester:
             chunks_upserted += u
             chunks_skipped += s
 
+        # ENUMERATION COMPLETENESS: reaching this line means connector.load()
+        # ran to exhaustion, so seen_ids is the complete set for this source and
+        # anything absent is genuinely gone. A connector that cannot enumerate
+        # its source completely MUST raise (FileNotFoundError for an
+        # unreachable root or volume) rather than yield a short list — a partial
+        # enumeration here would delete every chunk it failed to yield.
         orphans = self._store.delete_orphans(source_name, seen_ids)
 
         return IngestResult(
@@ -105,6 +117,7 @@ class Ingester:
             orphans_deleted=orphans,
             tokens_used=self._embedder.total_tokens_used - tokens_before,
             elapsed_seconds=time.monotonic() - start,
+            enumeration_complete=True,
         )
 
     def _flush(self, chunks: list[Chunk]) -> tuple[int, int]:
