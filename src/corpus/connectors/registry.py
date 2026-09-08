@@ -42,6 +42,8 @@ def _build_text(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 def _build_pdf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     try:
+        import pypdf  # noqa: F401
+
         from corpus.connectors.pdf import PdfConnector
     except ImportError as e:
         raise ImportError(
@@ -58,6 +60,8 @@ def _build_pdf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 def _build_html(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     try:
+        import trafilatura  # noqa: F401
+
         from corpus.connectors.html import HtmlConnector
     except ImportError as e:
         raise ImportError(
@@ -74,6 +78,8 @@ def _build_html(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     try:
+        import docx  # noqa: F401
+
         from corpus.connectors.docx import DocxConnector
     except ImportError as e:
         raise ImportError(
@@ -90,6 +96,8 @@ def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 def _build_xlsx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     try:
+        import openpyxl  # noqa: F401
+
         from corpus.connectors.xlsx import XlsxConnector
     except ImportError as e:
         raise ImportError(
@@ -106,6 +114,8 @@ def _build_xlsx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     try:
+        import striprtf.striprtf  # noqa: F401
+
         from corpus.connectors.rtf import RtfConnector
     except ImportError as e:
         raise ImportError(

@@ -57,11 +57,14 @@ def main() -> int:
             print(f"=== Ingesting {name} ===")
             try:
                 r = ingester.ingest(name)
-            except (ValueError, FileNotFoundError) as e:
+            except (ValueError, OSError, ImportError) as e:
                 # A source that cannot be enumerated (missing directory,
-                # unmounted volume) fails THIS source only; --all continues.
-                # Orphan pruning never ran for it, so its indexed content is
-                # left intact rather than deleted.
+                # unmounted volume — FileNotFoundError is an OSError subclass)
+                # or whose connector's optional extra isn't installed
+                # (ImportError, e.g. `pip install 'corpus-rag[docx]'`) fails
+                # THIS source only; --all continues. Orphan pruning never ran
+                # for it, so its indexed content is left intact rather than
+                # deleted.
                 print(f"  ERROR: {e}  (index left intact; skipping this source)")
                 exit_code = 1
                 continue
