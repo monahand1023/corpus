@@ -95,6 +95,12 @@ class ChunkStore:
         conn.enable_load_extension(False)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
+        # The MCP server is this engine's primary consumer and can hold the
+        # DB open indefinitely; without a busy_timeout, opening the store
+        # from a second process (e.g. `corpus-ingest` while `corpus-mcp` is
+        # running) raises `database is locked` immediately instead of
+        # waiting briefly for the writer to finish its transaction.
+        conn.execute("PRAGMA busy_timeout = 5000")
         with self._conns_lock:
             self._all_conns.append(conn)
         return conn
@@ -192,22 +198,33 @@ class ChunkStore:
         ).fetchone()
         if row is not None and row["value"] == FTS_VERSION:
             return
-        rows = conn.execute("SELECT rowid, content FROM chunks").fetchall()
         conn.execute("DELETE FROM chunks_fts")
-        for r in rows:
+        # Stream the cursor rather than `.fetchall()`: materializing every row
+        # up front measured 2.90s / ~146MB RSS at 72,158 chunks (~8s at 205k).
+        # Iterating the cursor pulls rows incrementally instead of holding the
+        # whole table in Python memory at once. Writing to chunks_fts /
+        # schema_meta (different tables) while this SELECT cursor on `chunks`
+        # is still open is safe on a single connection.
+        count = 0
+        for r in conn.execute("SELECT rowid, content FROM chunks"):
             # Explicit rowid: the chunks_fts <-> chunks join depends on it.
             conn.execute(
                 "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
                 (r["rowid"], normalize_for_fts(r["content"])),
             )
+            count += 1
+        # The fts_version stamp is written only AFTER every insert above,
+        # inside this same transaction (single commit below) -- so a
+        # migration that crashes mid-stream leaves no stamp and retries
+        # cleanly from scratch on next open. Do not reorder this earlier.
         conn.execute(
             "INSERT INTO schema_meta (key, value) VALUES ('fts_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (FTS_VERSION,),
         )
         conn.commit()
-        if rows:
-            logger.info("rebuilt FTS index for %d chunks (fts_version=%s)", len(rows), FTS_VERSION)
+        if count:
+            logger.info("rebuilt FTS index for %d chunks (fts_version=%s)", count, FTS_VERSION)
 
     @contextmanager
     def _txn(self) -> Iterator[sqlite3.Connection]:
