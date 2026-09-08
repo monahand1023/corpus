@@ -1,8 +1,20 @@
 """corpus-benchmark: measure end-to-end and per-stage retrieval latency.
 
 Reports p50/p95/p99 latency for each stage of the query pipeline (embed,
-vector search, FTS search, fusion, dedupe + diversity) plus throughput.
-Optionally A/B compares two embedder providers against the same corpus.
+vector search, FTS search, post-processing = fusion + dedupe + diversity)
+plus throughput. Optionally A/B compares two embedder providers against the
+same corpus.
+
+Stage timing always runs the REAL Retriever.query() -- it never re-derives
+the candidate-pool fetch shape (source-type loop, per-source sizing) here.
+That shape lives entirely in corpus.retriever.Retriever.query and has
+already changed once; a hand-copied formula in this file would silently
+drift out of sync with the real query path, timing a shape queries no
+longer take. Per-stage numbers are recovered by timing the embedder's and
+store's actual entry points for the duration of one real query() call, so
+they reflect however many calls Retriever.query happens to make (one
+embed, N vector_search/fts_search calls for N source types) rather than an
+assumed count.
 
 Usage:
   corpus-benchmark                                      # 50 queries, default config
@@ -28,10 +40,9 @@ from dotenv import load_dotenv
 
 from corpus.cli._common import load_config_or_exit
 from corpus.config import CorpusConfig
-from corpus.db.sqlite import ChunkStore, StoredChunk
+from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
-from corpus.util.rrf import reciprocal_rank_fusion
 
 load_dotenv()
 
@@ -56,8 +67,11 @@ class StageTimings:
     embed: list[float] = field(default_factory=list)
     vector: list[float] = field(default_factory=list)
     fts: list[float] = field(default_factory=list)
-    fuse: list[float] = field(default_factory=list)
-    post: list[float] = field(default_factory=list)
+    # Everything Retriever.query does after the store calls return: RRF
+    # fusion, dedupe, and diversity capping. Not split further -- splitting
+    # it would mean re-implementing those internals here, which is exactly
+    # the drift risk this rewrite removes (see module docstring).
+    post_processing: list[float] = field(default_factory=list)
     total: list[float] = field(default_factory=list)
 
 
@@ -93,55 +107,61 @@ def _instrumented_query(
     timings: StageTimings,
     top_k: int,
 ) -> None:
-    """Run one query, recording per-stage wall-clock times into `timings`."""
-    overall_start = time.perf_counter()
+    """Run one query through the REAL Retriever.query() and record per-stage
+    wall-clock times into `timings` by timing the embedder's and store's
+    entry points for the duration of that one call -- never by re-deriving
+    the candidate-pool fetch shape (see module docstring). This adapts
+    automatically to however Retriever.query is actually implemented,
+    including calling vector_search/fts_search once per source type."""
+    embed_total = 0.0
+    vector_total = 0.0
+    fts_total = 0.0
 
-    t0 = time.perf_counter()
-    embedding = retriever._embedder.embed_query(question)
-    t_embed = time.perf_counter() - t0
+    orig_embed = retriever._embedder.embed_query
+    orig_vector_search = retriever._store.vector_search
+    orig_fts_search = retriever._store.fts_search
 
-    over_fetch = max(top_k * 8, 40)
+    def timed_embed(*args: Any, **kwargs: Any) -> Any:
+        nonlocal embed_total
+        t0 = time.perf_counter()
+        try:
+            return orig_embed(*args, **kwargs)
+        finally:
+            embed_total += time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    vector_hits = retriever._store.vector_search(embedding, top_k=over_fetch)
-    t_vector = time.perf_counter() - t0
+    def timed_vector_search(*args: Any, **kwargs: Any) -> Any:
+        nonlocal vector_total
+        t0 = time.perf_counter()
+        try:
+            return orig_vector_search(*args, **kwargs)
+        finally:
+            vector_total += time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    fts_hits = retriever._store.fts_search(question, top_k=over_fetch)
-    t_fts = time.perf_counter() - t0
+    def timed_fts_search(*args: Any, **kwargs: Any) -> Any:
+        nonlocal fts_total
+        t0 = time.perf_counter()
+        try:
+            return orig_fts_search(*args, **kwargs)
+        finally:
+            fts_total += time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    fused = reciprocal_rank_fusion(
-        [vector_hits, fts_hits],
-        weights=[1.0, retriever._auto_fts_weight(question)],
-        key=lambda c: c.id,
-    )
-    t_fuse = time.perf_counter() - t0
+    retriever._embedder.embed_query = timed_embed  # type: ignore[method-assign]
+    retriever._store.vector_search = timed_vector_search  # type: ignore[method-assign]
+    retriever._store.fts_search = timed_fts_search  # type: ignore[method-assign]
+    try:
+        overall_start = time.perf_counter()
+        retriever.query(question, top_k=top_k)
+        total = time.perf_counter() - overall_start
+    finally:
+        retriever._embedder.embed_query = orig_embed  # type: ignore[method-assign]
+        retriever._store.vector_search = orig_vector_search  # type: ignore[method-assign]
+        retriever._store.fts_search = orig_fts_search  # type: ignore[method-assign]
 
-    t0 = time.perf_counter()
-    # Replicate the dedupe + diversity logic
-    seen_sources: set[tuple[str, str]] = set()
-    per_type_count: dict[str, int] = {}
-    result: list[StoredChunk] = []
-    for c in fused:
-        key = (c.source_type, c.source_key)
-        if key in seen_sources:
-            continue
-        seen_sources.add(key)
-        if per_type_count.get(c.source_type, 0) >= 3:
-            continue
-        per_type_count[c.source_type] = per_type_count.get(c.source_type, 0) + 1
-        result.append(c)
-        if len(result) >= top_k:
-            break
-    t_post = time.perf_counter() - t0
-
-    timings.embed.append(t_embed)
-    timings.vector.append(t_vector)
-    timings.fts.append(t_fts)
-    timings.fuse.append(t_fuse)
-    timings.post.append(t_post)
-    timings.total.append(time.perf_counter() - overall_start)
+    timings.embed.append(embed_total)
+    timings.vector.append(vector_total)
+    timings.fts.append(fts_total)
+    timings.post_processing.append(max(total - embed_total - vector_total - fts_total, 0.0))
+    timings.total.append(total)
 
 
 def _run_benchmark(
@@ -183,8 +203,7 @@ def _run_benchmark(
             "embed": _summary(timings.embed),
             "vector_search": _summary(timings.vector),
             "fts_search": _summary(timings.fts),
-            "fusion": _summary(timings.fuse),
-            "dedupe_diversity": _summary(timings.post),
+            "post_processing": _summary(timings.post_processing),
             "total": _summary(timings.total),
         },
     }

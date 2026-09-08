@@ -106,9 +106,13 @@ class Retriever:
         # Build the candidate pool PER SOURCE TYPE, then rank globally over the
         # union. Fetching globally first lets a dominant source consume every
         # slot before max_per_source_type is applied, making small sources
-        # unreachable. Ranking semantics are unchanged: fusion and the cap still
-        # run over the whole union.
-        source_types = list(filter_sources) if filter_sources else self._store.source_types()
+        # unreachable. Global fusion and the cap are unchanged: they still run
+        # over the whole union. What DOES change is pool SIZE — per_source below
+        # scales with top_k and the number of source types, so the total pool
+        # is no longer a flat floor of 40 (e.g. it's 10/source at top_k=1).
+        source_types = (
+            list(dict.fromkeys(filter_sources)) if filter_sources else self._store.source_types()
+        )
         if not source_types:
             return RetrievalResult(query=question, chunks=[])
         per_source = max(top_k * 8 // len(source_types), top_k * 2, 10)
@@ -124,11 +128,14 @@ class Retriever:
                     self._store.fts_search(question, top_k=per_source, filter_sources=[stype])
                 )
         # Concatenated per-source lists are not globally ordered; RRF consumes
-        # rank position, so restore a global ordering before fusing. `distance`
-        # is always populated by vector_search/fts_search; the fallback only
-        # satisfies the type checker's `float | None` signature.
-        vector_hits.sort(key=lambda c: c.distance if c.distance is not None else float("inf"))
-        fts_hits.sort(key=lambda c: c.distance if c.distance is not None else float("inf"))
+        # rank position, so restore a global ordering before fusing. Ties break
+        # on `id`, not insertion order: list.sort is stable, and insertion order
+        # here is source_types() order (alphabetical), so an unbroken tie would
+        # systematically favor whichever source type sorts first. `distance`
+        # is always populated by vector_search/fts_search; the `inf` fallback
+        # only satisfies the type checker's `float | None` signature.
+        vector_hits.sort(key=lambda c: (c.distance if c.distance is not None else float("inf"), c.id))
+        fts_hits.sort(key=lambda c: (c.distance if c.distance is not None else float("inf"), c.id))
 
         if hybrid:
             effective_fts_weight = (

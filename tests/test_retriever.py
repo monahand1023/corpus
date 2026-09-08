@@ -422,3 +422,84 @@ def test_source_types_lists_distinct_types(tmp_path: Path) -> None:
     ])
     assert sorted(store.source_types()) == ["notes", "photos"]
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 regressions: tie-break determinism (Finding 3) and duplicate
+# filter_sources (Finding 4) in the per-source-type pool construction.
+# ---------------------------------------------------------------------------
+
+
+def test_tie_break_is_deterministic_regardless_of_filter_sources_order(tmp_path: Path) -> None:
+    """Equal-distance hits must break ties on chunk id, not on insertion
+    order from the per-source-type fetch loop. Before the fix, list.sort's
+    stability preserved insertion order -- which followed whatever order
+    filter_sources was passed in, so the same corpus and query could return
+    a DIFFERENT winner depending purely on argument order. After the fix,
+    the tie-break is fully determined by id and independent of fetch order."""
+    store = ChunkStore(tmp_path / "tie.db", embedding_dim=DIM)
+    tied_embedding = fake_embedding(0)
+    items = [
+        (make_chunk("alpha", "doc", 0, "alpha content"), tied_embedding),
+        (make_chunk("zeta", "doc", 0, "zeta content"), tied_embedding),
+    ]
+    store.upsert_batch(items)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=tied_embedding)
+    r = Retriever(store=store, embedder=embedder)
+
+    result_az = r.query(
+        "anything", top_k=2, filter_sources=["alpha", "zeta"],
+        max_per_source_type=None, dedupe_by_source=False, hybrid=False,
+    )
+    result_za = r.query(
+        "anything", top_k=2, filter_sources=["zeta", "alpha"],
+        max_per_source_type=None, dedupe_by_source=False, hybrid=False,
+    )
+    ids_az = [c.id for c in result_az.chunks]
+    ids_za = [c.id for c in result_za.chunks]
+    assert ids_az == ids_za, (
+        f"tie-break depends on filter_sources argument order: {ids_az} vs {ids_za}"
+    )
+    assert ids_az == sorted(ids_az), f"tie not broken deterministically by id: {ids_az}"
+    store.close()
+
+
+def test_duplicate_filter_sources_do_not_double_fetch_or_change_results(tmp_path: Path) -> None:
+    """Repeated entries in filter_sources must not re-fetch (and re-append)
+    a source's candidates once per repetition -- that would inflate its RRF
+    rank contribution and shrink per_source sizing via len() counting
+    duplicates as extra source types."""
+    store = ChunkStore(tmp_path / "dup.db", embedding_dim=DIM)
+    items = []
+    for i in range(5):
+        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i)))
+    for i in range(5):
+        items.append((make_chunk("photos", f"p-{i}", 0, f"photo {i}"), fake_embedding(i + 100)))
+    store.upsert_batch(items)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+
+    calls: list[list[str] | None] = []
+    real_vector_search = store.vector_search
+
+    def counting_vector_search(embedding, top_k, filter_sources=None):  # type: ignore[no-untyped-def]
+        calls.append(list(filter_sources) if filter_sources else None)
+        return real_vector_search(embedding, top_k, filter_sources=filter_sources)
+
+    store.vector_search = counting_vector_search  # type: ignore[method-assign]
+
+    result_dup = r.query(
+        "anything", top_k=5, filter_sources=["notes", "notes", "photos"],
+        max_per_source_type=None, hybrid=False,
+    )
+    notes_calls = [c for c in calls if c == ["notes"]]
+    assert len(notes_calls) == 1, f"notes fetched {len(notes_calls)} times, expected 1: {calls}"
+
+    result_deduped = r.query(
+        "anything", top_k=5, filter_sources=["notes", "photos"],
+        max_per_source_type=None, hybrid=False,
+    )
+    assert [c.id for c in result_dup.chunks] == [c.id for c in result_deduped.chunks]
+    store.close()
