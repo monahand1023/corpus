@@ -297,3 +297,29 @@ def test_fts_english_stemming_still_works(store: ChunkStore) -> None:
         (make_chunk("en", 1, ChunkKind.BODY, "the quarterly planning meeting"), fake_embedding(4)),
     ])
     assert len(store.fts_search("meetings", top_k=5)) == 1
+
+
+def test_fts_migration_rebuilds_unnormalized_index(tmp_path: Path) -> None:
+    """A DB written before normalization must be repaired on next open."""
+    path = tmp_path / "old.db"
+    store = ChunkStore(path, embedding_dim=DIM)
+    store.upsert_batch([
+        (make_chunk("jp", 0, ChunkKind.BODY, "東京で会議をしました"), fake_embedding(1)),
+    ])
+    # Simulate a pre-migration DB: raw content in FTS, no version stamp.
+    conn = store._conn
+    conn.execute("DELETE FROM chunks_fts")
+    rows = conn.execute("SELECT rowid, content FROM chunks").fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+            (row["rowid"], row["content"]),
+        )
+    conn.execute("DELETE FROM schema_meta WHERE key = 'fts_version'")
+    conn.commit()
+    assert store.fts_search("東京", top_k=5) == []  # broken, as an old DB would be
+    store.close()
+
+    reopened = ChunkStore(path, embedding_dim=DIM)
+    assert len(reopened.fts_search("東京", top_k=5)) == 1  # migration repaired it
+    reopened.close()

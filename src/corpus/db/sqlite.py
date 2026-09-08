@@ -26,6 +26,8 @@ from corpus.util.fts_normalize import fts_terms, normalize_for_fts
 
 logger = logging.getLogger(__name__)
 
+FTS_VERSION = "2"
+
 
 @dataclass(frozen=True)
 class UpsertResult:
@@ -83,6 +85,7 @@ class ChunkStore:
         self._tls.conn = init_conn
         self._init_schema(init_conn)
         self._guard_embedding_dim(init_conn)
+        self._migrate_fts(init_conn)
 
     def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -174,6 +177,37 @@ class ChunkStore:
                 f"requests {self._embedding_dim}. Re-ingest from scratch with "
                 f"the new dim, or revert your embedder.model in corpus.toml."
             )
+
+    def _migrate_fts(self, conn: sqlite3.Connection | None = None) -> None:
+        """Rebuild chunks_fts when its normalization is stale.
+
+        Runs automatically at open rather than as a CLI command: a single-user
+        DB whose migration must be remembered is a migration that gets skipped,
+        leaving a half-normalized index with nothing surfaced. Local and free —
+        content is re-read from `chunks`, so no embeddings are recomputed.
+        """
+        conn = conn or self._conn
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'fts_version'"
+        ).fetchone()
+        if row is not None and row["value"] == FTS_VERSION:
+            return
+        rows = conn.execute("SELECT rowid, content FROM chunks").fetchall()
+        conn.execute("DELETE FROM chunks_fts")
+        for r in rows:
+            # Explicit rowid: the chunks_fts <-> chunks join depends on it.
+            conn.execute(
+                "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+                (r["rowid"], normalize_for_fts(r["content"])),
+            )
+        conn.execute(
+            "INSERT INTO schema_meta (key, value) VALUES ('fts_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (FTS_VERSION,),
+        )
+        conn.commit()
+        if rows:
+            logger.info("rebuilt FTS index for %d chunks (fts_version=%s)", len(rows), FTS_VERSION)
 
     @contextmanager
     def _txn(self) -> Iterator[sqlite3.Connection]:
