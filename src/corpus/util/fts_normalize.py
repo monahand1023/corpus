@@ -30,12 +30,12 @@ import re
 # and the CJK compatibility block. Hangul is deliberately excluded: Korean is
 # not a target language and would need its own handling.
 _CJK = (
-    r"぀-ゟ"  # Hiragana
-    r"゠-ヿ"  # Katakana
-    r"ｦ-ﾟ"  # Halfwidth Katakana
-    r"㐀-䶿"  # CJK Extension A
-    r"一-鿿"  # CJK Unified Ideographs
-    r"豈-﫿"  # CJK Compatibility Ideographs
+    "\u3040-\u309f"  # Hiragana
+    "\u30a0-\u30ff"  # Katakana
+    "\uff66-\uff9f"  # Halfwidth Katakana
+    "\u3400-\u4dbf"  # CJK Extension A
+    "\u4e00-\u9fff"  # CJK Unified Ideographs
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
 )
 _CJK_RUN = re.compile(f"[{_CJK}]+")
 _TOKEN = re.compile(r"[^\W_]+(?:-[^\W_]+){0,3}", re.UNICODE)

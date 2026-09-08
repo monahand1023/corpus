@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from corpus.util.fts_normalize import fts_terms, normalize_for_fts
+import unicodedata
+
+from corpus.util.fts_normalize import _CJK, fts_terms, normalize_for_fts
 
 
 def test_latin_text_passes_through_unchanged() -> None:
@@ -53,3 +55,59 @@ def test_fts_terms_quotes_hyphenated_identifiers() -> None:
 
 def test_fts_terms_empty_for_punctuation_only() -> None:
     assert fts_terms("!!! ???") == []
+
+
+# --- Fix-round-1 regression coverage for the homoglyph defect. ---
+# A prior version of `_CJK`'s "CJK Compatibility Ideographs" range started at
+# U+8C48 (a CJK Unified Ideograph) instead of U+F900 (the intended
+# Compatibility Ideograph). The two glyphs are visually identical -- U+F900
+# canonically decomposes to U+8C48 -- so the substitution was invisible on
+# screen and in the diff. The bug widened the range into one contiguous span
+# that also swallowed Hangul Syllables, Yi, and Vai. A codepoint-boundary
+# assertion (below) pins the invariant directly; the pass-through tests pin
+# the user-visible symptom.
+
+
+def test_cjk_ranges_match_exact_unicode_block_boundaries() -> None:
+    # `_CJK` is a concatenation of six "<start>-<end>" segments, each exactly
+    # 3 characters (start char, literal hyphen, end char), in this order.
+    expected_boundaries = [
+        (0x3040, 0x309F),  # Hiragana
+        (0x30A0, 0x30FF),  # Katakana
+        (0xFF66, 0xFF9F),  # Halfwidth Katakana
+        (0x3400, 0x4DBF),  # CJK Extension A
+        (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+        (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
+    ]
+    assert len(_CJK) == len(expected_boundaries) * 3
+    for i, (start, end) in enumerate(expected_boundaries):
+        segment = _CJK[i * 3 : i * 3 + 3]
+        assert segment[1] == "-"
+        assert (ord(segment[0]), ord(segment[2])) == (start, end)
+
+
+def test_hangul_passes_through_unchanged() -> None:
+    # Hangul Syllables (U+AC00-U+D7A3) must NOT be absorbed into the CJK run:
+    # Korean is out of scope and would need its own handling (see module
+    # docstring). Characters are built from their Unicode names rather than
+    # pasted as literals, for the same reason the range fix avoids literals.
+    han_gug_eo = (
+        unicodedata.lookup("HANGUL SYLLABLE HAN")
+        + unicodedata.lookup("HANGUL SYLLABLE GUG")
+        + unicodedata.lookup("HANGUL SYLLABLE EO")
+    )
+    ga_na_da = (
+        unicodedata.lookup("HANGUL SYLLABLE GA")
+        + unicodedata.lookup("HANGUL SYLLABLE NA")
+        + unicodedata.lookup("HANGUL SYLLABLE DA")
+    )
+    assert normalize_for_fts(han_gug_eo) == han_gug_eo
+    assert normalize_for_fts(ga_na_da) == ga_na_da
+
+
+def test_yi_and_vai_pass_through_unchanged() -> None:
+    # Cheap extra coverage for the other scripts the same defect swallowed.
+    yi = unicodedata.lookup("YI SYLLABLE IT")
+    vai = unicodedata.lookup("VAI SYLLABLE EE")
+    assert normalize_for_fts(yi) == yi
+    assert normalize_for_fts(vai) == vai
