@@ -57,16 +57,33 @@ def normalize_for_fts(text: str) -> str:
     return _CJK_RUN.sub(lambda m: _bigrams(m.group(0)), text)
 
 
+MAX_FTS_TERMS = 64
+
+
 def fts_terms(query: str) -> list[str]:
     """Quoted FTS5 MATCH terms for a query string.
 
     Every term is quoted so that user punctuation cannot produce an FTS5 syntax
     error, and so that bare `AND`/`OR`/`NOT` are treated as words rather than
     operators.
+
+    De-duplicated (order preserved) and capped at `MAX_FTS_TERMS`: a CJK query
+    emits one term per overlapping bigram with no natural length limit, so a
+    long or repeated query would otherwise OR-join unboundedly many terms --
+    measured at 40k chunks, a 74-character CJK query took 223ms. Repetition
+    also double-counts a term for BM25 scoring (`fts_terms("東京の会議
+    東京の会議")` previously produced 8 terms, only 4 of them unique), skewing
+    rank toward accidentally-repeated queries.
     """
     normalized = normalize_for_fts(query)
+    seen: set[str] = set()
     terms: list[str] = []
     for token in _TOKEN.findall(normalized):
+        if token in seen:
+            continue
+        seen.add(token)
         escaped = token.replace('"', '""')
         terms.append(f'"{escaped}"')
+        if len(terms) >= MAX_FTS_TERMS:
+            break
     return terms

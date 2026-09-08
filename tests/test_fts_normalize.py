@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from corpus.util.fts_normalize import _CJK, fts_terms, normalize_for_fts
+from corpus.util.fts_normalize import _CJK, MAX_FTS_TERMS, fts_terms, normalize_for_fts
 
 
 def test_latin_text_passes_through_unchanged() -> None:
@@ -103,6 +103,28 @@ def test_hangul_passes_through_unchanged() -> None:
     )
     assert normalize_for_fts(han_gug_eo) == han_gug_eo
     assert normalize_for_fts(ga_na_da) == ga_na_da
+
+
+# --- FIX 4: unbounded / duplicated CJK query terms. ---
+
+
+def test_fts_terms_deduplicates_repeated_terms_preserving_order() -> None:
+    # "東京の会議 東京の会議" naively yields 8 bigram terms (4 repeated); only
+    # the first occurrence of each should survive, in first-seen order.
+    assert fts_terms("東京の会議 東京の会議") == ['"東京"', '"京の"', '"の会"', '"会議"']
+
+
+def test_fts_terms_deduplicates_repeated_latin_words() -> None:
+    assert fts_terms("meeting notes meeting") == ['"meeting"', '"notes"']
+
+
+def test_fts_terms_caps_at_max_fts_terms() -> None:
+    # 100 distinct single-character CJK runs -> 100 distinct one-character
+    # "bigrams" (each run is too short to bigram, so it's emitted as-is);
+    # all are unique, so the cap -- not dedup -- is what bites here.
+    long_query = " ".join(chr(0x4E00 + i) for i in range(100))  # distinct CJK Unified Ideographs
+    terms = fts_terms(long_query)
+    assert len(terms) == MAX_FTS_TERMS
 
 
 def test_yi_and_vai_pass_through_unchanged() -> None:
