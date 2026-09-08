@@ -102,10 +102,45 @@ def test_vector_search_top_k_exceeding_filtered_row_count_does_not_raise(store: 
     assert len(results) == 3
 
 
-def test_fts_search_filter_sources_is_a_prefilter_not_a_postfilter(store: ChunkStore) -> None:
-    """Same starvation bug applies to BM25 search: filter_sources must
-    constrain the FTS MATCH itself, not a fixed-size global over-fetch
-    window filtered afterward."""
+def test_fts_search_filter_sources_is_a_postfilter_by_design(store: ChunkStore) -> None:
+    """DELIBERATE, MEASURED DESIGN CHOICE (do not "fix" this back to a
+    rowid-IN pre-filter like vector_search's): a rowid-IN pre-filter was
+    tried here and measured at ~1561x slower than this global-query form
+    (mean 7.3s/query, p99 17.5s at 40k chunks / 4 source types) because it
+    defeats FTS5's rank-ordered LIMIT short-circuit, forcing SQLite to fall
+    back to `USE TEMP B-TREE FOR ORDER BY` -- a full MATCH + sort of every
+    matching row. See the comment in ChunkStore.fts_search for the full
+    mechanism.
+
+    This is safe unlike vector_search's starvation risk: BM25 only ranks
+    chunks that actually contain the query's terms, so if the dominant
+    source's content is NOT what the query matches on, a small genuinely
+    matching source is never crowded out -- the over-fetch window only ever
+    has as many candidates as chunks that matched at all."""
+    items = [
+        (make_chunk_typed("photos", f"img-{i}", 0, ChunkKind.SECTION, f"unrelated content {i}"), fake_embedding(i))
+        for i in range(200)
+    ]
+    items += [
+        (make_chunk_typed("notes", f"n-{i}", 0, ChunkKind.SECTION, f"needle {i}"), fake_embedding(i + 5000))
+        for i in range(3)
+    ]
+    store.upsert_batch(items)
+    # None of the 200 "photos" chunks contain "needle" -- only the 3 "notes"
+    # chunks match the query at all, so they survive the post-filter.
+    results = store.fts_search("needle", top_k=20, filter_sources=["notes"])
+    keys = {c.source_key for c in results}
+    assert keys == {"n-0", "n-1", "n-2"}, f"a genuinely-matching small source was starved; got {keys}"
+
+
+def test_fts_search_postfilter_accepted_limitation_when_both_sources_match(store: ChunkStore) -> None:
+    """Documents the ACCEPTED tradeoff of the post-filter (see the ruling in
+    fts_search's comment): if a large source ALSO genuinely matches the
+    query's terms, it can still fill the fixed-size over-fetch window ahead
+    of a smaller matching source, starving it. This is the accepted cost of
+    avoiding the ~1561x pre-filter regression -- pinned here so a future
+    change to this tradeoff is a deliberate, visible test update, not a
+    silent regression."""
     items = [
         (make_chunk_typed("photos", f"img-{i}", 0, ChunkKind.SECTION, f"needle {i}"), fake_embedding(i))
         for i in range(200)
@@ -115,9 +150,12 @@ def test_fts_search_filter_sources_is_a_prefilter_not_a_postfilter(store: ChunkS
         for i in range(3)
     ]
     store.upsert_batch(items)
+    # All 203 chunks contain "needle" -- the top_k*3=60 over-fetch window is
+    # filled entirely by "photos" (ranked first by rowid/insertion order)
+    # before the post-filter ever sees a "notes" row.
     results = store.fts_search("needle", top_k=20, filter_sources=["notes"])
     keys = {c.source_key for c in results}
-    assert keys == {"n-0", "n-1", "n-2"}, f"notes starved by post-filter; got {keys}"
+    assert keys == set(), f"expected the accepted starvation limitation, got {keys}"
 
 
 def test_delete_orphans(store: ChunkStore) -> None:

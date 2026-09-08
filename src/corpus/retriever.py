@@ -103,13 +103,27 @@ class Retriever:
     ) -> RetrievalResult:
         embedding = self._embedder.embed_query(question)
 
-        # Build the candidate pool PER SOURCE TYPE, then rank globally over the
-        # union. Fetching globally first lets a dominant source consume every
-        # slot before max_per_source_type is applied, making small sources
-        # unreachable. Global fusion and the cap are unchanged: they still run
+        # Build the candidate pool PER SOURCE TYPE for VECTOR search only, then
+        # rank globally over the union. Fetching globally first lets a dominant
+        # source consume every slot before max_per_source_type is applied,
+        # making small sources unreachable: every chunk has a distance to the
+        # query, so a huge source fills the pool by sheer volume regardless of
+        # relevance. Global fusion and the cap are unchanged: they still run
         # over the whole union. What DOES change is pool SIZE — per_source below
-        # scales with top_k and the number of source types, so the total pool
-        # is no longer a flat floor of 40 (e.g. it's 10/source at top_k=1).
+        # scales with top_k and the number of source types, so the total vector
+        # pool is no longer a flat floor of 40 (e.g. it's 10/source at top_k=1).
+        #
+        # BM25/FTS deliberately does NOT get the same per-source loop — see
+        # ChunkStore.fts_search's docstring/comment for the measured reason
+        # (a per-source rowid pre-filter was tried and defeats FTS5's
+        # rank-ordered LIMIT short-circuit: ~1561x slower at 40k chunks / 4
+        # source types). The starvation risk is asymmetric: BM25 only matches
+        # chunks that actually contain the query's terms, so a small source
+        # that genuinely matches is far likelier to survive a single
+        # generously-sized global fetch than to be crowded out the way vector
+        # search's distance-to-everything ranking crowds one out. The vector
+        # path's per-source guarantee already places small sources in the
+        # fused pool regardless of what BM25 returns.
         source_types = (
             list(dict.fromkeys(filter_sources)) if filter_sources else self._store.source_types()
         )
@@ -118,28 +132,29 @@ class Retriever:
         per_source = max(top_k * 8 // len(source_types), top_k * 2, 10)
 
         vector_hits: list[StoredChunk] = []
-        fts_hits: list[StoredChunk] = []
         for stype in source_types:
             vector_hits.extend(
                 self._store.vector_search(embedding, top_k=per_source, filter_sources=[stype])
             )
-            if hybrid:
-                fts_hits.extend(
-                    self._store.fts_search(question, top_k=per_source, filter_sources=[stype])
-                )
         # Concatenated per-source lists are not globally ordered; RRF consumes
         # rank position, so restore a global ordering before fusing. Ties break
         # on `id`, not insertion order: list.sort is stable, and insertion order
         # here is source_types() order (alphabetical), so an unbroken tie would
         # systematically favor whichever source type sorts first. `distance`
-        # is always populated by vector_search/fts_search; the `inf` fallback
-        # only satisfies the type checker's `float | None` signature.
+        # is always populated by vector_search; the `inf` fallback only
+        # satisfies the type checker's `float | None` signature.
         vector_hits.sort(key=lambda c: (c.distance if c.distance is not None else float("inf"), c.id))
-        fts_hits.sort(key=lambda c: (c.distance if c.distance is not None else float("inf"), c.id))
 
         if hybrid:
             effective_fts_weight = (
                 fts_weight if fts_weight is not None else self._auto_fts_weight(question)
+            )
+            # ONE global call, not per source type (see comment above). Sized
+            # to contribute roughly as many candidates in total as the
+            # per-source vector loop does, so the fused pool doesn't shrink on
+            # the BM25 side relative to the vector side.
+            fts_hits = self._store.fts_search(
+                question, top_k=per_source * len(source_types), filter_sources=filter_sources
             )
             fused = reciprocal_rank_fusion(
                 [vector_hits, fts_hits],

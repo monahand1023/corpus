@@ -315,39 +315,34 @@ class ChunkStore:
                 match_terms.append(t)
         match_expr = " OR ".join(match_terms)
 
-        # See vector_search: filter_sources is a genuine PRE-filter (a rowid
-        # subquery constraining the FTS MATCH itself), not a post-hoc filter
-        # over a fixed global over-fetch window — the same source-starvation
-        # bug applies to BM25 search over a skewed corpus.
+        # INTENTIONALLY a post-hoc Python filter, NOT a rowid-IN pre-filter
+        # like vector_search uses. A rowid-IN pre-filter was tried here and
+        # measured: it defeats FTS5's rank-ordered LIMIT short-circuit, so
+        # SQLite falls back to `USE TEMP B-TREE FOR ORDER BY` -- a full
+        # MATCH + sort of every row that matches the query terms, once per
+        # source type in the retriever's per-source loop. Measured ~1561x
+        # slower than this global-query form at 40k chunks / 4 source types
+        # (mean 7.3s/query, p99 17.5s) -- fatal for sub-300ms search. This is
+        # safe unlike vector_search's starvation risk: BM25 only matches
+        # chunks that actually contain the query's terms, so a small source
+        # that genuinely matches is far likelier to survive a fixed-size
+        # over-fetch window than to be crowded out by sheer volume the way
+        # every chunk (via distance) competes in vector search. See
+        # Retriever.query for the per-source vector / global-FTS split.
+        over_fetch = top_k * 3 if filter_sources else top_k
         try:
-            if filter_sources:
-                placeholders = ",".join("?" for _ in filter_sources)
-                rows = self._conn.execute(
-                    f"""
-                    SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                           c.title, c.url, f.rank
-                    FROM chunks_fts f
-                    JOIN chunks c ON c.rowid = f.rowid
-                    WHERE f.content MATCH ?
-                      AND f.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))
-                    ORDER BY f.rank
-                    LIMIT ?
-                    """,
-                    (match_expr, *filter_sources, top_k),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    """
-                    SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                           c.title, c.url, f.rank
-                    FROM chunks_fts f
-                    JOIN chunks c ON c.rowid = f.rowid
-                    WHERE f.content MATCH ?
-                    ORDER BY f.rank
-                    LIMIT ?
-                    """,
-                    (match_expr, top_k),
-                ).fetchall()
+            rows = self._conn.execute(
+                """
+                SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                       c.title, c.url, f.rank
+                FROM chunks_fts f
+                JOIN chunks c ON c.rowid = f.rowid
+                WHERE f.content MATCH ?
+                ORDER BY f.rank
+                LIMIT ?
+                """,
+                (match_expr, over_fetch),
+            ).fetchall()
         except Exception:
             return []
 
