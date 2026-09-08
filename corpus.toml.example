@@ -37,6 +37,9 @@ hybrid = true              # combine vector + BM25 via reciprocal rank fusion
 #   text     — `.txt` plain text files (default glob: **/*.txt)
 #   pdf      — PDFs via pypdf; install: `pip install corpus-rag[pdf]`
 #   html     — HTML files via trafilatura; install: `pip install corpus-rag[html]`
+#   docx     — Word documents via python-docx; install: `pip install corpus-rag[docx]`
+#   xlsx     — Excel workbooks via openpyxl; install: `pip install corpus-rag[xlsx]`
+#   rtf      — Rich Text Format via striprtf; install: `pip install corpus-rag[rtf]`
 #
 # Adding a new source type? See docs/adding_a_source.md.
 
@@ -61,6 +64,21 @@ path = "~/Documents/notes"
 # name = "plain_notes"
 # type = "text"
 # path = "~/Documents/quick-notes"
+
+# [[sources]]
+# name = "word_docs"
+# type = "docx"
+# path = "~/Documents"
+
+# [[sources]]
+# name = "spreadsheets"
+# type = "xlsx"
+# path = "~/Documents"
+
+# [[sources]]
+# name = "rtf_notes"
+# type = "rtf"
+# path = "~/Documents"
 
 # Reference patterns that `expand_context` will look for inside a chunk's
 # content, plus that auto-tune BM25 weight when the user's query contains them.

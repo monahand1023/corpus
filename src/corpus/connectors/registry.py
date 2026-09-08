@@ -104,6 +104,22 @@ def _build_xlsx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    try:
+        from corpus.connectors.rtf import RtfConnector
+    except ImportError as e:
+        raise ImportError(
+            "Rtf connector requires the [rtf] extra. "
+            "Install with `pip install corpus-rag[rtf]` or `uv add striprtf`."
+        ) from e
+    connector = RtfConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or "**/*.rtf",
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "markdown": _build_markdown,
     "text": _build_text,
@@ -111,6 +127,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "html": _build_html,
     "docx": _build_docx,
     "xlsx": _build_xlsx,
+    "rtf": _build_rtf,
 }
 
 
