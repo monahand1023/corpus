@@ -76,7 +76,7 @@ db_path = "./corpus.db"
 
 [embedder]
 provider = "voyage"           # or "gemini"
-model = "voyage-3-large"
+model = "voyage-4-large"
 dim = 1024                    # must match the model's output dim
 
 [retriever]

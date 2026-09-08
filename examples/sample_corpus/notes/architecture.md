@@ -10,7 +10,7 @@ id: architecture
 1. **Connectors** walk source directories and yield `SourceDocument`s.
 2. **Chunkers** split each document into retrievable chunks.
 3. **Scrub** removes secrets and credentials.
-4. **Embedder** (Voyage `voyage-3-large` by default) turns each chunk into a 1024-dim vector.
+4. **Embedder** (Voyage `voyage-4-large` by default) turns each chunk into a 1024-dim vector.
 5. **Store** (SQLite + sqlite-vec) UPSERTs the chunks with content-hash dedup.
 
 At query time:

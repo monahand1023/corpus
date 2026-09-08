@@ -42,8 +42,9 @@ MAX_TOKENS_PER_BATCH = 100_000
 # rejection plus a recursive-halving cascade.
 FALLBACK_CHARS_PER_TOKEN = 1.3
 
-# Voyage projects have a per-minute token limit (3,000,000 TPM for voyage-3-large
-# at time of writing). Firing requests blindly on a large ingest blows past it and
+# Voyage projects have a per-minute token limit that varies by model and plan
+# (3,000,000 TPM was observed for voyage-3-large; confirm yours for other
+# models). Firing requests blindly on a large ingest blows past it and
 # degrades into a wall of 429 retries that can stall the run. We proactively pace
 # under a target below the hard limit, sleeping when the rolling 60s window is full.
 # Override via CORPUS_TPM_TARGET (raise it if your project's limit is higher).
@@ -97,7 +98,7 @@ class VoyageEmbedder:
                 time.sleep(sleep_for)
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float] | None]:
-        """`input_type='document'` is mandatory for voyage-3-large asymmetric
+        """`input_type='document'` is mandatory for Voyage's asymmetric
         retrieval quality. Returns parallel list; None for empty-string inputs."""
         return self._embed_with_input_type(list(texts), input_type="document")
 

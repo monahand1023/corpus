@@ -26,7 +26,7 @@ class ConfigError(Exception):
 
 class EmbedderConfig(BaseModel):
     provider: str = "voyage"
-    model: str = "voyage-3-large"
+    model: str = "voyage-4-large"
     dim: int = Field(default=1024, gt=0)
 
 

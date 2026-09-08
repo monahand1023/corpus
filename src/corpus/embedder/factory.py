@@ -1,7 +1,7 @@
 """Embedder factory — dispatch by provider name from corpus.toml.
 
 Built-in providers:
-  - voyage  — Voyage AI (default; voyage-3-large, 1024-dim)
+  - voyage  — Voyage AI (default; voyage-4-large, 1024-dim)
   - gemini  — Google Gemini (gemini-embedding-001, 768/1536/3072-dim)
   - hash    — deterministic zero-dep hashing embedder (no API key; tests/CI only)
 

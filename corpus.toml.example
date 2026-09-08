@@ -10,7 +10,7 @@ db_path = "./corpus.db"
 [embedder]
 # Built-in providers: voyage, gemini.
 #
-# voyage (voyage-3-large, 1024-dim) is the default — top retrieval quality,
+# voyage (voyage-4-large, 1024-dim) is the default — top retrieval quality,
 # Anthropic-recommended. Card-on-file required to lift free-tier rate limits.
 #
 # gemini (gemini-embedding-001) is the alternative — no card needed, free tier
@@ -19,7 +19,7 @@ db_path = "./corpus.db"
 # The dim MUST match the model's output. The DB stores it on first ingest
 # and refuses to open with a mismatched dim (rather than silently corrupt).
 provider = "voyage"
-model = "voyage-3-large"
+model = "voyage-4-large"
 dim = 1024
 
 [retriever]

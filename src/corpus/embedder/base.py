@@ -2,7 +2,7 @@
 
 Two methods, one tracking attribute. Document and query embeddings are
 asymmetric (different `task_type` / `input_type`) because that's mandatory
-for both Voyage's voyage-3-large and Gemini's gemini-embedding-001 to hit
+for both Voyage's voyage-4-large and Gemini's gemini-embedding-001 to hit
 their advertised retrieval quality.
 """
 

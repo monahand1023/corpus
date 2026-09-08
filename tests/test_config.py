@@ -107,7 +107,7 @@ def test_defaults_apply(tmp_path: Path) -> None:
     cfg = tmp_path / "corpus.toml"
     cfg.write_text("")
     config = CorpusConfig.load(cfg)
-    assert config.embedder.model == "voyage-3-large"
+    assert config.embedder.model == "voyage-4-large"
     assert config.embedder.dim == 1024
     assert config.retriever.top_k == 5
     assert config.retriever.max_per_source_type == 3

@@ -369,7 +369,7 @@ def main() -> int:
 
 
 def _default_model_for(provider: str) -> str:
-    return {"voyage": "voyage-3-large", "gemini": "gemini-embedding-001"}.get(
+    return {"voyage": "voyage-4-large", "gemini": "gemini-embedding-001"}.get(
         provider, "unknown-model"
     )
 

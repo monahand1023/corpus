@@ -30,13 +30,13 @@ db_path = "./corpus.db"
 | Setting | Type | Default | Notes |
 |---|---|---|---|
 | `provider` | str | `voyage` | One of `voyage`, `gemini`. See the comparison below. |
-| `model` | str | `voyage-3-large` | Model name. Must match what the provider supports. |
+| `model` | str | `voyage-4-large` | Model name. Must match what the provider supports. |
 | `dim` | int | `1024` | Embedding dimension. MUST match the model's output; guarded at startup. |
 
 ```toml
 [embedder]
 provider = "voyage"
-model = "voyage-3-large"
+model = "voyage-4-large"
 dim = 1024
 ```
 
@@ -51,7 +51,7 @@ dim = 1536    # also valid: 768, 3072 — Matryoshka representation
 
 ### Choosing a provider
 
-| | Voyage `voyage-3-large` | Gemini `gemini-embedding-001` |
+| | Voyage `voyage-4-large` | Gemini `gemini-embedding-001` |
 |---|---|---|
 | **Quality (MTEB retrieval)** | Top of leaderboard | Comparable, ~1-3 points lower |
 | **Free tier** | 200M tokens lifetime | ~1,500 requests/day rolling |

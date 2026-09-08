@@ -39,7 +39,7 @@ class _ProviderInfo(TypedDict):
 # Providers we know how to dispatch via the embedder factory.
 KNOWN_PROVIDERS: dict[str, _ProviderInfo] = {
     "voyage": {
-        "default_model": "voyage-3-large",
+        "default_model": "voyage-4-large",
         "default_dim": 1024,
         "env_var": "VOYAGE_API_KEY",
         "signup_url": "https://dash.voyageai.com/",
