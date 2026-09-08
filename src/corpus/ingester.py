@@ -32,12 +32,6 @@ class IngestResult:
     orphans_deleted: int
     tokens_used: int
     elapsed_seconds: float
-    # Always True today: a connector that enumerates incompletely must raise
-    # (see the comment at the delete_orphans call site below), so ingest()
-    # never returns an IngestResult for an incomplete run at all. This field
-    # is a contract point for a future connector that can detect a partial
-    # enumeration WITHOUT raising and still needs to report it.
-    enumeration_complete: bool = True
 
 
 class Ingester:
@@ -117,7 +111,6 @@ class Ingester:
             orphans_deleted=orphans,
             tokens_used=self._embedder.total_tokens_used - tokens_before,
             elapsed_seconds=time.monotonic() - start,
-            enumeration_complete=True,
         )
 
     def _flush(self, chunks: list[Chunk]) -> tuple[int, int]:
