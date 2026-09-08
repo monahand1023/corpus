@@ -9,6 +9,7 @@ break the linkage. Re-ingest from scratch is the safe recovery path.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterable, Iterator, Sequence
@@ -21,6 +22,9 @@ from typing import Any
 import sqlite_vec
 
 from corpus.types import Chunk
+from corpus.util.fts_normalize import fts_terms, normalize_for_fts
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -243,7 +247,10 @@ class ChunkStore:
         self._conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
         self._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob))
         self._conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
-        self._conn.execute("INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)", (rowid, chunk.content))
+        self._conn.execute(
+            "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+            (rowid, normalize_for_fts(chunk.content)),
+        )
         return True
 
     def upsert_batch(self, items: Iterable[tuple[Chunk, Sequence[float]]]) -> UpsertResult:
@@ -302,17 +309,9 @@ class ChunkStore:
         top_k: int,
         filter_sources: Sequence[str] | None = None,
     ) -> list[StoredChunk]:
-        import re as _re
-
-        tokens = _re.findall(r"[A-Za-z0-9_\-]+", query)
-        if not tokens:
+        match_terms = fts_terms(query)
+        if not match_terms:
             return []
-        match_terms = []
-        for t in tokens:
-            if "-" in t and t.count("-") <= 3:
-                match_terms.append(f'"{t}"')
-            else:
-                match_terms.append(t)
         match_expr = " OR ".join(match_terms)
 
         # INTENTIONALLY a post-hoc Python filter, NOT a rowid-IN pre-filter
@@ -343,7 +342,8 @@ class ChunkStore:
                 """,
                 (match_expr, over_fetch),
             ).fetchall()
-        except Exception:
+        except sqlite3.OperationalError as e:
+            logger.warning("FTS query failed for %r: %s", match_expr, e)
             return []
 
         results: list[StoredChunk] = []

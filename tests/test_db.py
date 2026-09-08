@@ -265,3 +265,35 @@ def test_connections_are_per_thread(store: ChunkStore) -> None:
 
     assert other_conn_box, "thread did not run"
     assert other_conn_box[0] is not main_conn, "threads shared a connection"
+
+
+def test_fts_finds_two_character_japanese_word(store: ChunkStore) -> None:
+    store.upsert_batch([
+        (make_chunk("jp", 0, ChunkKind.BODY, "東京で会議をしました"), fake_embedding(1)),
+    ])
+    assert len(store.fts_search("東京", top_k=5)) == 1
+    assert len(store.fts_search("会議", top_k=5)) == 1
+
+
+def test_fts_finds_accented_word(store: ChunkStore) -> None:
+    store.upsert_batch([
+        (make_chunk("es", 0, ChunkKind.BODY, "la reunión en el café"), fake_embedding(2)),
+    ])
+    assert len(store.fts_search("café", top_k=5)) == 1
+    assert len(store.fts_search("cafe", top_k=5)) == 1
+
+
+def test_fts_does_not_raise_on_operator_like_query(store: ChunkStore) -> None:
+    store.upsert_batch([
+        (make_chunk("en", 0, ChunkKind.BODY, "cats and dogs"), fake_embedding(3)),
+    ])
+    # Previously raised fts5 syntax errors that were swallowed as "no hits".
+    assert store.fts_search("cats OR AND OR dogs", top_k=5) is not None
+    assert store.fts_search("NOT", top_k=5) is not None
+
+
+def test_fts_english_stemming_still_works(store: ChunkStore) -> None:
+    store.upsert_batch([
+        (make_chunk("en", 1, ChunkKind.BODY, "the quarterly planning meeting"), fake_embedding(4)),
+    ])
+    assert len(store.fts_search("meetings", top_k=5)) == 1
