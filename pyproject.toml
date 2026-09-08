@@ -53,6 +53,9 @@ all = [
     "trafilatura>=2.0.0,<3.0",
     "google-genai>=2.2.0,<3.0",
 ]
+docx = [
+    "python-docx>=1.2.0",
+]
 
 [project.scripts]
 corpus-init = "corpus.cli.init:main"

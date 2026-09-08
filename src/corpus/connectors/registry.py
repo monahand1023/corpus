@@ -72,11 +72,28 @@ def _build_html(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    try:
+        from corpus.connectors.docx import DocxConnector
+    except ImportError as e:
+        raise ImportError(
+            "Docx connector requires the [docx] extra. "
+            "Install with `pip install corpus-rag[docx]` or `uv add python-docx`."
+        ) from e
+    connector = DocxConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or "**/*.docx",
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "markdown": _build_markdown,
     "text": _build_text,
     "pdf": _build_pdf,
     "html": _build_html,
+    "docx": _build_docx,
 }
 
 
