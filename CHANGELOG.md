@@ -4,7 +4,7 @@ All notable changes to `corpus-rag` are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-08
 
 ### Added
 - **Multilingual / CJK full-text search.** `unicode61` (FTS5's tokenizer)
@@ -62,6 +62,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unmounted volume) must raise rather than yield a partial list — a partial
   enumeration previously looked identical to "these files were deleted" and
   triggered orphan deletion against content that was never actually gone.
+
+- **A file the connector cannot read now suppresses orphan pruning.** This
+  extends the enumeration-completeness contract above from whole sources down
+  to individual files. Connectors swallow per-file read errors and continue, so
+  a file that was momentarily locked yielded no document — and because
+  `delete_orphans` removes any chunk whose id is absent from the run, its
+  already-indexed content was silently deleted. Connectors now count files they
+  skipped and expose the count as an optional `failed_files` attribute; the
+  ingester skips pruning entirely when it is non-zero. `corpus-ingest
+  --prune-anyway` overrides for a named source (refused with `--all`).
+  Partially-read files count too: a PDF whose page fails to extract is still
+  yielded, but the shorter body produces fewer chunks, so the tail chunk ids
+  vanish and the content those pages occupied would be pruned. `IngestResult`
+  gains `files_failed` and `pruning_performed` — the latter because
+  `orphans_deleted == 0` means both "nothing needed pruning" and "pruning was
+  skipped". **`failed_files` is an optional connector capability, not part of
+  the `Connector` protocol**: connectors defined outside this package keep
+  working unchanged, but an absent attribute means "does not report failures"
+  rather than "had zero failures", so such a connector is not covered by the
+  gate.
 
 ### Migration notes
 - **Existing databases are migrated automatically, in place, the first time
