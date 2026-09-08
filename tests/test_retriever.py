@@ -377,3 +377,48 @@ def test_auto_fts_weight_bounds_regex_scan_length() -> None:
     r._refs = [(Spy(), "tickets")]  # type: ignore[list-item]
     r._auto_fts_weight("x" * (MAX_REGEX_SCAN_CHARS + 5000))
     assert seen["len"] <= MAX_REGEX_SCAN_CHARS
+
+
+@pytest.fixture
+def lopsided_retriever(tmp_path: Path) -> Retriever:
+    """One huge source and one tiny source, to expose pool starvation."""
+    store = ChunkStore(tmp_path / "lop.db", embedding_dim=DIM)
+    items = []
+    for i in range(200):
+        items.append((make_chunk("photos", f"img-{i}", 0, f"photo {i}"), fake_embedding(i)))
+    for i in range(3):
+        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i + 5000)))
+    store.upsert_batch(items)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+    yield r
+    store.close()
+
+
+def test_small_source_not_starved_by_large_one(lopsided_retriever: Retriever) -> None:
+    """A 3-chunk source must still be reachable beside a 200-chunk source."""
+    result = lopsided_retriever.query(
+        "anything", top_k=5, max_per_source_type=3, hybrid=False
+    )
+    types = {c.source_type for c in result.chunks}
+    assert "notes" in types, f"small source starved; got only {types}"
+
+
+def test_top_k_is_filled_despite_cap(lopsided_retriever: Retriever) -> None:
+    """The cap must not leave result slots empty when other sources have content."""
+    result = lopsided_retriever.query(
+        "anything", top_k=5, max_per_source_type=3, hybrid=False
+    )
+    assert len(result.chunks) == 5, f"expected 5 results, got {len(result.chunks)}"
+
+
+def test_source_types_lists_distinct_types(tmp_path: Path) -> None:
+    store = ChunkStore(tmp_path / "st.db", embedding_dim=DIM)
+    store.upsert_batch([
+        (make_chunk("photos", "a", 0, "x"), fake_embedding(1)),
+        (make_chunk("notes", "b", 0, "y"), fake_embedding(2)),
+        (make_chunk("notes", "c", 0, "z"), fake_embedding(3)),
+    ])
+    assert sorted(store.source_types()) == ["notes", "photos"]
+    store.close()

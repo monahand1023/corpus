@@ -289,6 +289,13 @@ class ChunkStore:
                 self._conn.execute("DELETE FROM chunks WHERE rowid = ?", (rowid,))
         return len(orphans)
 
+    def source_types(self) -> list[str]:
+        """Distinct source types present in the store. Backed by idx_chunks_source_type."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT source_type FROM chunks ORDER BY source_type"
+        ).fetchall()
+        return [row["source_type"] for row in rows]
+
     def fts_search(
         self,
         query: str,
@@ -308,20 +315,39 @@ class ChunkStore:
                 match_terms.append(t)
         match_expr = " OR ".join(match_terms)
 
-        over_fetch = top_k * 3 if filter_sources else top_k
+        # See vector_search: filter_sources is a genuine PRE-filter (a rowid
+        # subquery constraining the FTS MATCH itself), not a post-hoc filter
+        # over a fixed global over-fetch window — the same source-starvation
+        # bug applies to BM25 search over a skewed corpus.
         try:
-            rows = self._conn.execute(
-                """
-                SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                       c.title, c.url, f.rank
-                FROM chunks_fts f
-                JOIN chunks c ON c.rowid = f.rowid
-                WHERE f.content MATCH ?
-                ORDER BY f.rank
-                LIMIT ?
-                """,
-                (match_expr, over_fetch),
-            ).fetchall()
+            if filter_sources:
+                placeholders = ",".join("?" for _ in filter_sources)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                           c.title, c.url, f.rank
+                    FROM chunks_fts f
+                    JOIN chunks c ON c.rowid = f.rowid
+                    WHERE f.content MATCH ?
+                      AND f.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))
+                    ORDER BY f.rank
+                    LIMIT ?
+                    """,
+                    (match_expr, *filter_sources, top_k),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                           c.title, c.url, f.rank
+                    FROM chunks_fts f
+                    JOIN chunks c ON c.rowid = f.rowid
+                    WHERE f.content MATCH ?
+                    ORDER BY f.rank
+                    LIMIT ?
+                    """,
+                    (match_expr, top_k),
+                ).fetchall()
         except Exception:
             return []
 
@@ -353,18 +379,40 @@ class ChunkStore:
         filter_sources: Sequence[str] | None = None,
     ) -> list[StoredChunk]:
         blob = sqlite_vec.serialize_float32(list(query_embedding))
-        over_fetch = top_k * 3 if filter_sources else top_k
-        rows = self._conn.execute(
-            """
-            SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                   c.title, c.url, v.distance
-            FROM chunks_vec v
-            JOIN chunks c ON c.rowid = v.rowid
-            WHERE v.embedding MATCH ? AND k = ?
-            ORDER BY v.distance
-            """,
-            (blob, over_fetch),
-        ).fetchall()
+        # filter_sources is a genuine PRE-filter on the ANN query (a rowid
+        # subquery constraining the k-nearest search itself), not a post-hoc
+        # filter over a fixed global over-fetch window. A post-filter cannot
+        # be made reliable by over-fetching more: at extreme skew (a source
+        # with a handful of chunks buried among hundreds of thousands from
+        # another) the required over-fetch multiplier is unbounded. The
+        # pre-filter keeps k == top_k because k now applies to the
+        # already-constrained candidate set.
+        if filter_sources:
+            placeholders = ",".join("?" for _ in filter_sources)
+            rows = self._conn.execute(
+                f"""
+                SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                       c.title, c.url, v.distance
+                FROM chunks_vec v
+                JOIN chunks c ON c.rowid = v.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                  AND v.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))
+                ORDER BY v.distance
+                """,
+                (blob, top_k, *filter_sources),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                       c.title, c.url, v.distance
+                FROM chunks_vec v
+                JOIN chunks c ON c.rowid = v.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                ORDER BY v.distance
+                """,
+                (blob, top_k),
+            ).fetchall()
 
         results: list[StoredChunk] = []
         filter_set = set(filter_sources) if filter_sources else None

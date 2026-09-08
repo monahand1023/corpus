@@ -102,17 +102,37 @@ class Retriever:
         rerank_pool_size: int = 30,
     ) -> RetrievalResult:
         embedding = self._embedder.embed_query(question)
-        over_fetch = max(top_k * 8, 40)
-        vector_hits = self._store.vector_search(
-            embedding, top_k=over_fetch, filter_sources=filter_sources
-        )
+
+        # Build the candidate pool PER SOURCE TYPE, then rank globally over the
+        # union. Fetching globally first lets a dominant source consume every
+        # slot before max_per_source_type is applied, making small sources
+        # unreachable. Ranking semantics are unchanged: fusion and the cap still
+        # run over the whole union.
+        source_types = list(filter_sources) if filter_sources else self._store.source_types()
+        if not source_types:
+            return RetrievalResult(query=question, chunks=[])
+        per_source = max(top_k * 8 // len(source_types), top_k * 2, 10)
+
+        vector_hits: list[StoredChunk] = []
+        fts_hits: list[StoredChunk] = []
+        for stype in source_types:
+            vector_hits.extend(
+                self._store.vector_search(embedding, top_k=per_source, filter_sources=[stype])
+            )
+            if hybrid:
+                fts_hits.extend(
+                    self._store.fts_search(question, top_k=per_source, filter_sources=[stype])
+                )
+        # Concatenated per-source lists are not globally ordered; RRF consumes
+        # rank position, so restore a global ordering before fusing. `distance`
+        # is always populated by vector_search/fts_search; the fallback only
+        # satisfies the type checker's `float | None` signature.
+        vector_hits.sort(key=lambda c: c.distance if c.distance is not None else float("inf"))
+        fts_hits.sort(key=lambda c: c.distance if c.distance is not None else float("inf"))
 
         if hybrid:
             effective_fts_weight = (
                 fts_weight if fts_weight is not None else self._auto_fts_weight(question)
-            )
-            fts_hits = self._store.fts_search(
-                question, top_k=over_fetch, filter_sources=filter_sources
             )
             fused = reciprocal_rank_fusion(
                 [vector_hits, fts_hits],
