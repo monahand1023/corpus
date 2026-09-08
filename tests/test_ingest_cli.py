@@ -84,3 +84,26 @@ def test_missing_extra_fails_only_that_source_and_all_continues(
     # broken one still ran and ingested its document.
     assert "=== Ingesting notes ===" in out
     assert "documents:        1" in out
+
+
+def test_prune_anyway_is_refused_with_all(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--prune-anyway forces a destructive sweep past the pruning safety gate,
+    so it is deliberately unavailable across every source at once: the operator
+    has to name the source whose unreadable files they have actually reviewed."""
+    notes_dir = tmp_path / "notes_source"
+    notes_dir.mkdir()
+    docx_dir = tmp_path / "docx_source"
+    docx_dir.mkdir()
+    cfg_path = tmp_path / "corpus.toml"
+    _write_config(cfg_path, tmp_path / "test.db", notes_dir, docx_dir)
+
+    exit_code, _ = _run(cfg_path, ["--all", "--prune-anyway"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 2
+    assert "Refusing --prune-anyway with --all" in out
+    assert "--source NAME" in out
+    # It must refuse BEFORE doing any ingestion work at all.
+    assert "=== Ingesting" not in out

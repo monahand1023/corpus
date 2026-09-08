@@ -40,8 +40,16 @@ class PdfConnector:
         self.source_type = source_type
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
+        self.failed_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
+        # Per-file read failures are counted, not just logged: a skipped file
+        # yields no document, so its chunk ids vanish from `seen_ids` and the
+        # ingester's orphan sweep would delete already-indexed content. The
+        # ingester reads this counter and suppresses pruning when it is
+        # non-zero. Reset per run so a reused instance cannot suppress pruning
+        # forever on the strength of an old failure.
+        self.failed_files = 0
         from pypdf import PdfReader
 
         if not self._root.is_dir():
@@ -55,17 +63,28 @@ class PdfConnector:
                 reader = PdfReader(str(path))
             except Exception as e:  # pypdf raises many subclasses; treat any read failure as skip
                 logger.warning("PDF source '%s': cannot open %s: %s", self.source_type, path, e)
+                self.failed_files += 1
                 continue
 
             page_texts: list[str] = []
+            page_failed = False
             for i, page in enumerate(reader.pages):
                 try:
                     page_text = page.extract_text() or ""
                 except Exception as e:
                     logger.debug("page %d of %s: extract_text failed: %s", i, path, e)
+                    page_failed = True
                     continue
                 if page_text.strip():
                     page_texts.append(page_text)
+            if page_failed:
+                # Counted ONCE per file, however many pages failed. The document
+                # is still yielded, but with a shorter body — which produces
+                # fewer chunks, so the tail chunk ids disappear from the
+                # ingester's `seen_ids` and its orphan sweep would delete the
+                # content those pages used to occupy. Being yielded does not
+                # make a partially-read file safe to prune against.
+                self.failed_files += 1
             body = "\n\n".join(page_texts).strip()
 
             if not body:

@@ -40,8 +40,16 @@ class DocxConnector:
         self.source_type = source_type
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
+        self.failed_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
+        # Per-file read failures are counted, not just logged: a skipped file
+        # yields no document, so its chunk ids vanish from `seen_ids` and the
+        # ingester's orphan sweep would delete already-indexed content. The
+        # ingester reads this counter and suppresses pruning when it is
+        # non-zero. Reset per run so a reused instance cannot suppress pruning
+        # forever on the strength of an old failure.
+        self.failed_files = 0
         import docx
 
         if not self._root.is_dir():
@@ -55,6 +63,7 @@ class DocxConnector:
                 document = docx.Document(str(path))
             except Exception as e:  # python-docx raises many types for bad files
                 logger.warning("Docx source '%s': cannot open %s: %s", self.source_type, path, e)
+                self.failed_files += 1
                 continue
 
             parts = [p.text.strip() for p in document.paragraphs if p.text.strip()]

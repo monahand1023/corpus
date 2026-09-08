@@ -72,3 +72,67 @@ def test_dedupes_identical_pdfs(tmp_path: Path) -> None:
     with patch("pypdf.PdfReader", return_value=reader):
         docs = list(PdfConnector(source_type="papers", path=tmp_path).load())
     assert len(docs) == 1
+
+
+# ---------------------------------------------------------------------------
+# failed_files: the optional per-file failure counter the ingester reads to
+# decide whether pruning is safe. See Ingester._reported_failures.
+# ---------------------------------------------------------------------------
+
+def test_unreadable_pdf_increments_failed_files(tmp_path: Path) -> None:
+    (tmp_path / "corrupt.pdf").write_bytes(b"not really a PDF")
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+    with patch("pypdf.PdfReader", side_effect=Exception("malformed")):
+        assert list(conn.load()) == []
+    assert conn.failed_files == 1
+
+
+def test_failed_page_counts_once_even_though_document_is_yielded(tmp_path: Path) -> None:
+    """A partially-read PDF is still unsafe to prune against: the shorter body
+    produces fewer chunks, so the tail chunk ids vanish from seen_ids."""
+    (tmp_path / "partial.pdf").write_bytes(b"%PDF-1.4 fake")
+    good = MagicMock(extract_text=MagicMock(return_value="Readable page."))
+    bad1 = MagicMock(extract_text=MagicMock(side_effect=Exception("bad page")))
+    bad2 = MagicMock(extract_text=MagicMock(side_effect=Exception("bad page")))
+    reader = MagicMock(pages=[good, bad1, bad2], metadata=None)
+
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+    with patch("pypdf.PdfReader", return_value=reader):
+        docs = list(conn.load())
+
+    assert len(docs) == 1, "document should still be yielded"
+    assert conn.failed_files == 1, "two failed pages in one file count once"
+
+
+def test_title_metadata_failure_does_not_count(tmp_path: Path) -> None:
+    """The title falls back to the filename stem; the body is untouched, so the
+    chunk ids are unchanged and pruning stays safe."""
+    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4 fake")
+    reader = MagicMock(pages=[MagicMock(extract_text=MagicMock(return_value="Body text here."))])
+    type(reader).metadata = property(lambda self: (_ for _ in ()).throw(Exception("bad metadata")))
+
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+    with patch("pypdf.PdfReader", return_value=reader):
+        docs = list(conn.load())
+
+    assert len(docs) == 1
+    assert docs[0].title == "doc"
+    assert conn.failed_files == 0
+
+
+def test_failed_files_resets_between_runs(tmp_path: Path) -> None:
+    """A reused connector instance must not suppress pruning forever on the
+    strength of a failure from an earlier run."""
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+
+    with patch("pypdf.PdfReader", side_effect=Exception("locked")):
+        list(conn.load())
+    assert conn.failed_files == 1
+
+    reader = MagicMock(pages=[MagicMock(extract_text=MagicMock(return_value="Now readable."))],
+                       metadata=None)
+    with patch("pypdf.PdfReader", return_value=reader):
+        docs = list(conn.load())
+    assert len(docs) == 1
+    assert conn.failed_files == 0, "counter must reset at the start of load()"

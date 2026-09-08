@@ -35,8 +35,16 @@ class HtmlConnector:
         self.source_type = source_type
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
+        self.failed_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
+        # Per-file read failures are counted, not just logged: a skipped file
+        # yields no document, so its chunk ids vanish from `seen_ids` and the
+        # ingester's orphan sweep would delete already-indexed content. The
+        # ingester reads this counter and suppresses pruning when it is
+        # non-zero. Reset per run so a reused instance cannot suppress pruning
+        # forever on the strength of an old failure.
+        self.failed_files = 0
         import trafilatura
 
         if not self._root.is_dir():
@@ -50,6 +58,7 @@ class HtmlConnector:
                 raw_html = path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
                 logger.debug("cannot read %s: %s", path, e)
+                self.failed_files += 1
                 continue
 
             extracted = trafilatura.extract(

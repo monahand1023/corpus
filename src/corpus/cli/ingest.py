@@ -29,6 +29,14 @@ def main() -> int:
         help="Source name from corpus.toml (repeatable)",
     )
     parser.add_argument("--all", action="store_true", help="Ingest every configured source")
+    parser.add_argument(
+        "--prune-anyway",
+        action="store_true",
+        help=(
+            "Delete orphaned chunks even when the connector reported files it "
+            "could not read. Requires --source; refused with --all."
+        ),
+    )
     parser.add_argument("--config", default=None, help="Path to corpus.toml (default: ./corpus.toml)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -37,6 +45,17 @@ def main() -> int:
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # --prune-anyway forces a destructive sweep past the safety gate, so it is
+    # deliberately not available across every source at once: the operator has
+    # to have looked at which files failed, for a source they named.
+    if args.prune_anyway and args.all:
+        print(
+            "Refusing --prune-anyway with --all: it would force a destructive "
+            "prune across every source. Re-run with --source NAME for the "
+            "specific source whose unreadable files you have reviewed."
+        )
+        return 2
 
     config = load_config_or_exit(args.config)
     if args.all:
@@ -56,7 +75,7 @@ def main() -> int:
         for name in names:
             print(f"=== Ingesting {name} ===")
             try:
-                r = ingester.ingest(name)
+                r = ingester.ingest(name, prune_anyway=args.prune_anyway)
             except (ValueError, OSError, ImportError) as e:
                 # A source that cannot be enumerated (missing directory,
                 # unmounted volume — FileNotFoundError is an OSError subclass)
@@ -72,7 +91,11 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
-            print(f"  orphans deleted:  {r.orphans_deleted:,}")
+            if r.pruning_performed:
+                print(f"  orphans deleted:  {r.orphans_deleted:,}")
+            else:
+                print(f"  files unreadable: {r.files_failed:,}")
+                print("  orphans deleted:  0  (pruning SKIPPED — see warnings above)")
             print(f"  tokens billed:    {r.tokens_used:,}")
             print(f"  elapsed:          {r.elapsed_seconds:.1f}s")
             print()

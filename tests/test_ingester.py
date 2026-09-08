@@ -371,3 +371,201 @@ def test_incomplete_enumeration_does_not_delete_orphans(tmp_path: Path) -> None:
             store.close()
     finally:
         CONNECTOR_REGISTRY.pop("flaky", None)
+
+
+# ---------------------------------------------------------------------------
+# Per-file failure counting gates the prune
+#
+# delete_orphans() removes every stored chunk whose id is absent from seen_ids,
+# scoped by source_type alone. So a file the connector could not read yields no
+# document, and its existing chunks are deleted. These tests pin that a reported
+# read failure suppresses pruning entirely.
+# ---------------------------------------------------------------------------
+
+class _CountingConnector:
+    """Connector that yields some docs and reports N unreadable files."""
+
+    def __init__(self, source_type: str, docs: list[str], failures: int = 0) -> None:
+        self.source_type = source_type
+        self._docs = docs
+        self._failures = failures
+        self.failed_files = 0
+
+    def load(self):
+        self.failed_files = self._failures
+        for key in self._docs:
+            yield SourceDocument(
+                source_type=self.source_type,
+                source_key=key,
+                title=key,
+                raw={"body": f"body of {key}", "path": key},
+            )
+
+
+def _register(name: str, connector: object):
+    CONNECTOR_REGISTRY[name] = lambda cfg: (connector, MarkdownChunker(source_type=name))
+
+
+def _chunk_count(store: ChunkStore, source_type: str) -> int:
+    row = store._conn.execute(
+        "SELECT COUNT(*) AS c FROM chunks WHERE source_type = ?", (source_type,)
+    ).fetchone()
+    return int(row["c"])
+
+
+def test_unreadable_file_preserves_existing_chunks_and_reports_count(tmp_path: Path) -> None:
+    """The core regression: a read failure must not let delete_orphans prune."""
+    try:
+        conn = _CountingConnector("flaky", ["a.txt", "b.txt"])
+        _register("flaky", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "flaky", "type": "flaky", "path": str(tmp_path)}]
+        )
+        first = ing.ingest("flaky")
+        before = _chunk_count(store, "flaky")
+        assert before > 0
+        assert first.files_failed == 0
+        assert first.pruning_performed is True
+
+        # b.txt is now unreadable: connector yields only a.txt and reports 1 failure.
+        conn._docs = ["a.txt"]
+        conn._failures = 1
+        second = ing.ingest("flaky")
+
+        assert second.files_failed == 1
+        assert second.pruning_performed is False
+        assert second.orphans_deleted == 0
+        assert _chunk_count(store, "flaky") == before, "b.txt's chunks were pruned"
+    finally:
+        CONNECTOR_REGISTRY.pop("flaky", None)
+
+
+def test_prune_anyway_forces_the_prune(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("flaky2", ["a.txt", "b.txt"])
+        _register("flaky2", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "flaky2", "type": "flaky2", "path": str(tmp_path)}]
+        )
+        ing.ingest("flaky2")
+        before = _chunk_count(store, "flaky2")
+
+        conn._docs = ["a.txt"]
+        conn._failures = 1
+        result = ing.ingest("flaky2", prune_anyway=True)
+
+        assert result.files_failed == 1
+        assert result.pruning_performed is True
+        assert result.orphans_deleted > 0
+        assert _chunk_count(store, "flaky2") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("flaky2", None)
+
+
+def test_zero_failures_still_prunes_genuine_removals(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("clean", ["a.txt", "b.txt"])
+        _register("clean", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "clean", "type": "clean", "path": str(tmp_path)}]
+        )
+        ing.ingest("clean")
+        before = _chunk_count(store, "clean")
+
+        conn._docs = ["a.txt"]  # b.txt genuinely deleted, no read failure
+        result = ing.ingest("clean")
+
+        assert result.files_failed == 0
+        assert result.pruning_performed is True
+        assert result.orphans_deleted > 0
+        assert _chunk_count(store, "clean") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("clean", None)
+
+
+def test_connector_without_failed_files_attribute_still_prunes(tmp_path: Path) -> None:
+    """Out-of-tree connectors (e.g. a mail consumer's EmailConnector) never set the
+    attribute. They must keep today's behavior exactly."""
+
+    class _LegacyConnector:
+        source_type = "legacy"
+
+        def __init__(self) -> None:
+            self.docs = ["a.txt", "b.txt"]
+
+        def load(self):
+            for key in self.docs:
+                yield SourceDocument(
+                    source_type="legacy", source_key=key, title=key,
+                    raw={"body": f"body of {key}", "path": key},
+                )
+
+    try:
+        conn = _LegacyConnector()
+        _register("legacy", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "legacy", "type": "legacy", "path": str(tmp_path)}]
+        )
+        ing.ingest("legacy")
+        before = _chunk_count(store, "legacy")
+        conn.docs = ["a.txt"]
+        result = ing.ingest("legacy")
+        assert result.files_failed == 0
+        assert result.pruning_performed is True
+        assert _chunk_count(store, "legacy") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("legacy", None)
+
+
+def test_non_integer_failed_files_is_ignored(tmp_path: Path) -> None:
+    """A MagicMock connector's `failed_files` is another Mock, not an int.
+    Only a non-negative int counts as a genuine report."""
+    try:
+        conn = _CountingConnector("mocky", ["a.txt"])
+        conn.failed_files = MagicMock()  # not an int
+        _register("mocky", conn)
+        ing, _store = make_ingester_with_config(
+            tmp_path, [{"name": "mocky", "type": "mocky", "path": str(tmp_path)}]
+        )
+        conn.load = lambda: iter([
+            SourceDocument(source_type="mocky", source_key="a.txt", title="a",
+                           raw={"body": "body", "path": "a.txt"})
+        ])
+        result = ing.ingest("mocky")
+        assert result.files_failed == 0
+        assert result.pruning_performed is True
+    finally:
+        CONNECTOR_REGISTRY.pop("mocky", None)
+
+
+def test_raise_partway_through_iteration_still_does_not_prune(tmp_path: Path) -> None:
+    """Invariant: an exception mid-iteration aborts before delete_orphans."""
+
+    class _RaisingConnector:
+        source_type = "raiser"
+
+        def __init__(self) -> None:
+            self.explode = False
+
+        def load(self):
+            yield SourceDocument(source_type="raiser", source_key="a.txt", title="a",
+                                 raw={"body": "body of a", "path": "a.txt"})
+            if self.explode:
+                raise FileNotFoundError("volume vanished mid-scan")
+            yield SourceDocument(source_type="raiser", source_key="b.txt", title="b",
+                                 raw={"body": "body of b", "path": "b.txt"})
+
+    try:
+        conn = _RaisingConnector()
+        _register("raiser", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "raiser", "type": "raiser", "path": str(tmp_path)}]
+        )
+        ing.ingest("raiser")
+        before = _chunk_count(store, "raiser")
+        conn.explode = True
+        with pytest.raises(FileNotFoundError):
+            ing.ingest("raiser")
+        assert _chunk_count(store, "raiser") == before
+    finally:
+        CONNECTOR_REGISTRY.pop("raiser", None)

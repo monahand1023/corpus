@@ -42,8 +42,16 @@ class MarkdownConnector:
         self.source_type = source_type
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
+        self.failed_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
+        # Per-file read failures are counted, not just logged: a skipped file
+        # yields no document, so its chunk ids vanish from `seen_ids` and the
+        # ingester's orphan sweep would delete already-indexed content. The
+        # ingester reads this counter and suppresses pruning when it is
+        # non-zero. Reset per run so a reused instance cannot suppress pruning
+        # forever on the strength of an old failure.
+        self.failed_files = 0
         if not self._root.is_dir():
             raise FileNotFoundError(
                 f"Markdown source '{self.source_type}': directory not found: {self._root}"
@@ -54,6 +62,7 @@ class MarkdownConnector:
                 text = md_path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
                 logger.debug("cannot read %s: %s", md_path, e)
+                self.failed_files += 1
                 continue
             parsed = parse_markdown(text)
             fm = parsed.frontmatter

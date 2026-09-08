@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 INGEST_BATCH = 256
 
 
+def _reported_failures(connector: object) -> int:
+    """Read a connector's optional per-file failure count.
+
+    `failed_files` is an OPTIONAL connector capability, deliberately not part of
+    the `Connector` protocol: connectors living outside this repository (which
+    register themselves into CONNECTOR_REGISTRY at runtime) predate it and must
+    keep working untouched. An absent attribute therefore means "does not report
+    failures" rather than "had zero failures" — such a connector is not
+    protected by the pruning gate, which is the price of not breaking it.
+
+    Only a non-negative int counts as a report. Test doubles and mocks expose
+    arbitrary attributes, so a bare truthiness or comparison check would raise
+    or silently mis-gate.
+    """
+    raw = getattr(connector, "failed_files", 0)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return 0
+    return raw
+
+
 @dataclass
 class IngestResult:
     source_name: str
@@ -32,6 +52,8 @@ class IngestResult:
     orphans_deleted: int
     tokens_used: int
     elapsed_seconds: float
+    files_failed: int = 0
+    pruning_performed: bool = True
 
 
 class Ingester:
@@ -52,7 +74,7 @@ class Ingester:
         )
         self._owned_store = store is None
 
-    def ingest(self, source_name: str) -> IngestResult:
+    def ingest(self, source_name: str, prune_anyway: bool = False) -> IngestResult:
         source_cfg = self._config.source_by_name(source_name)
         if source_cfg is None:
             raise ValueError(
@@ -100,7 +122,29 @@ class Ingester:
         # its source completely MUST raise (FileNotFoundError for an
         # unreachable root or volume) rather than yield a short list — a partial
         # enumeration here would delete every chunk it failed to yield.
-        orphans = self._store.delete_orphans(source_name, seen_ids)
+        #
+        # PER-FILE COMPLETENESS: a connector may also skip INDIVIDUAL files it
+        # could not read, without raising. Those files yield no document, so
+        # their chunk ids are absent from seen_ids and delete_orphans would
+        # delete them — losing indexed content because a file was momentarily
+        # locked. A connector reports such skips via an optional `failed_files`
+        # counter; when it is non-zero we skip pruning entirely rather than
+        # guess which absences are real. This also covers a file that was read
+        # only PARTIALLY (e.g. a PDF page that failed to extract): the shorter
+        # body produces fewer chunks, so the tail chunk ids vanish from seen_ids
+        # and would be pruned even though the document itself was yielded.
+        failed_files = _reported_failures(connector)
+        prune = failed_files == 0 or prune_anyway
+        if prune:
+            orphans = self._store.delete_orphans(source_name, seen_ids)
+        else:
+            orphans = 0
+            logger.warning(
+                "  %s: %d file(s) could not be fully read; pruning skipped "
+                "(re-run this source with --prune-anyway to prune regardless)",
+                source_name,
+                failed_files,
+            )
 
         return IngestResult(
             source_name=source_name,
@@ -111,6 +155,8 @@ class Ingester:
             orphans_deleted=orphans,
             tokens_used=self._embedder.total_tokens_used - tokens_before,
             elapsed_seconds=time.monotonic() - start,
+            files_failed=failed_files,
+            pruning_performed=prune,
         )
 
     def _flush(self, chunks: list[Chunk]) -> tuple[int, int]:
