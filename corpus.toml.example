@@ -122,6 +122,13 @@ temp_store_memory = true
 #              deletes the extracted copies. The archive itself is never
 #              modified. No extra needed (stdlib zipfile) unless the archive
 #              contents need one (e.g. a zip full of PDFs still needs [pdf]).
+#              By default it also skips vendored-dependency/build-output
+#              members (node_modules, site-packages, .git, dist/build/target
+#              when corroborated by a matching manifest, *.min.js, *.map,
+#              ...) so a deployment bundle's node_modules READMEs don't get
+#              indexed as if they were your own notes. Set
+#              `exclude_dependencies = false` on a [[sources]] block below to
+#              turn this off and index vendored docs on purpose.
 #
 # Adding a new source type? See docs/adding_a_source.md.
 
@@ -166,6 +173,7 @@ path = "~/Documents/notes"
 # name = "archives"
 # type = "zip"
 # path = "~/Documents/zipped-reports"
+# exclude_dependencies = true  # optional; default true, see the zip note above
 
 # Reference patterns that `expand_context` will look for inside a chunk's
 # content, plus that auto-tune BM25 weight when the user's query contains them.

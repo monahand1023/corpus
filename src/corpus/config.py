@@ -136,6 +136,15 @@ class SourceConfig(BaseModel):
     type: str  # which built-in connector to use, e.g. "markdown"
     path: str
     glob: str | None = None
+    # `zip` connector only (every other connector ignores this field, same as
+    # they already ignore `glob`'s zip-specific meaning of "which archives to
+    # find" vs. "which files to find"). When true (the default), members
+    # under a vendored-dependency or build-output directory (`node_modules`,
+    # `site-packages`, `.git`, etc.) or matching an obvious minified/compiled
+    # leaf pattern (`*.min.js`, `*.map`, ...) are excluded before extraction —
+    # see `corpus.connectors.zip._is_dependency_noise`. Set to false to index
+    # a library's vendored docs on purpose.
+    exclude_dependencies: bool = True
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path)).resolve()

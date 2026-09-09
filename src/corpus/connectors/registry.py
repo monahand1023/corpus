@@ -159,6 +159,7 @@ def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
         source_type=cfg.name,
         path=cfg.path,
         glob=cfg.glob or DEFAULT_GLOBS["zip"],
+        exclude_dependencies=cfg.exclude_dependencies,
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 

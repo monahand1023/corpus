@@ -92,6 +92,27 @@ an AppleDouble stub like `__MACOSX/reports/._q3.pdf` still matches the
 land in `failed_files` — which suppresses orphan pruning for the WHOLE
 source, permanently, for files that were never documents.
 
+Dependency and build-output noise (overridable, unlike the packaging noise
+above): measured on a real large multi-archive / many-member sample, 33,644
+members were vendored-dependency or build-output files, not personal
+content -- one deployment-bundle archive's entire 243 "documents" turned out
+to be third-party npm package READMEs (`node_modules/<pkg>/readme.md` and
+the like). Those are real markdown, so unfiltered they match the markdown
+connector, get chunked, embedded, and indexed -- costing embedding tokens
+and actively degrading retrieval, since a search then has to compete against
+hundreds of irrelevant library docs. `_is_dependency_noise` excludes a
+member when any path component is a vendored-dependency/build/VCS directory,
+or the member is itself an obvious minified/compiled leaf file. Given the
+identical treatment as `_is_archive_noise`: not extracted, not type-matched,
+not counted in either counter. UNLIKE the packaging noise above, this is a
+judgment call about content the user might actually want (someone could
+deliberately archive a library's docs), so it's a per-source toggle --
+`SourceConfig.exclude_dependencies`, default on -- rather than an
+unconditional exclusion. See `_UNAMBIGUOUS_DEPENDENCY_DIRS` and
+`_CORROBORATED_BUILD_DIRS` for exactly what's matched and why `dist`,
+`build`, and `target` need a corroborating signal that the other directory
+names don't.
+
 Extension matching, once safely extracted: a member is recognized by any
 accepted spelling of its type, matched case-insensitively — `.htm` alongside
 `.html`, `.markdown` alongside `.md`, and `.PDF`/`.DOCX`-style uppercase from
@@ -216,12 +237,20 @@ def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
 _ARCHIVE_NOISE_BASENAMES = frozenset({".ds_store", "thumbs.db"})
 
 
+def _path_components(member_name: str) -> list[str]:
+    """Split a raw archive member name into path components, tolerant of
+    both `/` (the zip spec) and `\\` (some Windows-authored tools write it
+    anyway) as separators, with empty components (leading/trailing/doubled
+    separators) dropped."""
+    return [p for p in member_name.replace("\\", "/").split("/") if p]
+
+
 def _is_archive_noise(member_name: str) -> bool:
     """True for a member that is archive/OS packaging, not user content —
     see `_ARCHIVE_NOISE_BASENAMES` above. Checked on the raw member name
     (before any path-containment resolution), since these are filtered out
     entirely rather than merely refused."""
-    parts = [p for p in member_name.replace("\\", "/").split("/") if p]
+    parts = _path_components(member_name)
     if not parts:
         return False
     if "__MACOSX" in parts:
@@ -230,6 +259,135 @@ def _is_archive_noise(member_name: str) -> bool:
     if basename.startswith("._"):
         return True
     return basename.lower() in _ARCHIVE_NOISE_BASENAMES
+
+
+# ---------------------------------------------------------------------------
+# Dependency / build-output noise — overridable via
+# `SourceConfig.exclude_dependencies` (default True), unlike the packaging
+# noise above. See the module docstring's "Dependency and build-output
+# noise" section for the real-world numbers that motivated this.
+# ---------------------------------------------------------------------------
+#
+# Split into two tiers by false-positive risk. Matching is always on an
+# EXACT path component, never a substring — `my-node_modules-notes/` and
+# `distribution/` do not match `node_modules`/`dist` — and always
+# case-insensitive: real tooling always lowercases these names, so matching
+# case-insensitively only widens what's caught (a Windows tool, or a manual
+# rezip that changed case, shouldn't defeat the filter) at essentially no
+# false-positive cost, since none of these names is a plausible *intentional*
+# different-case folder name either.
+#
+# Unconditional — excluded regardless of what else is in the archive. None
+# of these plausibly names a real folder in a personal document archive:
+#   node_modules, bower_components  — JS/npm dependency trees
+#   site-packages                   — Python dependency tree
+#   vendor                          — Go/PHP/Ruby dependency-tree convention.
+#     Considered requiring corroboration for this one too — "vendor" alone
+#     is also an ordinary business word ("Vendors/" of invoices is
+#     plausible). Kept unconditional anyway: a *bare lowercase* "vendor"
+#     path component is overwhelmingly the dependency-tree convention in
+#     practice (a real "Vendors" folder is usually capitalized or
+#     multi-word — "vendor-contracts", "Vendor Invoices"), and this filter
+#     is aimed at exactly the archives that skew toward the former.
+#   .git, .svn, .hg                 — VCS metadata, never content
+#   __pycache__, .tox, .venv, venv  — Python build/tooling artifacts
+#   .next, .nuxt                    — framework build-output dirs; the name
+#     alone identifies the framework, not plausible as a personal folder
+#
+# Corroborated-only — `dist`, `build`, and `target` are deliberately NOT on
+# the unconditional list. Each is also a common English word that could
+# plausibly name a real folder in someone's documents (a construction
+# "build" journal, a "target" list, a mailing "dist" list); excluding on the
+# bare name risks silently discarding real documents with no error and no
+# count, which is worse than the noise problem this exists to fix. Each is
+# excluded only when a well-known ecosystem manifest for the matching build
+# tool is ALSO present somewhere in the same archive, at or above the
+# directory containing the flagged folder — a corroborating signal that this
+# really is that ecosystem's build output, not a same-named personal folder
+# that happens to sit alone in the archive. See `_is_dependency_noise`.
+_UNAMBIGUOUS_DEPENDENCY_DIRS = frozenset(
+    {
+        "node_modules",
+        "bower_components",
+        "site-packages",
+        "vendor",
+        ".git",
+        ".svn",
+        ".hg",
+        "__pycache__",
+        ".tox",
+        ".venv",
+        "venv",
+        ".next",
+        ".nuxt",
+    }
+)
+
+# Directory name (lowercase) -> marker filenames (lowercase) whose presence
+# anywhere at or above that directory in the SAME archive corroborates it as
+# build output rather than a same-named personal folder.
+_CORROBORATED_BUILD_DIRS: dict[str, frozenset[str]] = {
+    "dist": frozenset({"package.json"}),
+    "build": frozenset({"package.json", "pyproject.toml", "setup.py"}),
+    "target": frozenset({"cargo.toml", "pom.xml"}),
+}
+
+# Minified/compiled leaf artifacts: never hand-authored content, matched on
+# the basename regardless of which directory they're in — a `dist/app.min.js`
+# inside an uncorroborated `dist/` is still obviously build output by its own
+# name, and `libs/jquery.min.js` vendored directly next to source with no
+# recognizable dependency directory at all is common too. None of these
+# extensions are matched by any connector in `_MEMBER_CONNECTOR_TYPES` today,
+# so filtering them mainly avoids pointless extraction and `skipped_files`
+# inflation for files nothing was ever going to index — cheap insurance
+# against a future connector for one of these types picking them up
+# unfiltered.
+_MINIFIED_LEAF_SUFFIXES = (".min.js", ".min.css", ".map")
+
+
+def _dependency_marker_paths(infos: list[zipfile.ZipInfo]) -> frozenset[str]:
+    """Lowercase, `/`-joined path of every member in the archive (files and
+    directory entries alike) — used only to look up whether a known
+    ecosystem manifest sits at or above a `dist`/`build`/`target` directory
+    before treating it as noise (see `_CORROBORATED_BUILD_DIRS`). Computed
+    once per archive up front, not per member, since every candidate member
+    consults the same lookup set."""
+    return frozenset("/".join(_path_components(info.filename)).lower() for info in infos)
+
+
+def _is_dependency_noise(member_name: str, marker_paths: frozenset[str]) -> bool:
+    """True for a member under a vendored-dependency/build-output directory
+    (`_UNAMBIGUOUS_DEPENDENCY_DIRS`, or `_CORROBORATED_BUILD_DIRS` with a
+    matching marker present in `marker_paths`), or itself an obviously
+    minified/compiled leaf file (`_MINIFIED_LEAF_SUFFIXES`). Only consulted
+    when `ZipConnector`'s `exclude_dependencies` option is on (the default);
+    see the module docstring's "Dependency and build-output noise" section."""
+    parts = _path_components(member_name)
+    if not parts:
+        return False
+
+    lower_parts = [p.lower() for p in parts]
+    for i, part in enumerate(lower_parts):
+        if part in _UNAMBIGUOUS_DEPENDENCY_DIRS:
+            return True
+        markers = _CORROBORATED_BUILD_DIRS.get(part)
+        if markers is None:
+            continue
+        # Any ancestor directory from the archive root down to (and
+        # including) this component's immediate parent, checked for one of
+        # the marker files — covers both a flat layout (manifest sits right
+        # next to dist/build/target) and a monorepo-style layout (manifest
+        # sits at the project root, several directories above).
+        for depth in range(i + 1):
+            prefix = "/".join(lower_parts[:depth])
+            if any(
+                (f"{prefix}/{marker}" if prefix else marker) in marker_paths
+                for marker in markers
+            ):
+                return True
+
+    basename = lower_parts[-1]
+    return basename.endswith(_MINIFIED_LEAF_SUFFIXES)
 
 
 def _disambiguate(target: Path, *, moving: Path | None = None) -> Path:
@@ -319,12 +477,14 @@ class ZipConnector:
         glob: str = "**/*.zip",
         max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES,
         max_members: int = DEFAULT_MAX_MEMBERS,
+        exclude_dependencies: bool = True,
     ):
         self.source_type = source_type
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
         self._max_uncompressed_bytes = max_uncompressed_bytes
         self._max_members = max_members
+        self._exclude_dependencies = exclude_dependencies
         self.failed_files = 0
         self.skipped_files = 0
 
@@ -387,9 +547,18 @@ class ZipConnector:
                 self.skipped_files += 1
                 return []
 
+            # Built once per archive (empty, and never consulted, when the
+            # filter is off) rather than per member — every candidate member
+            # below needs the same lookup set. See `_dependency_marker_paths`.
+            marker_paths = (
+                _dependency_marker_paths(infos) if self._exclude_dependencies else frozenset()
+            )
+
             extract_dir = Path(tempfile.mkdtemp(prefix="corpus-zip-")).resolve()
             try:
-                bomb_free = self._extract_members(zf, infos, extract_dir, archive_key)
+                bomb_free = self._extract_members(
+                    zf, infos, extract_dir, archive_key, marker_paths
+                )
                 if not bomb_free:
                     return []
                 return self._load_extracted(extract_dir, archive_key)
@@ -402,6 +571,7 @@ class ZipConnector:
         infos: list[zipfile.ZipInfo],
         extract_dir: Path,
         archive_key: str,
+        marker_paths: frozenset[str],
     ) -> bool:
         """Write every safe, supported member under `extract_dir`.
 
@@ -413,6 +583,7 @@ class ZipConnector:
         """
         total_written = 0
         noise_ignored = 0
+        dependency_ignored = 0
         for info in infos:
             if info.is_dir():
                 # Nothing is written for a directory-only entry (we create
@@ -427,6 +598,13 @@ class ZipConnector:
                 # in either counter. See `_is_archive_noise`'s docstring for
                 # why this matters more than it looks like it should.
                 noise_ignored += 1
+                continue
+
+            if self._exclude_dependencies and _is_dependency_noise(info.filename, marker_paths):
+                # Same treatment as archive-packaging noise above, just an
+                # overridable judgment call rather than an unconditional one
+                # — see `_is_dependency_noise` and `SourceConfig.exclude_dependencies`.
+                dependency_ignored += 1
                 continue
 
             if info.flag_bits & 0x1:
@@ -543,6 +721,17 @@ class ZipConnector:
                 "not counted in failed_files or skipped_files",
                 self.source_type,
                 noise_ignored,
+                archive_key,
+            )
+        if dependency_ignored:
+            logger.info(
+                "%s: ignored %d dependency/build-output member(s) in '%s' "
+                "(node_modules, site-packages, VCS/build-tool directories, "
+                "minified/map leaf files, etc.) — not documents, not counted "
+                "in failed_files or skipped_files; set exclude_dependencies = "
+                "false on this source to index them anyway",
+                self.source_type,
+                dependency_ignored,
                 archive_key,
             )
         return True

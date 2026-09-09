@@ -38,7 +38,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counter, since an AppleDouble stub otherwise still matches its twin's
   extension glob, reaches the real connector, fails to parse, and lands in
   `failed_files` — which suppresses orphan pruning for the whole source,
-  permanently, for files that were never documents.
+  permanently, for files that were never documents. Vendored-dependency and
+  build-output members get the same before-either-counter treatment, but are
+  overridable (`exclude_dependencies`, default on): any path component that
+  is `node_modules`, `site-packages`, `vendor`, `bower_components`, `.git`/
+  `.svn`/`.hg`, `__pycache__`/`.tox`/`.venv`/`venv`, or `.next`/`.nuxt`, plus
+  `dist`/`build`/`target` when a matching ecosystem manifest
+  (`package.json`/`pyproject.toml`/`setup.py`/`Cargo.toml`/`pom.xml`) is also
+  present in the archive, plus `*.min.js`/`*.min.css`/`*.map` leaf files.
+  Measured on a large multi-archive sample where most members were
+  dependency/build artifacts — one archive's entire 243 "documents" were
+  third-party npm package READMEs that would otherwise have been chunked,
+  embedded, and indexed as if they were the user's own content.
 - **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
   built-in connectors apply and ingests each matching file type as its own
   source, with no `[[sources]]` block to write. `corpus.toml` still supplies the

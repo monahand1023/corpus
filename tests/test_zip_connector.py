@@ -144,6 +144,276 @@ def test_macosx_directory_entry_itself_is_ignored(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dependency / build-output noise (node_modules, site-packages, VCS dirs,
+# minified leaves, ...) -- overridable via `exclude_dependencies`, unlike the
+# packaging noise above.
+# ---------------------------------------------------------------------------
+
+
+def test_node_modules_readme_is_excluded_real_doc_is_kept(tmp_path: Path) -> None:
+    """Real-world trigger: an archive whose vendored `node_modules` tree
+    contains hundreds of markdown READMEs from third-party npm packages --
+    without this filter, every one of those matches the markdown connector
+    and gets indexed as if it were the user's own content, degrading every
+    future search. Exactly one real document should survive, both counters
+    at zero (the noise is excluded outright, not downgraded to skipped)."""
+    _make_zip(
+        tmp_path / "bundle.zip",
+        {
+            "node_modules/example-pkg/README.md": (
+                "# example-pkg\n\nA vendored dependency's own README, not user content."
+            ),
+            "docs/guide.md": "# Guide\n\nReal user-authored content.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"bundle.zip::docs/guide.md"}
+    assert conn.skipped_files == 0
+    assert conn.failed_files == 0
+
+
+def test_node_modules_filter_disabled_yields_both(tmp_path: Path) -> None:
+    """`exclude_dependencies=False` is the escape hatch for someone who
+    deliberately wants a vendored library's docs indexed -- same archive as
+    above, both documents now survive."""
+    _make_zip(
+        tmp_path / "bundle.zip",
+        {
+            "node_modules/example-pkg/README.md": (
+                "# example-pkg\n\nA vendored dependency's own README, not user content."
+            ),
+            "docs/guide.md": "# Guide\n\nReal user-authored content.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path, exclude_dependencies=False)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {
+        "bundle.zip::node_modules/example-pkg/README.md",
+        "bundle.zip::docs/guide.md",
+    }
+
+
+def test_lookalike_directory_names_are_not_excluded(tmp_path: Path) -> None:
+    """The false-positive case that matters: a path component that merely
+    CONTAINS a noise directory's name must not match -- matching is on the
+    exact component, never a substring. `distribution/` in particular must
+    survive even though `dist` (its corroborated-only cousin, see below) is
+    on the noise list."""
+    _make_zip(
+        tmp_path / "lookalikes.zip",
+        {
+            "my-node_modules-notes/idea.txt": "not actually a dependency tree",
+            "distribution/plan.txt": "not actually a build-output directory",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {
+        "lookalikes.zip::my-node_modules-notes/idea.txt",
+        "lookalikes.zip::distribution/plan.txt",
+    }
+    assert conn.skipped_files == 0
+    assert conn.failed_files == 0
+
+
+def test_uppercase_dependency_directory_name_is_still_excluded(tmp_path: Path) -> None:
+    """Decision: directory-name matching is case-insensitive, consistent
+    with this connector's existing extension matching and its
+    `.DS_Store`/`Thumbs.db` handling. Real tooling always lowercases
+    `node_modules`; matching case-insensitively only widens what's caught
+    (a Windows tool, or a manual rezip that changed case) since a real
+    personal folder deliberately named `Node_Modules` is not a realistic
+    case to protect."""
+    _make_zip(
+        tmp_path / "cased.zip",
+        {"Node_Modules/pkg/README.md": "vendored dependency", "notes.txt": "real content"},
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"cased.zip::notes.txt"}
+
+
+def test_vcs_and_tooling_directories_are_excluded(tmp_path: Path) -> None:
+    """Every unconditional entry on the dependency-noise list, exercised
+    together in one archive alongside real content -- mirrors how the
+    AppleDouble/.DS_Store/Thumbs.db test above combines several noise types
+    in one pass. Each noise member is given a `.md` name specifically so
+    that, if the filter ever missed one, it would show up as a leaked
+    document in the set-equality assertion below rather than silently
+    passing for the wrong reason."""
+    _make_zip(
+        tmp_path / "everything.zip",
+        {
+            ".git/config.md": "git internals, never content",
+            "__pycache__/notes.md": "compiled bytecode artifacts tree, never content",
+            ".venv/lib/site-packages/pkg/readme.md": "double-nested for good measure",
+            "vendor/somelib/readme.md": "vendored Go/PHP/Ruby dependency",
+            "bower_components/somelib/readme.md": "vendored bower dependency",
+            "site-packages/pkg/readme.md": "vendored python dependency",
+            ".next/cache/readme.md": "next.js build cache",
+            ".svn/readme.md": "subversion metadata",
+            ".hg/readme.md": "mercurial metadata",
+            ".tox/readme.md": "tox build environment",
+            "venv/readme.md": "python virtualenv, no leading dot",
+            ".nuxt/readme.md": "nuxt build cache",
+            "notes.md": "# Notes\n\nReal user content.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"everything.zip::notes.md"}
+    assert conn.skipped_files == 0
+    assert conn.failed_files == 0
+
+
+def test_dist_without_corroborating_marker_is_kept(tmp_path: Path) -> None:
+    """`dist` is deliberately NOT on the unconditional noise list -- it's a
+    common enough English word (a mailing "dist" list) that the bare name
+    alone isn't a safe signal. With no ecosystem manifest anywhere in the
+    archive, it must be treated as ordinary content."""
+    _make_zip(tmp_path / "mailing.zip", {"dist/subscribers.txt": "mailing list, not a build"})
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"mailing.zip::dist/subscribers.txt"}
+
+
+def test_dist_corroborated_by_sibling_package_json_is_excluded(tmp_path: Path) -> None:
+    """A `package.json` in the same archive corroborates `dist/` as npm
+    build output. `package.json` itself has no matching connector (no JSON
+    type), so it's still counted once in skipped_files -- only the dist/
+    member is treated as noise."""
+    _make_zip(
+        tmp_path / "webapp.zip",
+        {
+            "package.json": '{"name": "example-app"}',
+            "dist/notes.txt": "npm build output, not user content",
+            "README.md": "# example-app\n\nReal project documentation.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"webapp.zip::README.md"}
+    assert conn.skipped_files == 1, "package.json itself: no matching connector, not noise"
+    assert conn.failed_files == 0
+
+
+def test_build_corroborated_by_sibling_pyproject_is_excluded(tmp_path: Path) -> None:
+    _make_zip(
+        tmp_path / "pypkg.zip",
+        {
+            "pyproject.toml": '[project]\nname = "example"',
+            "build/notes.txt": "setuptools build output, not user content",
+            "README.md": "# example\n\nReal project documentation.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"pypkg.zip::README.md"}
+    assert conn.skipped_files == 1, "pyproject.toml itself: no matching connector, not noise"
+
+
+def test_target_corroborated_by_sibling_cargo_toml_is_excluded(tmp_path: Path) -> None:
+    _make_zip(
+        tmp_path / "rustcrate.zip",
+        {
+            "Cargo.toml": '[package]\nname = "example"',
+            "target/notes.txt": "cargo build output, not user content",
+            "README.md": "# example\n\nReal project documentation.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"rustcrate.zip::README.md"}
+    assert conn.skipped_files == 1, "Cargo.toml itself: no matching connector, not noise"
+
+
+def test_dist_corroborated_by_manifest_higher_up_the_tree(tmp_path: Path) -> None:
+    """The corroborating manifest need not be `dist`'s IMMEDIATE sibling --
+    a monorepo with one root `package.json` and several nested
+    `packages/*/dist/` output directories is common, so the marker search
+    walks every ancestor level from the archive root down to `dist`'s
+    parent. The sibling `README.md` inside the same package must survive --
+    only the `dist/` subtree itself is noise."""
+    _make_zip(
+        tmp_path / "monorepo.zip",
+        {
+            "package.json": '{"name": "example-monorepo"}',
+            "packages/example-lib/dist/notes.txt": "npm build output, not user content",
+            "packages/example-lib/README.md": "# example-lib\n\nReal package documentation.",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"monorepo.zip::packages/example-lib/README.md"}
+
+
+def test_minified_and_map_leaf_files_are_ignored(tmp_path: Path) -> None:
+    """`*.min.js`, `*.min.css`, and `*.map` are never hand-authored content,
+    regardless of which directory they're in. None of these extensions
+    matches any connector today, so without this filter they'd still be
+    extracted and counted in skipped_files as "no matching connector" --
+    this connector treats them as noise instead, the same as any other
+    dependency artifact: not extracted, not counted at all."""
+    _make_zip(
+        tmp_path / "assets.zip",
+        {
+            "app.min.js": "console.log('minified')",
+            "app.min.css": "body{margin:0}",
+            "app.js.map": '{"version":3}',
+            "notes.txt": "real content",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"assets.zip::notes.txt"}
+    assert conn.skipped_files == 0, "would be 3 (unclaimed extensions) without this filter"
+    assert conn.failed_files == 0
+
+
+def test_source_config_exclude_dependencies_defaults_true() -> None:
+    from corpus.config import SourceConfig
+
+    cfg = SourceConfig(name="archives", type="zip", path="/tmp")
+    assert cfg.exclude_dependencies is True
+
+
+def test_build_zip_passes_exclude_dependencies_through(tmp_path: Path) -> None:
+    """End-to-end through the real registry-built pipeline: a `corpus.toml`
+    `exclude_dependencies = false` on a `[[sources]]` block must actually
+    reach `ZipConnector`, not just validate on `SourceConfig`."""
+    from corpus.config import SourceConfig
+    from corpus.connectors.registry import build_pipeline
+
+    _make_zip(
+        tmp_path / "bundle.zip",
+        {"node_modules/pkg/README.md": "vendored dependency", "README.md": "real project docs"},
+    )
+
+    cfg = SourceConfig(
+        name="archives", type="zip", path=str(tmp_path), exclude_dependencies=False
+    )
+    connector, _chunker = build_pipeline(cfg)
+    docs = list(connector.load())
+
+    assert {d.source_key for d in docs} == {
+        "bundle.zip::node_modules/pkg/README.md",
+        "bundle.zip::README.md",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Extension aliases and case-insensitivity
 # ---------------------------------------------------------------------------
 
