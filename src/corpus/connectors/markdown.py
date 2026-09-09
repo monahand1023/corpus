@@ -104,6 +104,34 @@ class MarkdownConnector:
             )
 
 
+def _strip_nul(text: str) -> str:
+    """Remove NUL characters from chunk text.
+
+    Every connector routes through `MarkdownChunker` (see
+    `connectors/registry.py` — all 13 `_build_*` functions return one), so
+    this is the single point every chunk of every source type passes
+    through, and the right place for normalization that is not
+    format-specific.
+
+    NUL is never meaningful document content, but real extractions emit it:
+    measured on one archive, 239 chunks carried NUL bytes, all from PDF
+    extraction where a page's font had no usable encoding and the extractor
+    handed back raw bytes as if they were text. It survives into the store
+    and then breaks consumers that treat text as C strings or tokenize it —
+    FTS5 indexing and terminal display both truncate at the first NUL, which
+    silently hides the rest of an otherwise-fine chunk.
+
+    Deliberately NUL only, not all C0 controls: form feed (\x0c) is a real
+    page separator in PDF text and carries structure worth keeping. Stripping
+    is unconditional rather than a rejection gate — chunks around the NUL are
+    frequently good text, and a whole-chunk quality gate measured on the same
+    archive would have discarded recoverable documents (several PDFs there
+    have intact text behind a shifted font encoding, which reads as noise but
+    is not).
+    """
+    return text.replace("\x00", "") if "\x00" in text else text
+
+
 class MarkdownChunker:
     """Splits a markdown SourceDocument into chunks via the shared chunker."""
 
@@ -123,6 +151,7 @@ class MarkdownChunker:
             # Title goes in the first chunk; later chunks get a "[title]" prefix
             # so retrieval results carry their source's name in the chunk text.
             content = f"{title}\n\n{piece}" if i == 0 else f"[{title}]\n\n{piece}"
+            content = _strip_nul(content)
             content = scrub(content)
             metadata = ChunkMetadata(
                 source_type=self.source_type,

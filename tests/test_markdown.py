@@ -131,3 +131,47 @@ def test_cp932_encoded_file_is_decoded_correctly_not_replaced(tmp_path: Path) ->
     assert len(docs) == 1
     assert "会議メモ" in docs[0].raw["body"]
     assert "�" not in docs[0].raw["body"]
+
+
+# --- NUL stripping ----------------------------------------------------------
+#
+# Every connector routes through MarkdownChunker (registry.py's 13 _build_*
+# functions all return one), so this is the single point every chunk of every
+# source type passes through — these guard the whole ingest path, not just
+# markdown.
+
+
+def _chunk_body(tmp_path: Path, body: str) -> list[str]:
+    (tmp_path / "a.md").write_text(body)
+    docs = list(MarkdownConnector(source_type="notes", path=tmp_path).load())
+    return [c.content for c in MarkdownChunker(source_type="notes").chunk(docs[0])]
+
+
+def test_nul_characters_are_stripped_from_chunk_content(tmp_path: Path) -> None:
+    # PDF extraction emits these when a page's font has no usable encoding —
+    # 239 chunks in one real archive. FTS5 indexing and terminal display both
+    # truncate at the first NUL, silently hiding the rest of a good chunk.
+    joined = "".join(_chunk_body(tmp_path, "# A\n\nbefore\x00after"))
+
+    assert "\x00" not in joined
+    assert "before" in joined and "after" in joined
+
+
+def test_nul_stripping_is_reflected_in_the_content_hash(tmp_path: Path) -> None:
+    # The hash drives dedup and the re-embed decision, so it has to be taken
+    # over the text actually stored, not the pre-normalized text.
+    (tmp_path / "a.md").write_text("# A\n\nbody text\x00")
+    dirty = list(MarkdownConnector(source_type="notes", path=tmp_path).load())
+    (tmp_path / "a.md").write_text("# A\n\nbody text")
+    clean = list(MarkdownConnector(source_type="notes", path=tmp_path).load())
+
+    chunker = MarkdownChunker(source_type="notes")
+    assert [c.content_hash for c in chunker.chunk(dirty[0])] == [
+        c.content_hash for c in chunker.chunk(clean[0])
+    ]
+
+
+def test_form_feed_is_preserved(tmp_path: Path) -> None:
+    # Deliberately not stripped alongside NUL: it is a real page separator in
+    # extracted PDF text and carries structure worth keeping.
+    assert "\x0c" in "".join(_chunk_body(tmp_path, "# A\n\npage one\x0cpage two"))
