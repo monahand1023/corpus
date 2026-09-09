@@ -1,0 +1,148 @@
+#!/bin/bash
+# Belt-and-braces: refuse to commit personal-data-shaped files even if
+# someone forces past .gitignore with `git add -f`.
+#
+# corpus is a PUBLIC repo, and it has already once held a real personal
+# document index and a real config in its working directory for weeks --
+# safe only because .gitignore happened to be correct the whole time (see
+# CONTRIBUTING / README for the pattern this protects). This hook is the
+# second independent line of defense: even a correctly-configured
+# .gitignore can be overridden with `-f`, and this catches that.
+#
+# This matches PATHS, not content. Copying a database's bytes to an
+# unblocked filename and committing that will not be caught -- no
+# path-based hook can catch it. This stops accidents and reflexes, not a
+# determined actor.
+#
+# Unlike a fully local-only archive repo, corpus is SUPPOSED to have a git
+# remote (it is a public open-source project) -- this hook intentionally
+# does not check for or block one.
+#
+# Shebang is deliberately #!/bin/bash, not #!/bin/sh: the NUL-delimited
+# parse below needs `read -r -d ''`, a bash builtin extension with no clean
+# POSIX equivalent. A system `/bin/sh` pointing at dash (or any other
+# POSIX-only shell) would hit `read: Illegal option -d`, silently skip
+# every loop iteration, leave every accumulator empty, and fall through to
+# `exit 0` -- permitting whatever is staged. Do not "portabilize" this
+# parse.
+#
+# --no-renames is deliberate: plain `--name-only` does rename detection and
+# reports only the clean destination path, so `git mv real-index.db
+# notes.md` would sail through with the content preserved. --name-status
+# --no-renames reports a rename as a paired D (old path) + A (new path)
+# instead, which is what lets us catch it below.
+#
+# -z is NOT optional. core.quotePath is on by default, so plain
+# --name-status C-quotes any non-ASCII path (and force-quotes one with a
+# TAB, backslash, or newline regardless of core.quotePath), and the
+# trailing quote defeats the anchored patterns below. -z instead emits raw,
+# unquoted status<NUL>path<NUL> pairs, so every path is compared
+# byte-for-byte with no un-quoting step to get wrong. Read it with a
+# NUL-delimited loop from a real file, not a $(...) captured into a
+# variable or heredoc -- bash's command substitution silently truncates at
+# the first NUL byte, which would just reintroduce the same class of bug.
+#
+# corpus.toml is anchored to the repo root ONLY (`^corpus\.toml$`, no
+# leading `(^|/)`): corpus.toml.example is the tracked template and must
+# stay committable, and examples/sample_corpus/corpus.toml is a deliberate,
+# tracked, content-free CI fixture that must stay committable too. A root
+# corpus.toml is the exact mistake being guarded against -- it means a real
+# config, pointing at someone's real data, ended up in the one place this
+# is a public repo. .db files and .env, by contrast, are never correct to
+# commit from ANY path, so they are matched with no such anchor.
+pattern='\.db(-shm|-wal)?$|^corpus\.toml$|(^|/)\.env$'
+
+tmp=$(mktemp) || exit 1
+trap 'rm -f "$tmp"' EXIT
+git diff --cached --name-status --no-renames -z > "$tmp"
+diff_status=$?
+
+# Fail CLOSED, not open, if the diff command itself couldn't tell us what's
+# staged. Checking only `[ -s "$tmp" ]` (file non-empty) is not enough: if
+# `git diff --cached` errors out and writes nothing, "$tmp" stays a 0-byte
+# file, indistinguishable from a genuinely empty diff to that check alone --
+# every accumulator below would stay empty and the hook would fall through
+# to `exit 0`, PERMITTING whatever is staged. A nonzero exit here means we
+# could not determine what's staged at all, which must block, not permit; a
+# genuinely empty diff (exit 0) still falls through to the ordinary exit 0
+# further down.
+if [ "$diff_status" -ne 0 ]; then
+  echo "COMMIT BLOCKED — could not determine what is staged: \`git diff --cached\` exited $diff_status." >&2
+  echo "This must block rather than silently permit the commit." >&2
+  exit 1
+fi
+
+nl='
+'
+added_or_modified_bad=""
+deleted_bad=""
+any_added=""
+records=0
+
+while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+  records=$((records + 1))
+  case "$status" in
+    A | M | T)
+      # T (typechange) alongside A/M: a tracked symlink swapped for a
+      # regular file with real bytes at the same path must be caught the
+      # same way an add or modify would be.
+      if printf '%s\n' "$path" | grep -Eqi "$pattern"; then
+        added_or_modified_bad="${added_or_modified_bad}${path}${nl}"
+      fi
+      ;;
+    D)
+      if printf '%s\n' "$path" | grep -Eqi "$pattern"; then
+        deleted_bad="${deleted_bad}${path}${nl}"
+      fi
+      ;;
+  esac
+  if [ "$status" = "A" ]; then
+    any_added="${any_added}${path}${nl}"
+  fi
+done < "$tmp"
+
+# Fail CLOSED, not open, if the parse itself produced nothing usable. A
+# genuinely empty staged diff (nothing staged) means "$tmp" is a 0-byte
+# file -- that's not a parse failure and must still fall through to exit 0
+# below. But a NON-empty "$tmp" that yielded zero records means the
+# NUL-delimited read loop broke for some reason (wrong interpreter, a
+# future edit that changes the read invocation, etc.) -- in that case every
+# accumulator above is silently empty and every check below would
+# rubber-stamp the commit. That is the fail-open this hook exists to avoid
+# turning into.
+if [ -s "$tmp" ] && [ "$records" -eq 0 ]; then
+  echo "COMMIT BLOCKED — could not parse the staged diff (0 records from a non-empty diff)." >&2
+  echo "This usually means the hook is running under an interpreter that doesn't support" >&2
+  echo "\`read -r -d ''\` (bash-only). Check the shebang is #!/bin/bash and that /bin/bash exists." >&2
+  exit 1
+fi
+
+if [ -n "$added_or_modified_bad" ]; then
+  echo "COMMIT BLOCKED — these look like personal data or credentials, not library code:" >&2
+  printf '%s' "$added_or_modified_bad" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "corpus is a PUBLIC repo. A database, a real corpus.toml, or a .env belongs in a" >&2
+  echo "private consumer repo's own directory (its own config, no public remote) --" >&2
+  echo "never inside corpus itself. If this really is meant to be here, talk to a" >&2
+  echo "maintainer before overriding this hook." >&2
+  exit 1
+fi
+
+# Deleting a flagged file is allowed on its own -- that is how a file
+# committed before these hooks existed gets cleaned up. But a flagged
+# deletion paired with ANY addition in the same commit is what a rename
+# looks like in this diff (D old + A new), so that combination is blocked.
+# A deletion paired only with a modification to some other tracked file (D
+# leak.db + M src/foo.py) is a legitimate cleanup landing alongside a code
+# edit and must be allowed.
+if [ -n "$deleted_bad" ] && [ -n "$any_added" ]; then
+  echo "COMMIT BLOCKED — a flagged file is being removed in the same commit as a new file being added." >&2
+  echo "That is what a rename (git mv) looks like in this diff, and it would carry the content through under a clean name." >&2
+  echo "To remove a flagged file that was committed before these hooks existed, commit the removal by itself:" >&2
+  echo "  unstage everything else, leave only the deletion(s) staged, commit, then stage the rest separately." >&2
+  printf '%s' "$deleted_bad" | sed 's/^/  removed: /' >&2
+  printf '%s' "$any_added" | sed 's/^/  added:   /' >&2
+  exit 1
+fi
+
+exit 0
