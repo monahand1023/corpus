@@ -28,6 +28,21 @@ top_k = 5
 max_per_source_type = 3   # cross-source diversity in result list
 hybrid = true              # combine vector + BM25 via reciprocal rank fusion
 
+[reranker]
+# Settings for the optional local BGE cross-encoder re-ranker (opt in per
+# query/eval run via --rerank; install with `pip install corpus-rag[reranker]`).
+#
+# device: "cpu" (default) or "mps" (Apple Silicon GPU) or any torch device
+# string. Defaults to CPU deliberately, not to auto-detection — on Apple
+# Silicon, letting sentence-transformers pick silently lands on MPS, and
+# corpus has no way to know whether something else (e.g. a long-running MLX
+# job) already has the GPU, and CPU can never contend with another process's
+# GPU work. Measured on an M4 Pro: ~10-12s to rerank a 30-candidate pool on
+# CPU vs. ~4-5s on MPS (~2.7x faster) — neither is sub-second, so budget for
+# this latency either way. Set to "mps" only if you know the GPU is free and
+# want the speedup.
+device = "cpu"
+
 # Each source = one place to read documents from.
 # `name` is a free-form label used everywhere as the chunk's source_type.
 # `type` selects which built-in connector to use.

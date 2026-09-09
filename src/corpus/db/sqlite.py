@@ -200,7 +200,7 @@ class ChunkStore:
             return
         conn.execute("DELETE FROM chunks_fts")
         # Stream the cursor rather than `.fetchall()`: materializing every row
-        # up front measured 2.90s / ~146MB RSS at 72,158 chunks (~8s at 205k).
+        # up front measured 2.90s / ~146MB RSS at ~70k chunks (~8s at 205k).
         # Iterating the cursor pulls rows incrementally instead of holding the
         # whole table in Python memory at once. Writing to chunks_fts /
         # schema_meta (different tables) while this SELECT cursor on `chunks`

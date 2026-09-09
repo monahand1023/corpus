@@ -36,6 +36,17 @@ class RetrieverConfig(BaseModel):
     hybrid: bool = True
 
 
+class RerankerConfig(BaseModel):
+    """Local cross-encoder re-ranker settings (only consulted when a caller
+    passes `--rerank`; `rerank` itself stays a CLI/query-time flag, not a
+    config toggle, so eval/judge can compare on vs. off in one run).
+
+    `device` is explicit on purpose — see corpus/reranker/local.py for why we
+    never let sentence-transformers auto-select MPS on Apple Silicon."""
+
+    device: str = "cpu"
+
+
 class SourceConfig(BaseModel):
     name: str = Field(pattern=SOURCE_TYPE_PATTERN)
     type: str  # which built-in connector to use, e.g. "markdown"
@@ -63,6 +74,7 @@ class CorpusConfig(BaseModel):
     db_path: Path = Path("./corpus.db")
     embedder: EmbedderConfig = Field(default_factory=EmbedderConfig)
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
     references: list[ReferencePattern] = Field(default_factory=list)
 
@@ -84,6 +96,7 @@ class CorpusConfig(BaseModel):
             "db_path": Path(corpus_section.get("db_path", "./corpus.db")),
             "embedder": raw.get("embedder", {}),
             "retriever": raw.get("retriever", {}),
+            "reranker": raw.get("reranker", {}),
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }

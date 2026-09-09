@@ -26,7 +26,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ValueError`/`OSError`, it escaped the CLI's per-source handler too and would
   abort an entire `--all` run. Found by ingesting 3,247 real PDFs, where a
   single encrypted file left the source with zero chunks; after the fix, 2,719
-  documents and 22,444 chunks.
+  documents and tens of thousands of chunks.
 
 ## [0.3.0] - 2026-09-08
 
@@ -75,7 +75,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Broken multilingual full-text search (see "Multilingual / CJK full-text
   search" above) — CJK queries previously matched nothing.
 - FTS index migration streams the cursor instead of `.fetchall()`-ing every
-  row up front (measured 2.90s / ~146MB RSS at 72,158 chunks), and the DB
+  row up front (measured 2.90s / ~146MB RSS at ~70k chunks), and the DB
   connection now sets a 5-second `busy_timeout` so opening the store while an
   MCP server holds it open waits briefly instead of raising `database is
   locked` immediately.
@@ -149,7 +149,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Voyage responds `InvalidRequestError: The max allowed tokens per submitted
   batch is 120000`. Each rejection triggers recursive halving, so a large
   ingest degrades to a fraction of the API's real throughput — observed at
-  0.5 chunks/s against an achievable 146/s on a 1.4M-chunk corpus.
+  0.5 chunks/s against an achievable 146/s on a large corpus.
 
   Packing now uses Voyage's local tokenizer (~2,100 texts/s, no API cost) with
   a 100,000-token ceiling. When the tokenizer is unavailable it falls back to a

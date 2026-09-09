@@ -275,7 +275,7 @@ def main() -> int:
     if args.rerank:
         from corpus.reranker.local import BGEReranker
 
-        reranker = BGEReranker()
+        reranker = BGEReranker(device=config.reranker.device)
 
     retriever = Retriever(
         store=store,

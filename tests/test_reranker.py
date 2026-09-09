@@ -115,8 +115,29 @@ def test_rerank_lazy_load_calls_cross_encoder() -> None:
 
         reranker._ensure_loaded()
 
-    mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3")
+    mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="cpu")
     assert reranker._model is mock_ce_instance
+
+
+# ---------------------------------------------------------------------------
+# 8. Device is explicit: defaults to "cpu", threads through to CrossEncoder
+# ---------------------------------------------------------------------------
+
+def test_device_defaults_to_cpu() -> None:
+    reranker = BGEReranker()
+    assert reranker._device == "cpu"
+
+
+def test_device_threads_through_to_cross_encoder() -> None:
+    mock_st = MagicMock()
+    mock_ce_class = MagicMock()
+    mock_st.CrossEncoder = mock_ce_class
+
+    with patch.dict(sys.modules, {"sentence_transformers": mock_st}):
+        reranker = BGEReranker(device="mps")
+        reranker._ensure_loaded()
+
+    mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="mps")
 
 
 # ---------------------------------------------------------------------------

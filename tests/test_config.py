@@ -111,3 +111,17 @@ def test_defaults_apply(tmp_path: Path) -> None:
     assert config.embedder.dim == 1024
     assert config.retriever.top_k == 5
     assert config.retriever.max_per_source_type == 3
+    assert config.reranker.device == "cpu"
+
+
+def test_reranker_device_override(tmp_path: Path) -> None:
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text("""
+[corpus]
+db_path = "./test.db"
+
+[reranker]
+device = "mps"
+""")
+    config = CorpusConfig.load(cfg)
+    assert config.reranker.device == "mps"

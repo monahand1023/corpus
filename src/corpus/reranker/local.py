@@ -41,17 +41,47 @@ def _rerank_text(c: StoredChunk) -> str:
 
 
 class BGEReranker:
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
+    # Device is explicit and defaults to CPU — never left for
+    # sentence-transformers to auto-select. On Apple Silicon, an unspecified
+    # device silently resolves to MPS (the GPU). corpus is consumed by
+    # long-running local processes (e.g. an overnight MLX vision-captioning
+    # job) that hold the GPU for hours; co-resident MLX/Metal and PyTorch-MPS
+    # processes are a documented source of Metal command-buffer faults. A
+    # search query re-ranking ~40 candidates must never be able to take down
+    # someone else's multi-hour GPU job just because sentence-transformers
+    # found a GPU sitting there.
+    #
+    # Benchmarked 2026-09-08 on an M4 Pro (bge-reranker-v2-m3, real ~18-chunk
+    # candidate pools drawn from a 46k-chunk corpus via corpus-voyage.db):
+    # CPU ~390ms/pair, MPS ~142ms/pair (MPS ~2.7x faster, not the ~1x/"both
+    # sub-second" this module originally assumed — see
+    # .superpowers/sdd/2026-09-09-reranker.md for the full numbers). At the
+    # default rerank_pool_size=30 that's ~10-12s/query on CPU vs. ~4-5s on
+    # MPS — NEITHER device is sub-second here; this model is far heavier than
+    # the ~5ms/pair back-of-envelope estimate that originally motivated "CPU
+    # is fine, default to it." CPU remains the default anyway, on safety
+    # grounds alone: it is the one option that can never contend with a
+    # co-resident GPU job, and that property doesn't get weaker just because
+    # CPU is also slower than hoped. But the latency is real, not
+    # negligible — factor it in before turning `--rerank` on by default
+    # anywhere. Set `[reranker] device = "mps"` in corpus.toml if you know
+    # the GPU is free and want the ~2.7x speedup.
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", device: str = "cpu"):
         self._model_name = model_name
+        self._device = device
         self._model: CrossEncoder | None = None  # lazy
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-        logger.info("loading reranker model %s (first call; ~5s)", self._model_name)
+        logger.info(
+            "loading reranker model %s on device=%s (first call; ~5s)",
+            self._model_name,
+            self._device,
+        )
         from sentence_transformers import CrossEncoder
 
-        self._model = CrossEncoder(self._model_name)
+        self._model = CrossEncoder(self._model_name, device=self._device)
 
     def rerank(
         self,
