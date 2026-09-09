@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from corpus.survey.archives import ArchiveInfo, ArchiveSurveyResult, run_archive_survey
 from corpus.survey.census import BucketStat, CensusResult, run_census
 from corpus.survey.format import human_count, human_size
 
@@ -133,6 +134,92 @@ def _run_census(args: argparse.Namespace) -> int:
     return 0
 
 
+def _archive_to_dict(a: ArchiveInfo) -> dict[str, Any]:
+    return {
+        "path": a.path,
+        "readable": a.readable,
+        "error": a.error,
+        "total_members": a.total_members,
+        "total_declared_bytes": a.total_declared_bytes,
+        "indexable_by_type": dict(a.indexable_by_type),
+        "indexable_total": a.indexable_total,
+        "packaging_noise": a.packaging_noise,
+        "dependency_noise": a.dependency_noise,
+        "encrypted": a.encrypted,
+        "nested_archive_refused": a.nested_archive_refused,
+        "gap": a.gap,
+        "noise_ratio": a.noise_ratio,
+    }
+
+
+def _archive_result_to_dict(result: ArchiveSurveyResult) -> dict[str, Any]:
+    return {
+        "root": result.root,
+        "excludes": list(result.excludes),
+        "default_excludes_applied": result.use_default_excludes,
+        "follows_symlinks": False,
+        "archives": [_archive_to_dict(a) for a in result.archives],
+        "totals": result.totals,
+        "walk": {
+            "permission_errors": result.walk_stats.permission_errors,
+            "stat_errors": result.walk_stats.stat_errors,
+        },
+    }
+
+
+def _run_archives(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 1
+
+    result = run_archive_survey(
+        root,
+        excludes=tuple(args.excludes),
+        use_default_excludes=not args.no_default_excludes,
+    )
+
+    if args.as_json:
+        print(json.dumps(_archive_result_to_dict(result), indent=2))
+        return 0
+
+    print(f"corpus-survey archives: {result.root}")
+    print("Archives are opened read-only; nothing is ever extracted to disk.")
+    t = result.totals
+    print(
+        f"{human_count(t['archive_count'])} archive(s), "
+        f"{human_count(t['unreadable_count'])} unreadable, "
+        f"{human_count(t['total_members'])} member(s), "
+        f"{human_size(t['total_declared_bytes'])} declared."
+    )
+    print(
+        f"  indexable: {human_count(t['indexable_total'])}   "
+        f"gap (no connector): {human_count(t['gap'])}   "
+        f"packaging noise: {human_count(t['packaging_noise'])}   "
+        f"dependency/build noise: {human_count(t['dependency_noise'])}"
+    )
+    print(
+        f"  encrypted (skipped): {human_count(t['encrypted'])}   "
+        f"nested archives (refused): {human_count(t['nested_archive_refused'])}"
+    )
+    print(f"  overall noise ratio (packaging + dependency / total members): {t['overall_noise_ratio']:.0%}")
+
+    print(
+        f"\n  {'archive':<40} {'members':>8} {'noise%':>7} {'indexable':>10} {'gap':>6}  detail"
+    )
+    for a in result.archives:
+        if not a.readable:
+            print(f"  {a.path:<40} {'—':>8}  UNREADABLE: {a.error}")
+            continue
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(a.indexable_by_type.items()))
+        print(
+            f"  {a.path:<40} {human_count(a.total_members):>8} "
+            f"{a.noise_ratio:>6.0%} {human_count(a.indexable_total):>10} "
+            f"{human_count(a.gap):>6}  {detail}"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="corpus-survey", description="Read-only reconnaissance for deciding what to index"
@@ -144,6 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_tree_args(p_census)
     p_census.set_defaults(func=_run_census)
+
+    p_archives = sub.add_parser(
+        "archives", help="Zip archive inspection: contents, noise ratio, without extracting"
+    )
+    _add_common_tree_args(p_archives)
+    p_archives.set_defaults(func=_run_archives)
 
     return parser
 

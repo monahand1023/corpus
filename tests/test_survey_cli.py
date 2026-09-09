@@ -4,6 +4,7 @@ human-readable output, and CLI-level error handling)."""
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -72,3 +73,38 @@ def test_census_exclude_flag_is_repeatable(tmp_path: Path, capsys: pytest.Captur
 def test_no_subcommand_errors(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         main_argv([])
+
+
+def test_archives_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with zipfile.ZipFile(tmp_path / "bundle.zip", "w") as zf:
+        zf.writestr("notes.md", "content")
+        zf.writestr("node_modules/pkg/readme.md", "vendored")
+
+    rc = main_argv(["archives", str(tmp_path), "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["totals"]["archive_count"] == 1
+    assert payload["totals"]["dependency_noise"] == 1
+    assert payload["archives"][0]["indexable_by_type"] == {"markdown": 1}
+
+
+def test_archives_human_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with zipfile.ZipFile(tmp_path / "bundle.zip", "w") as zf:
+        zf.writestr("notes.md", "content")
+
+    rc = main_argv(["archives", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "read-only" in out
+    assert "bundle.zip" in out
+
+
+def test_archives_nonexistent_path_errors_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = main_argv(["archives", str(tmp_path / "nope")])
+
+    assert rc == 1
+    assert "not a directory" in capsys.readouterr().err
