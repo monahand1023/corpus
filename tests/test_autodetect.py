@@ -69,11 +69,16 @@ def test_source_names_are_namespaced_by_folder(tmp_path: Path) -> None:
 
 def test_detected_names_are_valid_source_types(tmp_path: Path) -> None:
     """SourceConfig.name is constrained to ^[a-z][a-z0-9_]*$; a folder called
-    '2024 Reports!' must still yield a usable identifier."""
+    '2024 Reports!' must still yield a usable identifier — and must KEEP its
+    year, since a sibling '2023 Reports!' has to stay distinct from it."""
+    import re
+
     root = tmp_path / "2024 Reports!"
     _touch(root, "x.txt")
     (name,) = [s.name for s in detect_sources(root)]
-    assert name == "reports_text"
+    assert re.match(r"^[a-z][a-z0-9_]*$", name)
+    assert "2024" in name
+    assert "reports" in name
 
 
 def test_missing_directory_raises_file_not_found(tmp_path: Path) -> None:
@@ -92,9 +97,47 @@ def test_empty_directory_detects_nothing(tmp_path: Path) -> None:
     [
         ("Field Notes - 2024", "field_notes_2024"),
         ("Inbox", "inbox"),
-        ("2024 Reports!", "reports"),
-        ("...", "folder"),
     ],
 )
 def test_normalize_source_name(raw: str, expected: str) -> None:
     assert normalize_source_name(raw) == expected
+
+
+# --- collision resistance ---------------------------------------------------
+#
+# Two distinct folders normalizing to one name is data loss, not a cosmetic
+# clash: chunk ids derive from (source_type, source_key, kind, index), so two
+# folders sharing a name AND a filename produce the same chunk id and the
+# second ingest OVERWRITES the first. Nothing is pruned, so neither the
+# blast-radius guard nor the yield-drop check sees it — both runs report one
+# document and look healthy. Demonstrated end to end before this was fixed.
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("2023 Taxes", "2024 Taxes"),  # a leading year used to be stripped
+        ("日本語", "中文"),  # no ASCII letters: both used to become "folder"
+        ("123", "456"),
+        ("...", "   "),
+        ("Field Notes - 2024", "Field Notes - 2025"),
+    ],
+)
+def test_distinct_folders_get_distinct_names(a: str, b: str) -> None:
+    assert normalize_source_name(a) != normalize_source_name(b)
+
+
+@pytest.mark.parametrize(
+    "raw", ["2024 Taxes", "日本語", "123", "...", "   ", "!!!", "2024", "ünïcode"]
+)
+def test_every_name_is_a_legal_source_type(raw: str) -> None:
+    import re
+
+    assert re.match(r"^[a-z][a-z0-9_]*$", normalize_source_name(raw)), raw
+
+
+def test_the_same_folder_name_is_stable_across_calls() -> None:
+    # The digest is derived from the folder name, so a re-ingest of the same
+    # folder must land on the same source and update it rather than creating
+    # a second one beside it.
+    assert normalize_source_name("2024 Taxes") == normalize_source_name("2024 Taxes")

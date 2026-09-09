@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from corpus.config import CorpusConfig, PruningConfig
 from corpus.connectors.registry import build_pipeline
@@ -96,6 +97,19 @@ def _pruning_settings(config: object) -> tuple[float, int]:
     return DEFAULT_MAX_ORPHAN_RATIO, DEFAULT_MIN_CHUNKS_FOR_GUARD
 
 
+def _resolved_path_or_none(source_cfg: Any) -> str | None:
+    """A source's resolved path, or None if it has none to give.
+
+    A source config is not required to expose `resolved_path` — a
+    third-party or synthetic config need not — and a path that cannot be
+    resolved is not worth failing an otherwise-complete ingest over.
+    """
+    try:
+        return str(source_cfg.resolved_path())
+    except (OSError, AttributeError):
+        return None
+
+
 @dataclass
 class IngestResult:
     source_name: str
@@ -124,6 +138,11 @@ class IngestResult:
     # yields while pruning happens to be suppressed deletes nothing, reports
     # no failures, and looks like a completely normal run.
     yield_drop_detail: str | None = None
+    # Set when this source name was last ingested from a DIFFERENT path.
+    # Either a folder moved (harmless) or two different folders normalized to
+    # the same source name (destructive: chunk ids collide and the second
+    # ingest overwrites the first, with nothing pruned for any guard to see).
+    path_change_detail: str | None = None
 
 
 class Ingester:
@@ -147,6 +166,40 @@ class Ingester:
             dim=config.embedder.dim,
         )
         self._owned_store = store is None
+
+    def _check_source_path(self, source_name: str, source_cfg: Any) -> str | None:
+        """Warn when a source name is reused for a different path.
+
+        Chunk ids derive from (source_type, source_key, kind, index). Two
+        folders that normalize to the same source name and contain a file of
+        the same name therefore produce identical chunk ids, and the second
+        ingest OVERWRITES the first's content. Nothing is pruned, so neither
+        the blast-radius guard nor the yield-drop check ever fires — both runs
+        report a document each and look entirely healthy.
+
+        `corpus.util.autodetect.normalize_source_name` keeps distinct folder
+        names apart where it can, but it cannot help when two folders in
+        different places genuinely share a name (`~/a/Notes` and `~/b/Notes`),
+        which is the common case. This is the guard for that.
+
+        A warning rather than a refusal: moving a folder and re-ingesting it
+        is legitimate and produces the identical signal, and refusing it would
+        train the operator to reach for an override reflexively.
+        """
+        current = _resolved_path_or_none(source_cfg)
+        if current is None:
+            return None
+        previous = self._store.last_source_path(source_name)
+        if previous is None or previous == current:
+            return None
+        detail = (
+            f"last ingested from {previous!r}, now reading {current!r}. If the "
+            f"folder moved, nothing to do. If these are two DIFFERENT folders "
+            f"that share a source name, this run has overwritten the other's "
+            f"chunks — give one of them a distinct [[sources]] name."
+        )
+        logger.warning("  %s: %s", source_name, detail)
+        return detail
 
     def _check_yield_drop(self, source_name: str, documents: int, chunks: int) -> str | None:
         """Warn when a source yields far fewer documents than it did last time.
@@ -274,6 +327,7 @@ class Ingester:
                 source_name,
                 skipped_files,
             )
+        path_change_detail = self._check_source_path(source_name, source_cfg)
         yield_drop_detail = self._check_yield_drop(source_name, documents, chunks_seen)
         prune = failed_files == 0 or prune_anyway
 
@@ -305,7 +359,9 @@ class Ingester:
         # Recorded only now, after a complete run: an aborted ingest must not
         # install a low-water mark that makes the next run's collapse look
         # like the new normal.
-        self._store.record_yield(source_name, documents, chunks_seen)
+        self._store.record_yield(
+            source_name, documents, chunks_seen, source_path=_resolved_path_or_none(source_cfg)
+        )
 
         return IngestResult(
             source_name=source_name,
@@ -319,6 +375,7 @@ class Ingester:
             files_failed=failed_files,
             pruning_performed=prune,
             yield_drop_detail=yield_drop_detail,
+            path_change_detail=path_change_detail,
             files_skipped=skipped_files,
             prune_refused=prune_refused,
             prune_refused_detail=prune_refused_detail,

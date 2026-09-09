@@ -328,6 +328,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **Distinct folders no longer collapse onto one source name and overwrite
+  each other.** `normalize_source_name` stripped every leading non-letter, so
+  `2023 Taxes` and `2024 Taxes` both became `taxes`; and it fell back to a
+  constant `"folder"` for any name with no ASCII letters, so every
+  Japanese- or Chinese-named folder became `folder`. Chunk ids derive from
+  `(source_type, source_key, kind, index)`, so two such folders each holding a
+  `notes.txt` produced identical chunk ids and the second ingest silently
+  OVERWROTE the first's content — nothing pruned, nothing deleted, both runs
+  reporting one document and looking entirely healthy. Neither the
+  blast-radius guard nor the yield-drop warning can see an overwrite.
+  Demonstrated end to end, then fixed: a leading digit is prefixed rather than
+  stripped, and a name with no usable ASCII gets a digest of the original.
+- **Ingest warns when a source name is reused for a different path.** The
+  normalizer keeps distinct folder NAMES apart, but cannot help when two
+  folders in different places genuinely share one (`~/a/Notes` and
+  `~/b/Notes`) — the commonest collision of all. The store now records each
+  source's resolved path and the next run reports a change. A warning rather
+  than a refusal: moving a folder is legitimate and produces the identical
+  signal.
 - **Office lock files and renamed legacy documents no longer block orphan
   pruning forever.** A file a connector cannot read is reported as
   `failed_files`, which suppresses pruning — correct for a momentarily-locked

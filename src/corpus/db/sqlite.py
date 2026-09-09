@@ -381,7 +381,12 @@ class ChunkStore:
               source_type TEXT PRIMARY KEY,
               documents INTEGER NOT NULL,
               chunks INTEGER NOT NULL,
-              recorded_at TEXT NOT NULL
+              recorded_at TEXT NOT NULL,
+              -- The resolved path this source last read from. Two different
+              -- folders can normalize to the same source name, and when they
+              -- do the second ingest OVERWRITES the first's chunks rather
+              -- than pruning them, so nothing else in the system notices.
+              source_path TEXT
             );
 
             CREATE TABLE IF NOT EXISTS schema_meta (
@@ -429,6 +434,9 @@ class ChunkStore:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(chunks)")}
         if "context" not in cols:
             conn.execute("ALTER TABLE chunks ADD COLUMN context TEXT")
+        yield_cols = {r["name"] for r in conn.execute("PRAGMA table_info(source_yield)")}
+        if yield_cols and "source_path" not in yield_cols:
+            conn.execute("ALTER TABLE source_yield ADD COLUMN source_path TEXT")
 
     def _guard_embedding_dim(self, conn: sqlite3.Connection | None = None) -> None:
         """If the DB has previous data, the embedding dim must match."""
@@ -985,7 +993,19 @@ class ChunkStore:
         ).fetchone()
         return (row["documents"], row["chunks"]) if row else None
 
-    def record_yield(self, source_type: str, documents: int, chunks: int) -> None:
+    def last_source_path(self, source_type: str) -> str | None:
+        """The resolved path this source last read from, if recorded."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(source_yield)")}
+        if "source_path" not in cols:
+            return None
+        row = self._conn.execute(
+            "SELECT source_path FROM source_yield WHERE source_type = ?", (source_type,)
+        ).fetchone()
+        return row["source_path"] if row else None
+
+    def record_yield(
+        self, source_type: str, documents: int, chunks: int, source_path: str | None = None
+    ) -> None:
         """Record what this source yielded, for the next run to compare against.
 
         Written only after a run completes, so an aborted or crashed ingest
@@ -994,12 +1014,13 @@ class ChunkStore:
         """
         with self._txn() as conn:
             conn.execute(
-                "INSERT INTO source_yield (source_type, documents, chunks, recorded_at) "
-                "VALUES (?, ?, ?, ?) "
+                "INSERT INTO source_yield "
+                "(source_type, documents, chunks, recorded_at, source_path) "
+                "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(source_type) DO UPDATE SET "
                 "documents = excluded.documents, chunks = excluded.chunks, "
-                "recorded_at = excluded.recorded_at",
-                (source_type, documents, chunks, datetime.now(UTC).isoformat()),
+                "recorded_at = excluded.recorded_at, source_path = excluded.source_path",
+                (source_type, documents, chunks, datetime.now(UTC).isoformat(), source_path),
             )
 
     def get_by_source_key(self, source_type: str, source_key: str) -> list[StoredChunk]:

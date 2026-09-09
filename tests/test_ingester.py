@@ -978,3 +978,68 @@ def test_an_aborted_run_does_not_install_a_low_water_mark(tmp_path: Path) -> Non
         assert store.last_yield("yabort") == (100, 100)
     finally:
         CONNECTOR_REGISTRY.pop("yabort", None)
+
+
+# --- source-path change warning ---------------------------------------------
+#
+# Two folders that normalize to one source name, each holding a file of the
+# same name, produce identical chunk ids — so the second ingest OVERWRITES
+# the first's content. Nothing is pruned, so neither the blast-radius guard
+# nor the yield-drop check fires; both runs report a document each and look
+# entirely healthy. This warning is the only signal.
+
+
+def test_path_change_is_reported(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("pchange", ["a.txt"])
+        _register("pchange", conn)
+        first = tmp_path / "one"
+        second = tmp_path / "two"
+        first.mkdir()
+        second.mkdir()
+
+        # Both helpers point at the same tmp_path/test.db, so the second
+        # ingester sees what the first recorded.
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "pchange", "type": "pchange", "path": str(first)}]
+        )
+        ing.ingest("pchange")
+
+        ing2, _ = make_ingester_with_config(
+            tmp_path, [{"name": "pchange", "type": "pchange", "path": str(second)}]
+        )
+        result = ing2.ingest("pchange")
+
+        assert result.path_change_detail is not None
+        assert "one" in result.path_change_detail
+        assert "two" in result.path_change_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("pchange", None)
+
+
+def test_same_path_is_not_reported(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("psame", ["a.txt"])
+        _register("psame", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "psame", "type": "psame", "path": str(tmp_path)}]
+        )
+        ing.ingest("psame")
+        result = ing.ingest("psame")
+
+        assert result.path_change_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("psame", None)
+
+
+def test_first_run_has_no_path_to_compare(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("pfirst", ["a.txt"])
+        _register("pfirst", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "pfirst", "type": "pfirst", "path": str(tmp_path)}]
+        )
+
+        assert ing.ingest("pfirst").path_change_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("pfirst", None)

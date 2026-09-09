@@ -129,6 +129,8 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
+            if r.path_change_detail:
+                print(f"  WARNING: {r.path_change_detail}")
             if r.yield_drop_detail:
                 # Printed, not just logged: the whole point is that this run
                 # otherwise looks completely normal.
