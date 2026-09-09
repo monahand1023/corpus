@@ -258,11 +258,98 @@ corpus-survey census ~/Downloads/export  # what's here, and can corpus index it?
 corpus-survey archives ~/Downloads/export        # what's really inside these zips?
 corpus-survey media ~/Downloads/recordings --rate 15  # how many hours, at 15x realtime?
 corpus-survey overlap ~/Downloads/notes --db archive/corpus.db  # already indexed?
+corpus-index ~/Downloads/export          # survey + plan + confirm + ingest, one command
+corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothing
 ```
+
+## corpus-index: point it at a folder
+
+`corpus-index` is the one-command path from "here's a messy folder" to
+"it's searchable" — the layer above `corpus-survey` and `corpus-ingest
+--path` that does not require knowing either exists:
+
+```bash
+corpus-index ~/Downloads/export
+```
+
+It surveys the directory (reusing `corpus-survey census`), then prints,
+**before touching anything**:
+
+- **the gap** — file types corpus has no connector for, with counts and
+  sizes. This is deliberately the first thing printed: it's the single most
+  useful fact about a real directory, and a user should never have to ask
+  for it separately.
+- **noise** — how many directories (`node_modules`, `.git`, caches,
+  `.photoslibrary` bundles, ...) were excluded by default, plus any
+  loose-file noise (`.DS_Store`, minified JS, ...) found alongside real
+  content.
+- **the plan** — exactly which connectors will run over which files, with
+  per-source file counts, sizes, and an estimated token count (a rough
+  ceiling from file size, not a real tokenizer count — embedding is billed
+  per token, and this is meant to catch a surprise before it happens, not
+  to be exact).
+- optionally, with `--check-overlap corpus.db`, an estimate of how much of
+  the directory is already indexed somewhere else (reusing `corpus-survey
+  overlap`) — so you can skip paying to re-embed content you already have.
+
+Nothing is written or ingested until you confirm (`[y/N]`), pass `--yes`, or
+until you decide `--dry-run` is enough and stop there:
+
+```
+corpus-index: /Users/you/Downloads/export
+
+Gap — no connector (report this first; it's the whole point)
+  extension                 count         size
+  .csv                         913        41.2 MB
+  .pptx                        259        88.0 MB
+  -> 1,172 file(s), 129.2 MB that corpus cannot index today and will NOT
+     be searchable after this run.
+
+Noise (excluded from the plan, not ingested)
+  4 directories excluded by default (node_modules, .git, caches, ...)
+
+Plan — sources that would be written to corpus.toml and ingested
+  name                     type      files       size   est. tokens
+  export_markdown          markdown    340     6.1 MB      1,600,000
+  export_pdf                pdf         52    18.4 MB      4,800,000
+  TOTAL                                392    24.5 MB      6,400,000
+
+Write these sources to corpus.toml and ingest? [y/N]
+```
+
+(Illustrative numbers — run it against your own directory.)
+
+Confirmed sources are **merged into corpus.toml** (`[[sources]]` blocks are
+appended, existing ones are never touched), not ingested transiently — a
+one-off ingest nobody can repeat is a trap, since re-running the same
+command is how you pick up files added or changed later. Re-running
+`corpus-index` on a directory you already indexed is a no-op on the config
+(reported as "already configured") and just re-ingests, picking up changes.
+
+Source names follow the same folder-basename namespacing as `corpus-ingest
+--path` (see below) — `export_pdf`, not `pdf` — but because `corpus-index`
+*persists* sources across runs, two differently-located folders sharing a
+basename (`~/Work/Inbox` and `~/Personal/Inbox`) can now actually collide in
+one corpus.toml, which the transient `--path` mode never had to worry
+about. `corpus-index` refuses that merge outright rather than guessing which
+folder should win — deleting the wrong folder's chunks via `source_type`-scoped
+orphan pruning is a real data-loss footgun — and tells you to pass
+`--name-prefix` or edit corpus.toml by hand.
+
+**Known limitation:** the noise directories excluded from the plan's counts
+above are excluded only from what's *reported* — corpus's file connectors
+don't yet have a directory-exclude mechanism of their own, so if a connector
+type has real files both inside and outside a noise directory under the
+same root, the actual ingest can still pick up what's inside it. Point
+`--path`/`corpus-index`'s target at a narrower directory if a census shows
+heavy noise-directory pruning.
 
 ## Ingesting a folder
 
-Point corpus at a directory and it works out which connectors apply:
+`corpus-ingest --path` is the lower-level primitive `corpus-index` is built
+on: point it at a directory and it works out which connectors apply, same
+detection, same source naming — but ingests immediately, with no plan
+preview and nothing written to corpus.toml:
 
 ```bash
 corpus-ingest --path ~/Documents
@@ -270,7 +357,11 @@ corpus-ingest --path ~/Documents
 
 It detects every supported file type present and ingests each as its own
 source, so you never hand-write a `[[sources]]` block. `corpus.toml` still
-supplies the database path and embedder — only the sources are superseded.
+supplies the database path and embedder — only the sources are superseded,
+and only for this one run; next time you'd run the exact same command again.
+Use this directly when you want a quick, throwaway ingest and don't need the
+gap/noise report or a persisted config entry — `corpus-index` for everything
+else.
 
 Source names are namespaced by folder (`documents_pdf`, `inbox_pdf`), which
 matters: orphan pruning is scoped by source type, so two folders sharing a bare

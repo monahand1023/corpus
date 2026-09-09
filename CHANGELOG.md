@@ -7,6 +7,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`corpus-index` CLI.** One command from "here's a folder" to "it's
+  searchable": surveys the directory (reusing `corpus-survey census`),
+  reports the gap (file types with no connector — printed first, since it's
+  the most useful fact about a real directory) and excluded noise
+  directories, detects which connectors apply (reusing
+  `corpus.util.autodetect.detect_sources`), and shows a plan — per-source
+  file counts, sizes, and an estimated token count (file size ÷ 4, an
+  explicit ceiling estimate, not the embedder's real tokenizer count) —
+  before touching anything. Nothing is written or ingested until the user
+  confirms, passes `--yes`, or the run stops after `--dry-run`. Confirmed
+  sources are merged into corpus.toml as `[[sources]]` blocks
+  (`corpus.planner.merge_sources_into_toml`) rather than ingested
+  transiently, so re-running `corpus-index` on the same directory later
+  picks up new/changed files — merging is idempotent (a source already
+  matching what's in corpus.toml is left alone) and refuses, rather than
+  silently overwrites, when two differently-located folders would collide
+  on the same namespaced source name (`--name-prefix` or a manual edit
+  resolves it). `--check-overlap DB` runs `corpus-survey overlap` against
+  an existing database first, to catch "this is mostly already indexed"
+  before paying to re-embed it. Reuses `corpus.ingester.Ingester` for the
+  actual ingest — no parallel ingestion path. See the "corpus-index: point
+  it at a folder" section of the README for the full worked example and its
+  one documented limitation (connectors don't yet enforce directory
+  excludes at ingest time, only the plan's counts do).
 - **`corpus-survey` CLI.** Read-only reconnaissance for deciding what to
   index, replacing the ad-hoc shell pipelines that work was previously done
   with. Four subcommands: `census` (file-extension counts/sizes split into
