@@ -753,6 +753,13 @@ class ChunkStore:
 
         if not force and len(existing) > min_chunks_for_guard:
             ratio = len(orphans) / len(existing)
+            # `>` and not `>=`, deliberately. A review flagged that a
+            # deletion of exactly max_orphan_ratio is permitted, which is
+            # true. `>=` was tried and reverted: `max_orphan_ratio = 1.0` is
+            # a legal config value documented as "never refuse", and `>=`
+            # inverts it into "refuse every complete deletion" — trading a
+            # marginal gain against exactly 20.000% for a footgun on a
+            # setting someone chose on purpose.
             if ratio > max_orphan_ratio:
                 logger.error(
                     "refusing to prune '%s': %d/%d existing chunks (%.0f%%) would be "

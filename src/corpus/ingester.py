@@ -223,22 +223,38 @@ class Ingester:
         previous = self._store.last_yield(source_name)
         if previous is None:
             return None
-        previous_documents, _ = previous
+        previous_documents, previous_chunks = previous
         max_drop_ratio, min_for_guard = _pruning_settings(self._config)
-        if previous_documents < min_for_guard:
+
+        # Both quantities, because they fail differently. Documents catch a
+        # connector that stops finding files. CHUNKS catch one that still
+        # yields every document but extracts far less from each — a parser
+        # regression, an encoding fallback that returns empty, a container
+        # format that silently stopped opening. That second case leaves the
+        # document count identical and would otherwise pass unremarked while
+        # overwriting good content with thin content.
+        worst: tuple[float, str, int, int] | None = None
+        for label, now, before in (
+            ("documents", documents, previous_documents),
+            ("chunks", chunks, previous_chunks),
+        ):
+            if before < min_for_guard or now >= before:
+                continue
+            ratio = (before - now) / before
+            if ratio <= max_drop_ratio:
+                continue
+            if worst is None or ratio > worst[0]:
+                worst = (ratio, label, now, before)
+        if worst is None:
             return None
-        if documents >= previous_documents:
-            return None
-        dropped = previous_documents - documents
-        ratio = dropped / previous_documents
-        if ratio <= max_drop_ratio:
-            return None
+        ratio, label, now, before = worst
         detail = (
-            f"yielded {documents:,} documents, down from {previous_documents:,} "
-            f"last run ({ratio:.0%} fewer). If that is expected (files genuinely "
-            f"removed), nothing to do. If not, the connector may be under-"
-            f"enumerating -- check for an unreachable path or a skip that "
-            f"silently swallows files."
+            f"yielded {now:,} {label}, down from {before:,} last run "
+            f"({ratio:.0%} fewer). If that is expected (content genuinely "
+            f"removed), re-run with --prune-anyway to accept it as the new "
+            f"baseline. If not, the connector may be under-enumerating or "
+            f"under-extracting -- check for an unreachable path, a parser "
+            f"that started failing, or a skip that silently swallows files."
         )
         logger.warning("  %s: %s", source_name, detail)
         return detail
@@ -356,12 +372,30 @@ class Ingester:
                 failed_files,
             )
 
-        # Recorded only now, after a complete run: an aborted ingest must not
-        # install a low-water mark that makes the next run's collapse look
-        # like the new normal.
-        self._store.record_yield(
-            source_name, documents, chunks_seen, source_path=_resolved_path_or_none(source_cfg)
+        # THE BASELINE ONLY ADVANCES ON A TRUSTED RUN.
+        #
+        # Recording unconditionally turns a single bad run into a ratchet: the
+        # collapsed yield becomes the new normal, so the next equally bad run
+        # compares favourably and says nothing. Repeated losses just under the
+        # guard's ratio then walk a source down to nothing, each step looking
+        # healthy, until it falls under `min_chunks_for_guard` and one run can
+        # delete the remainder.
+        #
+        # So a run that showed ANY anomaly — unreadable files, a refused
+        # prune, a yield drop, a path change — leaves the previous baseline
+        # in place and keeps comparing against it. `--prune-anyway` is the
+        # acknowledgement gesture: it means the operator looked, so it
+        # advances the baseline even when the run was anomalous.
+        anomalous = bool(
+            failed_files or prune_refused or yield_drop_detail or path_change_detail
         )
+        if prune_anyway or not anomalous:
+            self._store.record_yield(
+                source_name,
+                documents,
+                chunks_seen,
+                source_path=_resolved_path_or_none(source_cfg),
+            )
 
         return IngestResult(
             source_name=source_name,

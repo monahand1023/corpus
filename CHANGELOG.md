@@ -328,6 +328,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **A bad ingest no longer becomes the new normal.** The yield baseline was
+  recorded after every run, so one collapsed run reset the bar: the next
+  equally bad run compared favourably and said nothing, and repeated losses
+  just under the prune guard's ratio could walk a source down to nothing —
+  each step looking healthy — until it fell below `min_chunks_for_guard` and a
+  single run could delete the remainder. The baseline now advances only after
+  a run with no unreadable files, no refused prune, no yield drop and no path
+  change. `--prune-anyway` is the acknowledgement gesture that accepts an
+  anomalous run as the new baseline.
+- **The yield check now watches chunks as well as documents.** It recorded
+  both and evaluated only documents, so a parser regression that still yielded
+  every document while extracting a fraction of the text from each passed
+  unremarked — overwriting good content with thin content at an identical
+  document count.
 - **An expensive FTS rebuild is no longer something a constructor does.**
   Opening a store rebuilt a stale full-text index automatically. That is right
   for a small store — a migration you must remember is one that gets skipped —

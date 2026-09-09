@@ -389,6 +389,10 @@ class _CountingConnector:
         self.source_type = source_type
         self._docs = docs
         self._failures = failures
+        # Body text per document, as a template. Tests that need to simulate
+        # a parser regression — every document still yields, each carrying
+        # far less text — shrink this between runs.
+        self._body = "body of {key}"
         self.failed_files = 0
 
     def load(self):
@@ -398,7 +402,7 @@ class _CountingConnector:
                 source_type=self.source_type,
                 source_key=key,
                 title=key,
-                raw={"body": f"body of {key}", "path": key},
+                raw={"body": self._body.replace("{key}", key), "path": key},
             )
 
 
@@ -1043,3 +1047,95 @@ def test_first_run_has_no_path_to_compare(tmp_path: Path) -> None:
         assert ing.ingest("pfirst").path_change_detail is None
     finally:
         CONNECTOR_REGISTRY.pop("pfirst", None)
+
+
+# --- the baseline only advances on a trusted run ----------------------------
+#
+# Recording unconditionally turns one bad run into a ratchet: the collapsed
+# yield becomes the new normal, the next equally bad run compares favourably
+# and says nothing, and repeated losses just under the guard's ratio walk a
+# source down to nothing — every step looking healthy — until it falls below
+# min_chunks_for_guard and a single run can delete the remainder.
+
+
+def test_an_anomalous_run_does_not_become_the_new_baseline(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("ratchet", [f"f{i}.txt" for i in range(100)])
+        _register("ratchet", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "ratchet", "type": "ratchet", "path": str(tmp_path)}]
+        )
+        ing.ingest("ratchet")
+
+        conn._docs = [f"f{i}.txt" for i in range(10)]
+        first = ing.ingest("ratchet")
+        assert first.yield_drop_detail is not None
+
+        # The SAME collapsed yield must still be anomalous, not the new normal.
+        second = ing.ingest("ratchet")
+
+        assert second.yield_drop_detail is not None, "baseline advanced after an anomaly"
+        assert "100" in second.yield_drop_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("ratchet", None)
+
+
+def test_prune_anyway_accepts_the_new_baseline(tmp_path: Path) -> None:
+    # The acknowledgement gesture: the operator looked, so a legitimately
+    # shrunken source stops warning forever.
+    try:
+        conn = _CountingConnector("accept", [f"f{i}.txt" for i in range(100)])
+        _register("accept", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "accept", "type": "accept", "path": str(tmp_path)}]
+        )
+        ing.ingest("accept")
+
+        conn._docs = [f"f{i}.txt" for i in range(10)]
+        ing.ingest("accept", prune_anyway=True)
+        after = ing.ingest("accept")
+
+        assert after.yield_drop_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("accept", None)
+
+
+def test_a_clean_run_still_advances_the_baseline(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("clean_adv", [f"f{i}.txt" for i in range(60)])
+        _register("clean_adv", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "clean_adv", "type": "clean_adv", "path": str(tmp_path)}]
+        )
+        ing.ingest("clean_adv")
+        conn._docs = [f"f{i}.txt" for i in range(200)]
+        ing.ingest("clean_adv")
+
+        assert store.last_yield("clean_adv")[0] == 200
+    finally:
+        CONNECTOR_REGISTRY.pop("clean_adv", None)
+
+
+def test_a_collapse_in_chunks_is_caught_even_when_documents_hold(tmp_path: Path) -> None:
+    """A parser regression yields every document but extracts far less from
+    each. The document count is identical, so a documents-only check passes
+    while thin content overwrites good content."""
+    try:
+        conn = _CountingConnector("thin", [f"f{i}.txt" for i in range(80)])
+        _register("thin", conn)
+        conn._body = "body of {key}. " + "filler sentence. " * 300
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "thin", "type": "thin", "path": str(tmp_path)}]
+        )
+        first = ing.ingest("thin")
+
+        # Same documents, a fraction of the text in each.
+        conn._body = "body of {key}"
+        result = ing.ingest("thin")
+
+        assert result.documents == first.documents, "documents must be unchanged"
+        assert result.chunks_seen < first.chunks_seen
+        assert result.yield_drop_detail is not None
+        assert "chunks" in result.yield_drop_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("thin", None)
