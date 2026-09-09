@@ -368,3 +368,100 @@ def test_a_short_but_meaningful_context_is_still_rejected() -> None:
     from corpus.contextual.contextualizer import is_useful_context
 
     assert is_useful_context("A PR-FAQ.") is False
+
+
+# --- custom_id validity -----------------------------------------------------
+#
+# Anthropic rejects a custom_id outside ^[a-zA-Z0-9_-]{1,64}$ — and rejects
+# the WHOLE batch, after the requests have been built and sent. corpus source
+# keys are file paths, so the id is hashed rather than interpolated. This was
+# a live failure: a real run died on a path-keyed source with a 400, while a
+# sibling archive keyed by hex hashes never hit it, which is exactly how the
+# constraint came to be written in a comment beside the field and enforced
+# nowhere.
+
+
+@pytest.mark.parametrize(
+    "source_key",
+    [
+        "notes/2024/meeting minutes.md",
+        "Archive/Field Notes/会議メモ.pptx",
+        "a_b/c_d/e_f.md",
+        "deep/" * 40 + "leaf.md",
+        "with'quote\"and:colon.txt",
+        "emoji-🎵-in-name.mp3",
+    ],
+)
+def test_custom_id_is_valid_for_any_source_key(source_key: str) -> None:
+    from corpus.contextual.batch_builder import CUSTOM_ID_PATTERN, window_custom_id
+
+    assert CUSTOM_ID_PATTERN.match(window_custom_id("notes", source_key, 0))
+
+
+def test_every_built_request_carries_a_valid_custom_id() -> None:
+    chunks = [
+        StoredChunk(
+            id=f"i{i}",
+            source_type="notes",
+            source_key="Archive/Field Notes/会議メモ (2010).pptx",
+            content=f"chunk {i}",
+            metadata={"chunk_index": i},
+            title="T",
+            url=None,
+        )
+        for i in range(9)
+    ]
+
+    from corpus.contextual.batch_builder import CUSTOM_ID_PATTERN
+
+    requests = build_batch_requests(chunks, {chunks[0].source_key: "body"}, window_size=4)
+
+    assert len(requests) == 3
+    for request in requests:
+        assert CUSTOM_ID_PATTERN.match(request["custom_id"]), request["custom_id"]
+
+
+def test_distinct_source_keys_never_share_an_id() -> None:
+    # Sanitizing instead of hashing would collapse "a/b.md" and "a_b.md" onto
+    # one id and apply one document's contexts to another's chunks.
+    from corpus.contextual.batch_builder import window_custom_id
+
+    ids = {
+        window_custom_id("notes", "a/b.md", 0),
+        window_custom_id("notes", "a_b.md", 0),
+        window_custom_id("notes", "a-b.md", 0),
+        window_custom_id("other", "a/b.md", 0),
+        window_custom_id("notes", "a/b.md", 1),
+    }
+
+    assert len(ids) == 5
+
+
+def test_the_id_is_stable_across_calls() -> None:
+    from corpus.contextual.batch_builder import window_custom_id
+
+    assert window_custom_id("notes", "x/y.md", 2) == window_custom_id("notes", "x/y.md", 2)
+
+
+def test_window_chunk_ids_round_trips_a_hashed_id() -> None:
+    # The old implementation parsed the id with split("_"), which was already
+    # wrong for any source_key containing an underscore.
+    chunks = [
+        StoredChunk(
+            id=f"i{i}",
+            source_type="notes",
+            source_key="has_underscores/in_path.md",
+            content=f"c{i}",
+            metadata={"chunk_index": i},
+            title="T",
+            url=None,
+        )
+        for i in range(6)
+    ]
+
+    from corpus.contextual.batch_builder import window_chunk_ids
+
+    requests = build_batch_requests(chunks, {chunks[0].source_key: "b"}, window_size=4)
+    first = window_chunk_ids(chunks, requests[0]["custom_id"], window_size=4)
+
+    assert first == ["i0", "i1", "i2", "i3"]

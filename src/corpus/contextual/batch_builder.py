@@ -8,7 +8,9 @@ response fits Haiku's output limit.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any
@@ -46,21 +48,51 @@ CONTEXT_TOOL = {
 }
 
 
+CUSTOM_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def window_custom_id(source_type: str, source_key: str, window_index: int) -> str:
+    """A batch custom_id for one window: valid for any source_key, always.
+
+    Anthropic rejects anything outside `^[a-zA-Z0-9_-]{1,64}$`, and rejects the
+    whole batch rather than the offending request. Source keys are file paths,
+    so they are hashed rather than sanitized — sanitizing would collapse
+    `a/b.md` and `a_b.md` onto one id and silently apply one document's
+    contexts to another's chunks.
+    """
+    digest = hashlib.sha256(f"{source_type}\x00{source_key}\x00{window_index}".encode()).hexdigest()
+    return f"w{window_index}_{digest[:32]}"
+
+
 def _iter_windows(
     chunks: list[StoredChunk], window_size: int
 ) -> Iterator[tuple[str, list[StoredChunk]]]:
     """SINGLE SOURCE OF TRUTH for windowing: yield (custom_id, [chunk]) per window.
 
-    Both the request builder and the persisted result-mapping derive from this, so
-    a custom_id always maps to exactly the chunks that were sent in that request.
-    custom_id = "{source_type}_{source_key}_{window_index}"."""
+    Both the request builder and the persisted result-mapping derive from this,
+    so a custom_id always maps to exactly the chunks that were sent in that
+    request.
+
+    The id is a hash, NOT the source_key. Anthropic requires custom_id to match
+    `^[a-zA-Z0-9_-]{1,64}$`, and corpus source_keys are file paths — slashes,
+    dots, spaces, non-ASCII. Interpolating one produced a 400 that failed the
+    ENTIRE batch, and only after the request had been built and sent. A sibling
+    archive keyed by hex hashes never hit it, which is exactly why it survived
+    review: the constraint was written in a comment next to the field and
+    nothing enforced it.
+
+    Hashing means the id carries no meaning, which is fine — the mapping from
+    id to chunk ids is persisted at submit time and is what results are applied
+    through. It is deterministic so the same window yields the same id across
+    runs.
+    """
     by_key: dict[tuple[str, str], list[StoredChunk]] = defaultdict(list)
     for ch in chunks:
         by_key[(ch.source_type, ch.source_key)].append(ch)
     for (stype, skey), key_chunks in by_key.items():
         key_chunks.sort(key=lambda c: (c.metadata or {}).get("chunk_index", 0))
         for w, start in enumerate(range(0, len(key_chunks), window_size)):
-            yield f"{stype}_{skey}_{w}", key_chunks[start : start + window_size]
+            yield window_custom_id(stype, skey, w), key_chunks[start : start + window_size]
 
 
 def _chunks_block(window_chunks: list[StoredChunk]) -> str:
@@ -123,18 +155,26 @@ def build_window_mapping(chunks: list[StoredChunk], window_size: int = DEFAULT_W
     return {cid: [c.id for c in window] for cid, window in _iter_windows(chunks, window_size)}
 
 
-def window_chunk_ids(chunks: list[StoredChunk], custom_id: str, window_size: int = DEFAULT_WINDOW_SIZE) -> list[str]:
-    """LEGACY re-derivation of a custom_id's chunk IDs from a chunk list. Correct
-    only when `chunks` matches the set used at build time — prefer the persisted
-    build_window_mapping for cross-run applies. Kept for one-off batch recovery."""
-    parts = custom_id.split("_")
-    stype, skey, w = parts[0], "_".join(parts[1:-1]), int(parts[-1])
-    key_chunks = sorted(
-        [c for c in chunks if c.source_type == stype and c.source_key == skey],
-        key=lambda c: (c.metadata or {}).get("chunk_index", 0),
-    )
-    start = w * window_size
-    return [c.id for c in key_chunks[start : start + window_size]]
+def window_chunk_ids(
+    chunks: list[StoredChunk], custom_id: str, window_size: int = DEFAULT_WINDOW_SIZE
+) -> list[str]:
+    """Chunk ids for a custom_id, re-derived from a chunk list.
+
+    Correct only when `chunks` matches the set used at build time; prefer the
+    mapping persisted at submit time (`build_window_mapping`) for cross-run
+    applies. Kept for one-off batch recovery.
+
+    Re-derives by rebuilding the windows and matching the id, rather than
+    parsing the id apart. The id used to be `{source_type}_{source_key}_{w}`
+    and was parsed with `split("_")` — which was already wrong for any
+    source_key containing an underscore, and became wrong for every id once
+    the id became a hash. Going through `_iter_windows` means this function
+    cannot disagree with what was actually sent.
+    """
+    for candidate_id, window in _iter_windows(chunks, window_size):
+        if candidate_id == custom_id:
+            return [c.id for c in window]
+    return []
 
 
 def parse_batch_result(tool_input: dict[str, Any], window_chunk_ids: list[str]) -> dict[str, str]:
