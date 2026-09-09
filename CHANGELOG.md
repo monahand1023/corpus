@@ -15,6 +15,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `inbox_pdf`) because orphan pruning is scoped by source type — two folders
   sharing a bare `pdf` name in one database would delete each other's chunks.
   Cannot be combined with `--source` or `--all`.
+- **`ChunkStore(path, read_only=True)`.** Opens the store through a `mode=ro`
+  SQLite URI and never runs the FTS schema migration; any mutating method call
+  raises a clear `ReadOnlyStoreError` naming the cause. `corpus-mcp` and
+  `corpus-query` now open the store this way, since neither ever writes to it.
+  Closes a real footgun: opening a store — including a *backup*, to inspect
+  its pre-migration state — silently ran a schema migration as a side effect,
+  rewriting the file (626 MB → 679 MB on a ~70k-chunk store) with no warning
+  and no way to opt out. A migration that does run against a store with
+  existing chunks is now logged at WARNING (not INFO) with the path, before
+  and after, including the row count rebuilt.
 
 ### Fixed
 - **One unreadable PDF no longer aborts an entire source.** `pypdf` and
