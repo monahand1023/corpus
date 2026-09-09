@@ -148,10 +148,10 @@ def test_plain_text_body_survives_unchanged(tmp_path: Path) -> None:
     # frequently Japanese in this archive.
     _archive(
         tmp_path,
-        {f"{MESSAGE_ROOT}s/f/message_1.xml": _message(body="本日トレーニング完了しております。")},
+        {f"{MESSAGE_ROOT}s/f/message_1.xml": _message(body="ご確認のほどよろしくお願いいたします。")},
     )
 
-    assert "本日トレーニング完了しております。" in _load(tmp_path)[0].raw["body"]
+    assert "ご確認のほどよろしくお願いいたします。" in _load(tmp_path)[0].raw["body"]
 
 
 # --- quoted reply history --------------------------------------------------
@@ -162,7 +162,7 @@ def test_plain_text_body_survives_unchanged(tmp_path: Path) -> None:
     [
         "From: Someone <s@example.com>",
         "-----Original Message-----",
-        "差出人: 木下",
+        "差出人: 山田",
         "On Tuesday, someone wrote:",
         "____________________________",
     ],

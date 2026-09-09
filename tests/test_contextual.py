@@ -358,7 +358,7 @@ def test_a_real_context_is_accepted() -> None:
     from corpus.contextual.contextualizer import is_useful_context
 
     assert is_useful_context(
-        "From the July 2015 meeting minutes thread discussing Seller of Record changes."
+        "From the July 2015 meeting minutes thread, the section on billing changes."
     )
 
 

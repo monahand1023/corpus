@@ -269,12 +269,12 @@ def test_a_tag_container_that_raises_for_everything_yields_empty() -> None:
 
 
 def test_a_mixed_playlist_folder_is_titled_by_its_directory(tmp_path: Path) -> None:
-    # A wedding set, a singles rip, a playlist — most tracks disagree about
+    # An event set, a singles rip, a playlist — most tracks disagree about
     # the album, and naming the folder after whichever tag was least rare
-    # gives a title nobody will search for. Measured on a real library: a
-    # karaoke folder titled "KARAOKE NIGHT VOL 3 — AoîñÈµ (2007/09/24 6-001",
-    # inherited from one file's corrupt tag.
-    folder = tmp_path / "Weddings" / "Dan's Songs"
+    # gives a title nobody will search for. Measured on a real library, one
+    # such folder inherited a mojibake album tag from a single corrupt file
+    # and was titled with it.
+    folder = tmp_path / "Playlists" / "Party Mix"
     # Four tracks, four different albums: the commonest tag covers a quarter
     # of the folder. (Exactly half is deliberately NOT mixed — a two-disc set
     # tagged "(Disc 1)"/"(Disc 2)" splits that way and is still one record.)
@@ -284,7 +284,7 @@ def test_a_mixed_playlist_folder_is_titled_by_its_directory(tmp_path: Path) -> N
 
     doc = _load(tmp_path)[0]
 
-    assert "Dan's Songs" in doc.title
+    assert "Party Mix" in doc.title
     assert "Mixed folder" in doc.raw["body"]
 
 

@@ -622,7 +622,7 @@ def _build_raw_zip(path: Path, members: list[tuple[bytes, bytes, int]]) -> Path:
 def test_utf8_filename_without_flag_bit_is_repaired(tmp_path: Path) -> None:
     """The measured real-world case: a zip tool wrote UTF-8 filename bytes
     but never set the 0x800 flag, so zipfile misdecoded it as CP437."""
-    real_name = "Finances/18-20期PLフォーマット.txt"
+    real_name = "reports/第3四半期レポート.txt"
     _build_raw_zip(
         tmp_path / "archive.zip",
         [(real_name.encode("utf-8"), b"quarterly figures", 0)],
@@ -636,7 +636,7 @@ def test_utf8_filename_without_flag_bit_is_repaired(tmp_path: Path) -> None:
 def test_shift_jis_filename_without_flag_bit_is_repaired(tmp_path: Path) -> None:
     """Older Japanese-locale tools wrote Shift-JIS (CP932) filename bytes,
     not UTF-8 — the second repair tier."""
-    real_name = "legacy/予算_FY13.txt"
+    real_name = "legacy/売上集計_FY13.txt"
     _build_raw_zip(
         tmp_path / "archive.zip",
         [(real_name.encode("cp932"), b"budget figures", 0)],
@@ -680,7 +680,7 @@ def test_repair_filename_encoding_unit() -> None:
         info.flag_bits = flag_bits
         return info
 
-    real_name = "Finances/18-20期PLフォーマット.txt"
+    real_name = "reports/第3四半期レポート.txt"
     mojibake = real_name.encode("utf-8").decode("cp437")
     assert _repair_filename_encoding(_info(mojibake, 0)) == real_name
 

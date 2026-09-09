@@ -48,12 +48,12 @@ def test_person_carries_name_company_and_every_contact_method(tmp_path: Path) ->
         tmp_path,
         "A:ABPerson.abcdp",
         {
-            "First": "Chris",
-            "Last": "Hackett",
-            "Organization": "Ring Customer Service",
+            "First": "Robin",
+            "Last": "Fairweather",
+            "Organization": "Northwind Support",
             "JobTitle": "Support Lead",
             "Phone": _multi(("_$!<Mobile>!$_", "+819000000000"), ("", "555-0100")),
-            "Email": _multi(("_$!<Work>!$_", "chris@example.com")),
+            "Email": _multi(("_$!<Work>!$_", "robin@example.com")),
         },
     )
 
@@ -61,11 +61,11 @@ def test_person_carries_name_company_and_every_contact_method(tmp_path: Path) ->
 
     assert len(docs) == 1
     body = docs[0].raw["body"]
-    assert docs[0].title == "Chris Hackett"
-    assert "Support Lead, Ring Customer Service" in body
+    assert docs[0].title == "Robin Fairweather"
+    assert "Support Lead, Northwind Support" in body
     assert "Phone (Mobile): +819000000000" in body
     assert "555-0100" in body
-    assert "Email (Work): chris@example.com" in body
+    assert "Email (Work): robin@example.com" in body
 
 
 def test_addresses_are_assembled_in_reading_order(tmp_path: Path) -> None:
@@ -78,10 +78,10 @@ def test_addresses_are_assembled_in_reading_order(tmp_path: Path) -> None:
                 (
                     "_$!<Home>!$_",
                     {
-                        "Street": "木月住吉町23-8-101",
-                        "City": "川崎市中原区",
-                        "State": "神奈川県",
-                        "ZIP": "211-0021",
+                        "Street": "さくら町1-2-3",
+                        "City": "港区",
+                        "State": "東京都",
+                        "ZIP": "100-0001",
                         "Country": "Japan",
                         "CountryCode": "jp",
                     },
@@ -92,7 +92,7 @@ def test_addresses_are_assembled_in_reading_order(tmp_path: Path) -> None:
 
     body = _load(tmp_path)[0].raw["body"]
 
-    assert "Address (Home): 木月住吉町23-8-101, 川崎市中原区, 神奈川県, 211-0021, Japan" in body
+    assert "Address (Home): さくら町1-2-3, 港区, 東京都, 100-0001, Japan" in body
     assert "CountryCode" not in body  # an internal field, not part of the address
 
 

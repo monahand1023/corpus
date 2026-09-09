@@ -220,12 +220,12 @@ class MusicConnector:
             t["artist"] for t in tracks
         )
         # A folder where most tracks disagree about the album is a playlist,
-        # a rip of assorted singles, or a wedding set — not a record. Naming
+        # a rip of assorted singles, or an event set — not a record. Naming
         # it after whichever tag happened to be least rare produces a title
-        # nobody will ever search for (measured: a karaoke wedding folder
-        # titled "KARAOKE NIGHT VOL 3 — AoîñÈµ (2007/09/24 6-001", inherited
-        # from one file's corrupt tag). The folder's own name is what the
-        # person who made it chose, and is what they would search for.
+        # nobody will ever search for; measured on a real library, one such
+        # folder inherited a mojibake album tag from a single corrupt file
+        # and was titled with it. The folder's own name is what the person
+        # who made it chose, and is what they would search for.
         mixed = bool(album) and album_share < 0.5 and len(tracks) > 2
         if mixed:
             album = directory.name
