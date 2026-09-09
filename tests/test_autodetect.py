@@ -54,7 +54,7 @@ def test_source_names_are_namespaced_by_folder(tmp_path: Path) -> None:
     """Two folders must NOT share a source_type. delete_orphans is scoped by
     source_type alone, so a bare `pdf` name would make ingesting the second
     folder delete the first folder's chunks."""
-    a = tmp_path / "Documents - Local"
+    a = tmp_path / "Field Notes - 2024"
     b = tmp_path / "Inbox"
     _touch(a, "one.pdf")
     _touch(b, "two.pdf")
@@ -63,7 +63,7 @@ def test_source_names_are_namespaced_by_folder(tmp_path: Path) -> None:
     name_b = detect_sources(b)[0].name
 
     assert name_a != name_b, "distinct folders must get distinct source names"
-    assert name_a == "documents_local_pdf"
+    assert name_a == "field_notes_2024_pdf"
     assert name_b == "inbox_pdf"
 
 
@@ -90,7 +90,7 @@ def test_empty_directory_detects_nothing(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("Documents - Local", "documents_local"),
+        ("Field Notes - 2024", "field_notes_2024"),
         ("Inbox", "inbox"),
         ("2024 Reports!", "reports"),
         ("...", "folder"),

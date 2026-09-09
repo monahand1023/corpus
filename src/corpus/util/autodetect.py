@@ -23,7 +23,7 @@ def normalize_source_name(name: str) -> str:
 
     `SourceConfig.name` is constrained to `^[a-z][a-z0-9_]*$` because it is used
     as a filename component, a table value, and an MCP schema enum. A folder
-    called "Documents - Local" therefore becomes `documents_local`.
+    called "Field Notes - 2024" therefore becomes `field_notes_2024`.
     """
     norm = re.sub(r"[^a-z0-9_]+", "_", name.strip().lower())
     norm = re.sub(r"^[^a-z]+", "", norm)
@@ -34,7 +34,7 @@ def normalize_source_name(name: str) -> str:
 def detect_sources(path: Path | str) -> list[SourceConfig]:
     """Return one SourceConfig per connector type that has files under `path`.
 
-    Source names are namespaced by folder — `documents_local_pdf`, not `pdf`.
+    Source names are namespaced by folder — `field_notes_2024_pdf`, not `pdf`.
     This is not cosmetic. `delete_orphans` is scoped by `source_type` alone with
     no per-document granularity, so two folders sharing the name `pdf` in one
     database would make ingesting the second delete every chunk from the first.
