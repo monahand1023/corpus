@@ -7,6 +7,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`pptx` connector.** Uses `python-pptx`. One deck becomes one
+  SourceDocument with one markdown `##` section per slide, so a retrieval
+  hit can identify which slide it came from; small adjacent slides still get
+  packed together by the shared markdown chunker's own coalescing, same as
+  xlsx's per-sheet sections. Extracts slide text AND speaker notes — notes
+  are not an afterthought here, since a deck's notes routinely carry the
+  actual narrative a slide's bullet fragments only gesture at. Walks tables
+  and recurses into grouped shapes (`MSO_SHAPE_TYPE.GROUP`) so text nested
+  inside a group isn't silently dropped. A slide with a title but no other
+  content still gets a one-line section (section-divider slides are real,
+  searchable structure); a slide with nothing extractable at all is dropped,
+  and a deck where every slide is like that (image-only) is skipped
+  entirely, same treatment as an empty docx. Legacy binary `.ppt`
+  (OLE2/CFBF) is a fundamentally different container format `python-pptx`
+  can never read — and can't be told apart from a genuinely corrupt `.pptx`
+  by the exception it raises alone (verified: both raise the identical
+  `PackageNotFoundError`), so this connector checks the OLE2 magic bytes
+  directly before ever calling into `python-pptx` and counts a match in
+  `skipped_files` (permanent — the bytes won't change on a retry) rather
+  than `failed_files` (possibly transient — corrupted mid-write, a
+  genuinely malformed `.pptx`). The default glob is `**/*.pptx` only (like
+  docx's `.doc`, a `.ppt` file is invisible unless a glob is deliberately
+  widened or a file was misnamed into a `.pptx` glob).
 - **`zip` connector.** Makes documents inside `.zip` archives searchable by
   extracting each archive to a temp directory, re-running the existing
   per-file-type connectors (`pdf`, `docx`, `xlsx`, `html`, `markdown`, `text`,

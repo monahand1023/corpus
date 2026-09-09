@@ -117,6 +117,10 @@ temp_store_memory = true
 #   docx     — Word documents via python-docx; install: `pip install corpus-rag[docx]`
 #   xlsx     — Excel workbooks via openpyxl; install: `pip install corpus-rag[xlsx]`
 #   rtf      — Rich Text Format via striprtf; install: `pip install corpus-rag[rtf]`
+#   pptx     — PowerPoint decks via python-pptx; install: `pip install corpus-rag[pptx]`.
+#              Slide text AND speaker notes, one section per slide. Legacy binary
+#              `.ppt` is a different container format entirely and is skipped, not
+#              retried, if one is ever found under a `.pptx` glob.
 #   zip      — `.zip` archives (default glob: **/*.zip); extracts to a temp dir,
 #              re-runs the connectors above by file type found inside, then
 #              deletes the extracted copies. The archive itself is never
@@ -167,6 +171,11 @@ path = "~/Documents/notes"
 # [[sources]]
 # name = "rtf_notes"
 # type = "rtf"
+# path = "~/Documents"
+
+# [[sources]]
+# name = "presentations"
+# type = "pptx"
 # path = "~/Documents"
 
 # [[sources]]

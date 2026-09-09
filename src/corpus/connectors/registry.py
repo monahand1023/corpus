@@ -28,6 +28,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "xlsx": "**/*.xlsx",
     "rtf": "**/*.rtf",
     "zip": "**/*.zip",
+    "pptx": "**/*.pptx",
 }
 
 
@@ -146,6 +147,24 @@ def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_pptx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    try:
+        import pptx  # noqa: F401
+
+        from corpus.connectors.pptx import PptxConnector
+    except ImportError as e:
+        raise ImportError(
+            "Pptx connector requires the [pptx] extra. "
+            "Install with `pip install corpus-rag[pptx]` or `uv add python-pptx`."
+        ) from e
+    connector = PptxConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["pptx"],
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard here, unlike the factories above: zip.py depends only on
     # the stdlib `zipfile`. It composes the OTHER factories in this dict at
@@ -173,6 +192,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
     "zip": _build_zip,
+    "pptx": _build_pptx,
 }
 
 

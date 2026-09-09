@@ -136,7 +136,7 @@ Ingestion is **idempotent and incremental** — re-running it:
 
 So the update loop is just: edit your files, re-run `corpus-ingest`. There's **no daemon or file watcher** — ingestion happens when you run the command. Dates come from frontmatter (`created`/`modified`) if present, else the file's modification time.
 
-Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html** (`[html]` extra), **docx** (`[docx]` extra), **xlsx** (`[xlsx]` extra), **rtf** (`[rtf]` extra), **zip** (archives of any of the above) — see [Built-in connectors](#built-in-connectors). For anything else (Slack exports, JSON dumps, EPUB…), write a small connector: [`docs/adding_a_source.md`](docs/adding_a_source.md).
+Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html** (`[html]` extra), **docx** (`[docx]` extra), **xlsx** (`[xlsx]` extra), **rtf** (`[rtf]` extra), **pptx** (`[pptx]` extra), **zip** (archives of any of the above) — see [Built-in connectors](#built-in-connectors). For anything else (Slack exports, JSON dumps, EPUB…), write a small connector: [`docs/adding_a_source.md`](docs/adding_a_source.md).
 
 > **Upgrading?** `corpus` migrates its own SQLite database **automatically and
 > in place** the first time you open it after an upgrade that changes how the
@@ -283,6 +283,7 @@ matters: orphan pruning is scoped by source type, so two folders sharing a bare
 | `docx` | `**/*.docx` | `pip install 'corpus-rag[docx]'` | Uses `python-docx`. Body paragraphs and tables; legacy `.doc` unsupported |
 | `xlsx` | `**/*.xlsx` | `pip install 'corpus-rag[xlsx]'` | Uses `openpyxl`. One doc per workbook; formulas read as cached values |
 | `rtf` | `**/*.rtf` | `pip install 'corpus-rag[rtf]'` | Uses `striprtf` (pure Python). Title from filename stem |
+| `pptx` | `**/*.pptx` | `pip install 'corpus-rag[pptx]'` | Uses `python-pptx`. Slide text AND speaker notes, one `##` section per slide. Legacy binary `.ppt` is a different container format `python-pptx` can never read — skipped, not retried, if found |
 | `zip` | `**/*.zip` | — (stdlib `zipfile`; contents may need their own extra) | Extracts each archive to a temp dir, re-runs the connectors above by file type, deletes the extracted copies. Archives are never modified. Encrypted archives, zip-slip members, and nested archives are refused — see the safety contract in `src/corpus/connectors/zip.py`'s module docstring. Chunk `source_key`s look like `reports.zip::q3/summary.pdf`, so a search hit is traceable back to its archive. Vendored-dependency/build-output members (`node_modules`, `site-packages`, `.git`, minified `*.min.js`/`*.map`, ...) are excluded by default — set `exclude_dependencies = false` on the source to index them anyway. |
 
 ## Adding a new source type

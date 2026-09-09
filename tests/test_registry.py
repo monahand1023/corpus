@@ -16,6 +16,7 @@ def test_all_builtin_types_registered() -> None:
     assert "docx" in CONNECTOR_REGISTRY
     assert "xlsx" in CONNECTOR_REGISTRY
     assert "rtf" in CONNECTOR_REGISTRY
+    assert "pptx" in CONNECTOR_REGISTRY
 
 
 def test_build_markdown(tmp_path) -> None:
@@ -104,3 +105,19 @@ def test_build_rtf_missing_extra_gives_actionable_error(
     cfg = SourceConfig(name="docs", type="rtf", path=str(tmp_path))
     with pytest.raises(ImportError, match=r"pip install corpus-rag\[rtf\]"):
         build_pipeline(cfg)
+
+
+def test_build_pptx_missing_extra_gives_actionable_error(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _simulate_missing_module(monkeypatch, "pptx")
+    cfg = SourceConfig(name="decks", type="pptx", path=str(tmp_path))
+    with pytest.raises(ImportError, match=r"pip install corpus-rag\[pptx\]"):
+        build_pipeline(cfg)
+
+
+def test_build_pptx(tmp_path) -> None:
+    cfg = SourceConfig(name="decks", type="pptx", path=str(tmp_path))
+    connector, chunker = build_pipeline(cfg)
+    assert connector.source_type == "decks"
+    assert chunker.source_type == "decks"
