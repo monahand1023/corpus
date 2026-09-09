@@ -79,7 +79,14 @@ def _tag(tags: Any, field: str) -> str:
     for key in _FIELDS[field]:
         try:
             value = tags.get(key)
-        except (TypeError, KeyError):
+        except Exception:
+            # Every container is probed with every spelling, so most lookups
+            # are for a key that container has never heard of — and the
+            # containers disagree about what that means. Vorbis (FLAC/OGG)
+            # raises a BARE ValueError, with no message, for a key outside
+            # its legal ASCII range: exactly the MP4 atoms (`©alb`) in the
+            # table above. Unguarded, one FLAC file aborts the whole source
+            # and the CLI prints "ERROR:" with nothing after it.
             continue
         if value is None:
             continue
@@ -113,8 +120,22 @@ def _duration(seconds: float) -> str:
 
 def _commonest(values: Iterable[str]) -> str:
     """Most frequent non-empty value, so one mistagged track cannot rename an album."""
-    counts = Counter(v for v in values if v)
-    return counts.most_common(1)[0][0] if counts else ""
+    return _commonest_with_share(values)[0]
+
+
+def _commonest_with_share(values: Iterable[str]) -> tuple[str, float]:
+    """(most frequent non-empty value, its share of ALL values).
+
+    The share distinguishes "every track agrees" from "this was merely the
+    least rare of a dozen different tags" — which is what a playlist folder
+    looks like, and is not an album at all.
+    """
+    all_values = list(values)
+    counts = Counter(v for v in all_values if v)
+    if not counts or not all_values:
+        return "", 0.0
+    value, n = counts.most_common(1)[0]
+    return value, n / len(all_values)
 
 
 class MusicConnector:
@@ -194,10 +215,20 @@ class MusicConnector:
     def _album_document(
         self, directory: Path, tracks: list[dict[str, Any]]
     ) -> SourceDocument | None:
-        album = _commonest(t["album"] for t in tracks)
+        album, album_share = _commonest_with_share(t["album"] for t in tracks)
         artist = _commonest(t["album_artist"] for t in tracks) or _commonest(
             t["artist"] for t in tracks
         )
+        # A folder where most tracks disagree about the album is a playlist,
+        # a rip of assorted singles, or a wedding set — not a record. Naming
+        # it after whichever tag happened to be least rare produces a title
+        # nobody will ever search for (measured: a karaoke wedding folder
+        # titled "KARAOKE NIGHT VOL 3 — AoîñÈµ (2007/09/24 6-001", inherited
+        # from one file's corrupt tag). The folder's own name is what the
+        # person who made it chose, and is what they would search for.
+        mixed = bool(album) and album_share < 0.5 and len(tracks) > 2
+        if mixed:
+            album = directory.name
         if not album and not artist:
             # Voice memos, interview captures, app exports — audio that shares
             # a container with music but is not a catalogue entry. Emitting an
@@ -224,6 +255,8 @@ class MusicConnector:
         if genre:
             header.append(f"Genre: {genre}")
         header.append(f"{len(tracks)} track(s), {_duration(total)}")
+        if mixed:
+            header.append("Mixed folder: tracks come from several albums.")
 
         lines = ["", "Tracks:"]
         for t in tracks:

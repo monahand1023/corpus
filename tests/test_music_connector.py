@@ -238,3 +238,72 @@ def test_counters_reset_between_runs(tmp_path: Path) -> None:
     list(connector.load())
 
     assert connector.skipped_files == first
+
+
+def test_a_tag_lookup_that_raises_does_not_abort_the_field() -> None:
+    # Every container is probed with every spelling, so most lookups ask for
+    # a key that container has never heard of — and they disagree about what
+    # that means. Vorbis (FLAC/OGG) raises a BARE ValueError, no message, for
+    # a key outside its legal ASCII range, which is exactly what the MP4
+    # atoms in the field table are. Unguarded, one FLAC file aborted an
+    # entire real source and the CLI printed "ERROR:" with nothing after it.
+    class _Picky:
+        def get(self, key: str):
+            if not key.isascii():
+                raise ValueError  # bare, exactly as mutagen raises it
+            return "Kid A" if key == "album" else None
+
+    from corpus.connectors.music import _tag
+
+    assert _tag(_Picky(), "album") == "Kid A"
+
+
+def test_a_tag_container_that_raises_for_everything_yields_empty() -> None:
+    class _Broken:
+        def get(self, key: str):
+            raise RuntimeError("container is unreadable")
+
+    from corpus.connectors.music import _tag
+
+    assert _tag(_Broken(), "album") == ""
+
+
+def test_a_mixed_playlist_folder_is_titled_by_its_directory(tmp_path: Path) -> None:
+    # A wedding set, a singles rip, a playlist — most tracks disagree about
+    # the album, and naming the folder after whichever tag was least rare
+    # gives a title nobody will search for. Measured on a real library: a
+    # karaoke folder titled "KARAOKE NIGHT VOL 3 — AoîñÈµ (2007/09/24 6-001",
+    # inherited from one file's corrupt tag.
+    folder = tmp_path / "Weddings" / "Dan's Songs"
+    # Four tracks, four different albums: the commonest tag covers a quarter
+    # of the folder. (Exactly half is deliberately NOT mixed — a two-disc set
+    # tagged "(Disc 1)"/"(Disc 2)" splits that way and is still one record.)
+    for i, album in enumerate(["Album A", "Album B", "Album C", "Album D"], start=1):
+        _mp3(folder / f"{i}.mp3", album=album, artist=f"Artist {i}",
+             title=f"Song {i}", track=str(i))
+
+    doc = _load(tmp_path)[0]
+
+    assert "Dan's Songs" in doc.title
+    assert "Mixed folder" in doc.raw["body"]
+
+
+def test_a_real_album_is_not_treated_as_mixed(tmp_path: Path) -> None:
+    folder = tmp_path / "a" / "b"
+    for i in range(1, 5):
+        _mp3(folder / f"{i}.mp3", album="Please", artist="Pet Shop Boys",
+             title=f"Song {i}", track=str(i))
+
+    doc = _load(tmp_path)[0]
+
+    assert doc.title == "Pet Shop Boys — Please"
+    assert "Mixed folder" not in doc.raw["body"]
+
+
+def test_a_two_track_folder_is_never_called_mixed(tmp_path: Path) -> None:
+    # A single with a B-side legitimately carries two different album tags.
+    folder = tmp_path / "a" / "b"
+    _mp3(folder / "1.mp3", album="Single A", artist="X", title="A side", track="1")
+    _mp3(folder / "2.mp3", album="Single B", artist="X", title="B side", track="2")
+
+    assert "Mixed folder" not in _load(tmp_path)[0].raw["body"]
