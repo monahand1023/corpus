@@ -157,6 +157,20 @@ class SourceConfig(BaseModel):
     # a specific connector's module).
     sample_rate: int = 44100
     channels: int = 1
+    # `olm` connector only -- every other connector ignores these three.
+    # `olm_folders` is a list of fnmatch patterns against a message's
+    # store-relative folder path (e.g. "archive PST/Inbox*"); None means
+    # every folder. An `.olm` mixes years and employers in one file, so
+    # scoping by folder is how you index part of a mailbox without paying to
+    # embed all of it. `olm_skip_mirror_tree` drops the archive's duplicate
+    # of itself under "Outlook for Mac Archive OLM/On My Computer/" -- ~50%
+    # of a real archive's messages -- and `olm_trim_quotes` keeps only what
+    # each reply added rather than re-embedding the quoted thread once per
+    # message. See `corpus.connectors.olm`'s module docstring for the
+    # measurements behind both defaults.
+    olm_folders: list[str] | None = None
+    olm_skip_mirror_tree: bool = True
+    olm_trim_quotes: bool = True
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path)).resolve()

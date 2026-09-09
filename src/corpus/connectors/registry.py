@@ -32,6 +32,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "csv": "**/*.csv",
     "tsv": "**/*.tsv",
     "aup3": "**/*.aup3",
+    "olm": "**/*.olm",
 }
 
 
@@ -216,6 +217,16 @@ def _build_aup3(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_olm(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # No import guard: olm.py needs only the stdlib `zipfile`, and it reads
+    # members straight out of the archive rather than extracting and
+    # delegating the way `zip.py` does -- a real `.olm` is a large amount, so there
+    # is no per-file-type extra to be missing here.
+    from corpus.connectors.olm import build as build_olm
+
+    return build_olm(cfg), MarkdownChunker(source_type=cfg.name)
+
+
 def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard here, unlike the factories above: zip.py depends only on
     # the stdlib `zipfile`. It composes the OTHER factories in this dict at
@@ -242,6 +253,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "docx": _build_docx,
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
+    "olm": _build_olm,
     "zip": _build_zip,
     "pptx": _build_pptx,
     "csv": _build_csv,

@@ -9,6 +9,7 @@ SOURCE file, by connector type:
 
     type        chars/byte   source example
     pptx          0.0006     several sources (slide media dominates)
+    olm           0.0039     a large Outlook archive (see caveat below)
     pdf           0.0016     several sources (pages, fonts, images dominate)
     zip           0.0107     several sources (compressed; mixed contents)
     docx          0.0287     word_docs (OOXML zip: styles/media overhead)
@@ -35,6 +36,15 @@ of magnitude:
     sources — the container shape is shared but the CONTENT is not: a deck
     is mostly embedded media, a Word document mostly text. One 13-file,
     176 MB source was estimated at 1.26M tokens and cost 15,487.
+
+`olm` is measured the same way but describes a connector that decides how
+much of its own input to read, which no other row does. Its 0.0039 assumes
+this module's defaults: the archive's duplicate of itself skipped (~50% of
+messages) and quoted reply history trimmed (~78% of the remaining text).
+Turning either off multiplies real yield by roughly 2x and 4.6x
+respectively; scoping to a subset of folders divides it. `corpus-index`'s
+plan cannot see any of those settings, so for `.olm` its number is a
+whole-archive default-settings figure and nothing more.
 
 Both replacements are corpus-wide aggregates, the same methodology as every
 other row (the `pdf` row spans 0.00146 to 0.03050 across its six sources and
@@ -87,6 +97,7 @@ import math
 # with no translation layer.
 MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
     "pptx": 0.0006,
+    "olm": 0.0039,
     "pdf": 0.0016,
     "zip": 0.0107,
     "docx": 0.0287,
