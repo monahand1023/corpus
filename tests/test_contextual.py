@@ -465,3 +465,45 @@ def test_window_chunk_ids_round_trips_a_hashed_id() -> None:
     first = window_chunk_ids(chunks, requests[0]["custom_id"], window_size=4)
 
     assert first == ["i0", "i1", "i2", "i3"]
+
+
+# --- FTS normalization on the context write path ----------------------------
+#
+# `upsert` writes normalize_for_fts(content) and the query path searches for
+# that normalized form — CJK runs become overlapping bigrams via fts_terms.
+# A row written RAW is therefore unreachable by any CJK query, so a Japanese
+# chunk would silently drop out of BM25 the moment it gained a context. This
+# went unnoticed because ASCII normalizes to itself, so every English test
+# passed.
+
+
+def test_contextualized_cjk_chunk_stays_searchable(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.upsert_batch([(_chunk(0, content="東京で会議をしました"), _emb())])
+    assert len(store.fts_search("東京", top_k=5)) == 1, "precondition: findable before"
+
+    store.set_context("notes:doc.md:0", "A meeting note from the Tokyo office.", _emb(0.2))
+
+    assert len(store.fts_search("東京", top_k=5)) == 1, "lost to BM25 after contextualizing"
+    store.close()
+
+
+def test_a_cjk_context_is_itself_searchable(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.upsert_batch([(_chunk(0, content="opaque fragment"), _emb())])
+
+    store.set_context("notes:doc.md:0", "予算報告書からの抜粋", _emb(0.2))
+
+    assert len(store.fts_search("予算", top_k=5)) == 1
+    store.close()
+
+
+def test_clear_context_restores_a_searchable_cjk_row(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.upsert_batch([(_chunk(0, content="東京で会議をしました"), _emb())])
+    store.set_context("notes:doc.md:0", "context", _emb(0.2))
+
+    store.clear_context("notes")
+
+    assert len(store.fts_search("東京", top_k=5)) == 1
+    store.close()

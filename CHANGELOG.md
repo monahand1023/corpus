@@ -328,6 +328,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **A contextualized chunk no longer drops out of BM25.** `set_context` wrote
+  the combined context+content into `chunks_fts` RAW, while `upsert` writes
+  `normalize_for_fts(content)` and the query path searches for that normalized
+  form. Since CJK runs are indexed as overlapping bigrams, a raw row is
+  unreachable by any CJK query — so a Japanese chunk silently vanished from
+  full-text search the moment it gained a context. ASCII normalizes to itself,
+  which is why every English test passed. `clear_context` had the same defect
+  on its restore path.
 - **Distinct folders no longer collapse onto one source name and overwrite
   each other.** `normalize_source_name` stripped every leading non-letter, so
   `2023 Taxes` and `2024 Taxes` both became `taxes`; and it fell back to a

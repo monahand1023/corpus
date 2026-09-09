@@ -894,7 +894,13 @@ class ChunkStore:
             )
             conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
             conn.execute(
-                "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)", (rowid, combined)
+                "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+                # normalize_for_fts, exactly as `upsert` does. The query path
+                # searches for the normalized form (CJK runs become overlapping
+                # bigrams via `fts_terms`), so a row written raw here is
+                # unreachable by any CJK query — the chunk would be silently
+                # dropped out of BM25 the moment it gained a context.
+                (rowid, normalize_for_fts(combined)),
             )
         return True
 
@@ -916,7 +922,10 @@ class ChunkStore:
                 conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (r["rowid"],))
                 conn.execute(
                     "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                    (r["rowid"], r["content"]),
+                    # Same normalization as `upsert` and `set_context`: this
+                    # restores the pre-context row, and a raw one would be
+                    # just as unreachable as the bug this mirrors.
+                    (r["rowid"], normalize_for_fts(r["content"])),
                 )
             conn.execute(
                 "UPDATE chunks SET context = NULL WHERE source_type = ?", (source_type,)
