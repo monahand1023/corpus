@@ -113,6 +113,14 @@ MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
 # `MEASURED_TEXT_YIELD_RATIOS` so it's never mistaken for real data — see
 # `TEXT_YIELD_RATIOS` below, which merges both for lookup purposes.
 _UNMEASURED_DEFAULTS: dict[str, float] = {
+    # An `.abcdp` is a binary plist whose bytes are mostly UID strings, sync
+    # hashes, and timestamps; the human-readable part (name, numbers, note) is
+    # a small fraction. Not measured -- 379 files totalling well under a
+    # megabyte is too little to aggregate -- so this takes the same order of
+    # magnitude as the other binary-container formats rather than the
+    # safe-high default, which would estimate a contacts backup at hundreds of
+    # times its real cost.
+    "abcdp": 0.05,
     # Legacy `.xls` (OLE2/BIFF) holds the same tabular content as `.xlsx`
     # but in a denser binary container with no zip compression, so its
     # chars-per-byte should land at or below xlsx's measured 0.3025. Not

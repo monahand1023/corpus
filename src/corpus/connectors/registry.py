@@ -33,6 +33,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "csv": "**/*.csv",
     "tsv": "**/*.tsv",
     "aup3": "**/*.aup3",
+    "abcdp": "**/*.abcdp",
     "olm": "**/*.olm",
 }
 
@@ -236,6 +237,19 @@ def _build_aup3(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_abcdp(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # No import guard: plistlib is stdlib, so an Apple Contacts backup needs
+    # no optional extra.
+    from corpus.connectors.abcdp import AbcdpConnector
+
+    connector = AbcdpConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["abcdp"],
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 def _build_olm(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard: olm.py needs only the stdlib `zipfile`, and it reads
     # members straight out of the archive rather than extracting and
@@ -273,6 +287,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "xls": _build_xls,
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
+    "abcdp": _build_abcdp,
     "olm": _build_olm,
     "zip": _build_zip,
     "pptx": _build_pptx,
