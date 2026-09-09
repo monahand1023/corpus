@@ -25,6 +25,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "pdf": "**/*.pdf",
     "html": "**/*.html",
     "docx": "**/*.docx",
+    "xls": "**/*.xls",
     "xlsx": "**/*.xlsx",
     "rtf": "**/*.rtf",
     "zip": "**/*.zip",
@@ -111,6 +112,24 @@ def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
         source_type=cfg.name,
         path=cfg.path,
         glob=cfg.glob or DEFAULT_GLOBS["docx"],
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
+def _build_xls(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    try:
+        import xlrd  # noqa: F401
+
+        from corpus.connectors.xls import XlsConnector
+    except ImportError as e:
+        raise ImportError(
+            "Xls connector requires the [xls] extra. "
+            "Install with `pip install corpus-rag[xls]` or `uv add xlrd`."
+        ) from e
+    connector = XlsConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["xls"],
     )
     return connector, MarkdownChunker(source_type=cfg.name)
 
@@ -251,6 +270,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "pdf": _build_pdf,
     "html": _build_html,
     "docx": _build_docx,
+    "xls": _build_xls,
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
     "olm": _build_olm,

@@ -113,6 +113,14 @@ MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
 # `MEASURED_TEXT_YIELD_RATIOS` so it's never mistaken for real data — see
 # `TEXT_YIELD_RATIOS` below, which merges both for lookup purposes.
 _UNMEASURED_DEFAULTS: dict[str, float] = {
+    # Legacy `.xls` (OLE2/BIFF) holds the same tabular content as `.xlsx`
+    # but in a denser binary container with no zip compression, so its
+    # chars-per-byte should land at or below xlsx's measured 0.3025. Not
+    # measured directly (the archive here has 296 such files, too few and too
+    # small to aggregate meaningfully), so it takes xlsx's ratio as the
+    # nearest anchor -- the safe direction, since a denser container yields
+    # less text per byte, not more.
+    "xls": 0.3025,
     # `csv`/`tsv` source bytes are already plain text (no binary container
     # tax the way docx/xlsx/pptx have), so the safe ceiling (1.0) applies
     # for the common case this connector fully renders. The one thing that

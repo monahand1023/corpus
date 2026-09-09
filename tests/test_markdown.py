@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,74 @@ def test_form_feed_is_preserved(tmp_path: Path) -> None:
     # Deliberately not stripped alongside NUL: it is a real page separator in
     # extracted PDF text and carries structure worth keeping.
     assert "\x0c" in "".join(_chunk_body(tmp_path, "# A\n\npage one\x0cpage two"))
+
+
+# --- chunk overlap ----------------------------------------------------------
+#
+# `OVERLAP_TOKENS` was declared in util/tokens.py from the start and never
+# wired into the chunker, so chunks were butt-joined: text spanning a boundary
+# was cut in half and matched neither piece. Nothing asserted the overlap
+# existed, which is exactly how it stayed missing. These tests are that
+# assertion.
+
+
+def _long_body(paragraphs: int = 14, filler: str = "word") -> str:
+    # Each paragraph is comfortably under the cap; together they exceed it, so
+    # the size-splitter runs and has real paragraph boundaries to choose from.
+    return "# T\n\n" + "\n\n".join(
+        f"Paragraph {i} begins here {' '.join([filler] * 60)} and paragraph {i} ends."
+        for i in range(paragraphs)
+    )
+
+
+def test_adjacent_chunks_overlap(tmp_path: Path) -> None:
+    pieces = chunk_markdown_body(_long_body())
+
+    assert len(pieces) > 1
+    # The tail of each piece must reappear at the head of the next.
+    overlaps = []
+    for a, b in pairwise(pieces):
+        shared = 0
+        for n in range(min(len(a), len(b)), 0, -1):
+            if b.startswith(a[-n:]):
+                shared = n
+                break
+        overlaps.append(shared)
+    assert all(o > 0 for o in overlaps), overlaps
+
+
+def test_text_spanning_a_boundary_survives_in_one_piece() -> None:
+    # The failure this prevents: a phrase split across two chunks matches
+    # neither, so the document becomes unfindable by its own sentence.
+    marker = "the migration slipped to Q3 because of the vendor"
+    body = "# T\n\n" + "\n\n".join(f"Filler paragraph {i}. " + "pad " * 90 for i in range(8))
+    body += "\n\n" + marker + "\n\n" + "\n\n".join(f"Tail {i}. " + "pad " * 90 for i in range(8))
+
+    pieces = chunk_markdown_body(body)
+
+    assert any(marker in p for p in pieces), "phrase was split across every chunk"
+
+
+def test_overlap_does_not_prevent_forward_progress() -> None:
+    # Paragraph breaks closer together than OVERLAP_CHARS would make the
+    # step-back land at or before the cursor. Without the max() guard this
+    # loops forever rather than failing, so a timeout here is the real signal.
+    body = "# T\n\n" + "\n\n".join("x" * 20 for _ in range(600))
+
+    pieces = chunk_markdown_body(body)
+
+    assert pieces
+    assert all(p.strip() for p in pieces)
+
+
+def test_overlap_never_exceeds_the_chunk_cap() -> None:
+    from corpus.chunkers.markdown import MAX_CHUNK_CHARS
+
+    pieces = chunk_markdown_body(_long_body(paragraphs=30))
+
+    assert all(len(p) <= MAX_CHUNK_CHARS for p in pieces), [len(p) for p in pieces]
+
+
+def test_short_body_is_still_a_single_chunk() -> None:
+    # Overlap must not manufacture extra chunks for content under the cap.
+    assert len(chunk_markdown_body("# T\n\nOne short paragraph.")) == 1

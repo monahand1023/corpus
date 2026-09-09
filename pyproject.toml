@@ -61,6 +61,9 @@ all = [
     "striprtf>=0.0.33,<0.1",
     "python-pptx>=1.0.2,<2.0",
 ]
+xls = [
+    "xlrd>=2.0.2",
+]
 
 [project.scripts]
 corpus-init = "corpus.cli.init:main"
@@ -144,6 +147,15 @@ implicit_reexport = true
 # openpyxl ships no stubs or py.typed marker.
 [[tool.mypy.overrides]]
 module = "openpyxl"
+ignore_missing_imports = true
+
+# xlrd 2.x ships no stubs or py.typed marker either.
+[[tool.mypy.overrides]]
+module = "xlrd.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "xlrd"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
