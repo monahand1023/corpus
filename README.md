@@ -254,6 +254,10 @@ corpus-summarize --source notes              # run it
 corpus-reset --source notes              # drop one source's chunks
 corpus-reset --all                       # delete the whole DB
 corpus-mcp                               # stdio MCP server (Claude spawns it)
+corpus-survey census ~/Downloads/export  # what's here, and can corpus index it?
+corpus-survey archives ~/Downloads/export        # what's really inside these zips?
+corpus-survey media ~/Downloads/recordings --rate 15  # how many hours, at 15x realtime?
+corpus-survey overlap ~/Downloads/notes --db archive/corpus.db  # already indexed?
 ```
 
 ## Ingesting a folder
@@ -271,6 +275,70 @@ supplies the database path and embedder — only the sources are superseded.
 Source names are namespaced by folder (`documents_pdf`, `inbox_pdf`), which
 matters: orphan pruning is scoped by source type, so two folders sharing a bare
 `pdf` name in one database would delete each other's chunks.
+
+## Survey: deciding what to index
+
+Before adding a directory to `corpus.toml`, `corpus-survey` answers the
+questions that otherwise take several ad-hoc shell one-liners — read-only,
+always: it never writes to a database, never extracts an archive to a
+permanent location, never modifies the tree it looks at, and never follows
+symlinks (matching corpus's own ingestion discovery — a survey that
+disagrees with the ingester is worse than useless). Human-readable output by
+default, `--json` for scripting, `--exclude PATTERN` (repeatable) to keep
+caches/`node_modules`/photo libraries from hiding the signal.
+
+- **`census PATH`** — file extensions with counts and sizes, split into what
+  corpus can index (named by connector), the gap (real extensions with no
+  connector — usually the most useful line in the output), and known noise
+  it would ignore (`.DS_Store`, `__MACOSX/`, minified JS, compiled
+  artifacts).
+- **`archives PATH`** — per zip archive: member count, dependency/build-output
+  noise, indexable-by-type breakdown, and a noise ratio, without ever
+  extracting a byte — this is what tells "292 archives worth ingesting"
+  apart from "3 deployment bundles that are 80% `node_modules`".
+- **`media PATH --rate 15`** — audio/video file counts AND estimated total
+  hours (sampled with `ffprobe`, extrapolated per type — a file count alone
+  is useless for planning transcription), plus a processing-time projection
+  at the given realtime multiple.
+- **`overlap PATH --db corpus.db`** — samples distinctive phrases from `PATH`
+  and checks them against an existing database's `chunks.content` (FTS
+  recall + literal substring confirmation), reporting a percentage with a
+  95% confidence interval, not a bare number — so you know whether ingesting
+  `PATH` into that archive would mostly duplicate what's already there.
+
+Worked example, run against this repo's own bundled `examples/sample_corpus`
+(so it's reproducible — no invented numbers):
+
+```
+$ corpus-survey census examples/sample_corpus
+corpus-survey census: examples/sample_corpus
+Symlinks are not followed (matches corpus's own ingestion discovery).
+Scanned 26 files, 1.2 MB total.
+
+Gap — no connector (the interesting part)
+  bucket                        count         size
+  .db                               1       1.2 MB
+  .db-shm                           1      32.0 KB
+  .toml                             1        702 B
+  .json                             2         66 B
+  .db-wal                           1          0 B
+
+Indexable (corpus has a connector)
+  bucket                        count         size  detail
+  .md                              20      17.4 KB  markdown
+
+$ corpus-survey overlap examples/sample_corpus/notes --db examples/sample_corpus/corpus.db
+corpus-survey overlap: examples/sample_corpus/notes  vs.  examples/sample_corpus/corpus.db
+12 eligible plain-text document(s) found (binary formats like PDF/DOCX are not sampled — see corpus-survey census).
+Sampled 12, 10 matched.
+Estimated overlap: 83%  (95% CI: 55%–95%)
+```
+
+That 83% (not 100%) and the wide interval at a sample of 12 are both honest:
+`notes/` genuinely is what's in `corpus.db`, but the phrase-substring check
+undercounts documents where the sampled line got rewrapped or lightly
+edited since indexing — which is exactly why the tool reports a confidence
+interval instead of a single number.
 
 ## Built-in connectors
 

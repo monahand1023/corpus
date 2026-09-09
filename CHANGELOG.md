@@ -7,6 +7,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`corpus-survey` CLI.** Read-only reconnaissance for deciding what to
+  index, replacing the ad-hoc shell pipelines that work was previously done
+  with. Four subcommands: `census` (file-extension counts/sizes split into
+  indexable / gap-with-no-connector / known-noise, derived live from the
+  connector registry so a new connector needs no update here to be picked
+  up), `archives` (per-zip member count, dependency/build noise, and a noise
+  ratio, reusing the zip connector's own `_is_archive_noise` /
+  `_is_dependency_noise` logic rather than re-deciding it, and never
+  extracting a byte — `zipfile.ZipFile` reads only the central directory),
+  `media` (audio/video file counts AND estimated total hours, reservoir-
+  sampled per extension and probed with `ffprobe`, extrapolated with a
+  stated sample-size-vs-population caveat, plus a `--rate` processing-time
+  projection; degrades to counts-only when ffmpeg isn't installed), and
+  `overlap` (samples distinctive phrases from a directory and checks them
+  against an existing database's `chunks.content` via FTS5 recall + literal
+  substring confirmation, reporting a 95% Wilson-interval confidence range
+  rather than a bare percentage). Never follows symlinks, matching corpus's
+  own ingestion discovery; streams rather than accumulating file lists, so a
+  tree with hundreds of thousands of files doesn't exhaust RAM; permission
+  errors, broken symlinks, and corrupt archives are counted, never crash the
+  run. Human-readable output by default, `--json` for scripting. See the
+  "Survey: deciding what to index" section of the README.
 - **`csv` / `tsv` connectors.** Stdlib `csv` only — no pandas. Deliberately
   does NOT index every row: a naive dump of a 50,000-row export would produce
   thousands of near-identical row chunks that crowd out real prose in every
