@@ -46,6 +46,18 @@ EVAL_QUERIES: list[EvalQuery] = [
     EvalQuery("content-hash dedup skips unchanged chunks on re-ingest", ["deduplication"], source_type="note"),
     EvalQuery("how does corpus detect a near-duplicate document body, re-exported under a different filename, before storing it twice", ["deduplication"], source_type="note"),
     EvalQuery("how do I write a connector for a new source type", ["connectors"], source_type="note"),
+    # --- ingest-lifecycle: the ONLY sample document long enough to be split
+    # into multiple chunks (4 of them). Without it the eval cannot exercise
+    # size-splitting, coalescing, or chunk overlap at all, which made it blind
+    # to exactly the change `docs/eval.md` tells you to re-run it after.
+    # These queries target its LATER sections on purpose, so a hit requires
+    # retrieving a mid-document chunk rather than the one carrying the title.
+    EvalQuery("what happens between invoking corpus-ingest and the last chunk being committed", ["ingest-lifecycle"], source_type="note"),
+    EvalQuery("why must a connector raise rather than yield a short list when it cannot enumerate", ["ingest-lifecycle"], source_type="note"),
+    EvalQuery("difference between a file that might succeed next run and one the connector has permanently given up on", ["ingest-lifecycle"], source_type="note"),
+    EvalQuery("what stops a prune from deleting far more chunks than it should", ["ingest-lifecycle"], source_type="note"),
+    EvalQuery("advisory warning when a source yields far fewer documents than last time", ["ingest-lifecycle"], source_type="note"),
+    EvalQuery("in what order are an environment variable and a dotenv file consulted for credentials", ["ingest-lifecycle"], source_type="note"),
     EvalQuery("measure per-stage retrieval latency p50 p95 p99", ["benchmarking"], source_type="note"),
     # --- faq source type ---
     EvalQuery("do I need an api key to run corpus", ["faq-api-keys"], source_type="faq"),

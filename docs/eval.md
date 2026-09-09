@@ -1,6 +1,10 @@
 # Eval methodology
 
-`corpus-eval` runs a hand-written, known-answer query set against a live corpus and reports retrieval-quality metrics: recall@K, MRR, and nDCG@K, plus an aggregate table, a per-source-type breakdown, and `--json`. It's a regression signal — run it after changing chunking, switching embedders, tweaking retrieval fusion, or flipping the reranker on.
+`corpus-eval` runs a hand-written, known-answer query set against a live corpus and reports retrieval-quality metrics: recall@K, MRR, and nDCG@K, plus an aggregate table, a per-source-type breakdown, and `--json`. It's a regression signal — run it after switching embedders, tweaking retrieval fusion, changing which candidates reach the reranker, or flipping the reranker on.
+
+**What it cannot see.** Relevance is scored on `source_key`, and every chunk of a document shares one. Retrieving *any* chunk of the right document is a hit, so a change to how a document is divided INTERNALLY — chunk size, split boundaries, overlap — cannot move these numbers. Measured directly: running the whole set at overlap 0, 50 and 100 tokens produced identical recall, MRR and nDCG to three decimal places. Chunk-boundary quality is guarded by unit tests in `tests/test_markdown.py` instead, which assert the property directly (a phrase spanning a split must survive intact in some chunk). Use those, not this, when changing the chunker.
+
+The sample corpus does still exercise the chunker: `notes/ingest-lifecycle.md` is deliberately long enough to split into four chunks, and several queries target its later sections, so splitting and coalescing run on every eval and a crash or gross regression in them would surface. It just cannot *score* how well the boundaries were placed.
 
 ## What the eval measures
 
