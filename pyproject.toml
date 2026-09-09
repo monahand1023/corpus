@@ -74,6 +74,7 @@ corpus-benchmark = "corpus.cli.benchmark:main"
 corpus-list = "corpus.cli.list_sources:main"
 corpus-reset = "corpus.cli.reset:main"
 corpus-survey = "corpus.cli.survey:main"
+corpus-index = "corpus.cli.index:main"
 
 [build-system]
 requires = ["hatchling"]
