@@ -9,10 +9,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 
-from corpus.cli._common import load_config_or_exit
+from corpus.cli._common import configure_logging, load_config_or_exit
 from corpus.connectors.registry import DEFAULT_GLOBS
 from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester
@@ -58,10 +57,7 @@ def main() -> int:
     # --config > .env in cwd). See corpus.credentials for the precedence.
     resolve_dotenv(args.config)
 
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(args.verbose)
 
     if args.path and (args.all or args.source):
         print("--path cannot be combined with --source or --all.")

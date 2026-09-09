@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-from corpus.cli._common import load_config_or_exit
+from corpus.cli._common import configure_logging, load_config_or_exit
 from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
 
@@ -51,10 +51,7 @@ def main() -> int:
     # --config > .env in cwd). See corpus.credentials for the precedence.
     resolve_dotenv(args.config)
 
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(args.verbose)
 
     config = load_config_or_exit(args.config)
     if args.all:

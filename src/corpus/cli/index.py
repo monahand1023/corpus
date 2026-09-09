@@ -64,11 +64,10 @@ not a connector regression.
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
-from corpus.cli._common import load_config_or_exit
+from corpus.cli._common import configure_logging, load_config_or_exit
 from corpus.config import DEFAULT_CONFIG_PATH
 from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester, IngestResult
@@ -300,10 +299,7 @@ def main_argv(argv: list[str]) -> int:
     # --config > .env in cwd) — needed before Ingester constructs an embedder.
     resolve_dotenv(args.config)
 
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(args.verbose)
 
     config = load_config_or_exit(args.config)
     config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH

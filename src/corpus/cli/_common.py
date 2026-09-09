@@ -41,3 +41,43 @@ def load_python_export(path: Path, attr: str) -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return getattr(module, attr)
+
+
+# Third-party loggers that report per-page/per-document extraction problems at
+# ERROR, one line each, for conditions corpus already handles. On a real
+# archive these bury the CLI's own output: a single Japanese PDF set emitted
+# ~2,000 `pypdf._cmap` ERROR lines for an unimplemented CMap (the text still
+# extracts, just imperfectly), which scrolled the per-source ingest summaries
+# off the screen entirely.
+#
+# Raised to CRITICAL rather than silenced, so a genuine failure still shows.
+# `--verbose` restores them in full: that is what it is for, and diagnosing a
+# specific document's extraction needs exactly these lines.
+_NOISY_LIBRARY_LOGGERS: tuple[str, ...] = (
+    "pypdf._cmap",  # "Advanced encoding /90msp-RKSJ-H not implemented yet"
+    "pypdf._page",
+    "trafilatura.core",  # "discarding data: None" per empty HTML fragment
+    "trafilatura.utils",  # "parsed tree length: 0, wrong data type..."
+    "trafilatura.metadata",
+)
+
+
+def configure_logging(verbose: bool) -> None:
+    """Set up CLI logging, quieting known-noisy extraction libraries.
+
+    Every corpus CLI should call this instead of `logging.basicConfig`
+    directly, so the set of muted loggers stays in one place.
+    """
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # Set both ways rather than only muting: the level is process-global, so
+    # a bare `if not verbose` would leave a logger muted by an earlier call
+    # even when this one asked for verbose. NOTSET restores inheritance from
+    # the root logger, which is what these loggers had before we touched them.
+    level = logging.NOTSET if verbose else logging.CRITICAL
+    for name in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(level)
