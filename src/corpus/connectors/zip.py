@@ -153,6 +153,7 @@ from pathlib import Path
 
 from corpus.config import SourceConfig
 from corpus.connectors.discovery import discover_files
+from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
 from corpus.types import SourceDocument
 
 logger = logging.getLogger(__name__)
@@ -182,10 +183,37 @@ DEFAULT_MAX_MEMBERS = 20_000
 MAX_DEPTH = 1
 
 # File-type connectors this module composes, keyed exactly as they are in
-# `CONNECTOR_REGISTRY` (see `_load_extracted`). Deliberately not "every key in
-# DEFAULT_GLOBS" so this list can't accidentally pick up a future `zip` (or
-# other non-file-type) entry and recurse.
-_MEMBER_CONNECTOR_TYPES = ("markdown", "text", "pdf", "html", "docx", "xlsx", "rtf")
+# `CONNECTOR_REGISTRY` (see `_load_extracted`). Derived from the registry
+# itself (minus `_NON_MEMBER_CONNECTOR_TYPES` below) rather than hand-
+# duplicated — this WAS a hand-maintained tuple, and it silently missed
+# `pptx`, `csv`, and `tsv` for a release cycle after each was registered
+# elsewhere (`tests/test_zip_connector.py::test_member_connector_types_...`
+# pins the fix). A hand-maintained duplicate of a registry is exactly the
+# kind of thing that drifts the moment someone adds a connector without
+# knowing this list exists; deriving it means adding a connector is enough.
+#
+# `_NON_MEMBER_CONNECTOR_TYPES` is the one thing still hand-maintained, and
+# deliberately so — these are registry entries that would be actively wrong
+# to recurse into automatically, not merely "not added yet":
+#   zip   — this module's own recursion guard (see `MAX_DEPTH` above). A
+#           future second "zip" entry existing at all would only ever be
+#           this one, so excluding it by name is unambiguous.
+#   aup3  — `AupThreeConnector.load()` itself would be perfectly safe here
+#           (it only reads, same as every other member connector); what's
+#           NOT safe is that its whole value proposition — a companion
+#           `extract_audio()` writing a playable file "adjacent to the
+#           source" (see `corpus/connectors/aup3.py`) — has no sensible
+#           "adjacent" inside a zip member's disposable, about-to-be-
+#           deleted extraction directory. Rather than register a connector
+#           whose main capability silently can't be used for anything
+#           reached through this path, `.aup3` members are left in the
+#           unsupported-extension bucket (`skipped_files`), same as any
+#           other unregistered type — extract it from the archive first if
+#           you want its audio. Revisit if that tradeoff stops making sense.
+_NON_MEMBER_CONNECTOR_TYPES = frozenset({"zip", "aup3"})
+_MEMBER_CONNECTOR_TYPES = tuple(
+    t for t in CONNECTOR_REGISTRY if t not in _NON_MEMBER_CONNECTOR_TYPES
+)
 
 # Secondary spellings a real archive can contain that its type's connector
 # already documents accepting via an explicit `corpus.toml` `glob` override
@@ -753,8 +781,6 @@ class ZipConnector:
         (disposable) extraction directory so each connector's existing
         discovery then finds them unmodified.
         """
-        from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
-
         extension_type = _extension_type_map(DEFAULT_GLOBS)
         all_files = list(discover_files(extract_dir, "**/*"))
 

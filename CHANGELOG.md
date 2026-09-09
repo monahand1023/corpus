@@ -258,6 +258,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **The `zip` connector was silently missing `pptx`/`csv`/`tsv` members.**
+  `_MEMBER_CONNECTOR_TYPES` (which file types get extracted from inside an
+  archive) was a hand-maintained tuple that hadn't been updated since the
+  `pptx` and `csv`/`tsv` connectors were added — a `.pptx` deck or `.csv`/
+  `.tsv` table sitting inside a `.zip` was silently invisible, with no error
+  and no count (it landed in the "no matching connector" bucket, same as a
+  genuinely unsupported extension). `src/corpus/survey/archives.py`'s
+  archive-inspection subcommand shares the same lookup table
+  (`_extension_type_map`), so it under-reported "indexable" members inside
+  archives the identical way. `_MEMBER_CONNECTOR_TYPES` is now derived from
+  `CONNECTOR_REGISTRY` itself (minus a small, explicit, documented denylist
+  of entries that are wrong to recurse into — currently `zip`, for the
+  obvious recursion reason, and `aup3`, whose extraction API's "adjacent to
+  the source" only makes sense for a real, persistent file, not a disposable
+  zip-extraction temp directory) instead of a second hand-maintained list, so
+  a future connector addition can't drift out of sync with this the same
+  way. See `tests/test_zip_connector.py::test_member_connector_types_derives_from_registry_minus_denylist`
+  and `::test_pptx_and_csv_and_tsv_members_become_documents`.
 - **One unreadable PDF no longer aborts an entire source.** `pypdf` and
   `python-docx` parse lazily: the constructor succeeds on a file that cannot
   actually be read, and the failure surfaces later on first access to `.pages`

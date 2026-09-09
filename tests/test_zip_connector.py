@@ -881,6 +881,80 @@ def test_zip_is_registered() -> None:
     assert DEFAULT_GLOBS["zip"] == "**/*.zip"
 
 
+def test_member_connector_types_derives_from_registry_minus_denylist() -> None:
+    """`_MEMBER_CONNECTOR_TYPES` used to be a hand-maintained tuple that
+    silently missed `pptx`/`csv`/`tsv` for a release cycle after each was
+    registered in `CONNECTOR_REGISTRY` — presentations and tables inside
+    archives were invisible, with no error and no count. It's now derived
+    from the registry itself (minus a small, explicit, documented denylist)
+    so a future connector can't drift out of sync the same way."""
+    from corpus.connectors.zip import _MEMBER_CONNECTOR_TYPES, _NON_MEMBER_CONNECTOR_TYPES
+
+    assert set(_MEMBER_CONNECTOR_TYPES) == set(CONNECTOR_REGISTRY) - _NON_MEMBER_CONNECTOR_TYPES
+    assert "pptx" in _MEMBER_CONNECTOR_TYPES
+    assert "csv" in _MEMBER_CONNECTOR_TYPES
+    assert "tsv" in _MEMBER_CONNECTOR_TYPES
+    # Deliberately excluded, not merely "not added yet" — see the denylist's
+    # own comment in zip.py for why each is different from a plain gap.
+    assert "zip" not in _MEMBER_CONNECTOR_TYPES
+    assert "aup3" not in _MEMBER_CONNECTOR_TYPES
+
+
+def test_pptx_and_csv_and_tsv_members_become_documents(tmp_path: Path) -> None:
+    """Regression test for the drift `test_member_connector_types_derives_...`
+    fixes: presentations and tables inside an archive must become real
+    documents, not silently vanish."""
+    from pptx import Presentation
+
+    deck_path = tmp_path / "deck.pptx"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Quarterly Review"
+    slide.placeholders[1].text_frame.text = "Revenue grew 12% this quarter."
+    prs.save(deck_path)
+
+    archive = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.write(deck_path, "slides/deck.pptx")
+        zf.writestr("data/budget.csv", "name,revenue\nAcme,1200.50\nGlobex,980\n")
+        zf.writestr("data/exports.tsv", "name\trevenue\nAcme\t1200.50\nGlobex\t980\n")
+    deck_path.unlink()
+
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    by_key = {d.source_key: d for d in docs}
+
+    assert "bundle.zip::slides/deck.pptx" in by_key
+    assert "Revenue grew 12% this quarter." in by_key["bundle.zip::slides/deck.pptx"].raw["body"]
+
+    assert "bundle.zip::data/budget.csv" in by_key
+    assert "Acme" in by_key["bundle.zip::data/budget.csv"].raw["body"]
+
+    assert "bundle.zip::data/exports.tsv" in by_key
+    assert "Globex" in by_key["bundle.zip::data/exports.tsv"].raw["body"]
+
+    # source_type is the OUTER zip source's name for every member, regardless
+    # of which inner connector produced it — matches the mixed-type test
+    # above.
+    assert all(d.source_type == "archives" for d in docs)
+
+
+def test_aup3_member_is_not_routed_to_a_connector(tmp_path: Path) -> None:
+    """`.aup3` is registered in `CONNECTOR_REGISTRY` (see
+    `corpus/connectors/aup3.py`) but deliberately excluded from
+    `_MEMBER_CONNECTOR_TYPES`: its extraction API writes a playable file
+    "adjacent to the source", which has no sensible meaning inside a
+    disposable zip extraction directory that's deleted before this method
+    returns. A member is left in the unsupported-extension bucket instead —
+    same as any other unregistered type, not a crash and not silently
+    dropped without a count."""
+    _make_zip(tmp_path / "archive.zip", {"session.aup3": "not a real sqlite database"})
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+    assert docs == []
+    assert conn.skipped_files == 1
+    assert conn.failed_files == 0
+
+
 def test_build_zip(tmp_path: Path) -> None:
     from corpus.config import SourceConfig
     from corpus.connectors.registry import build_pipeline
