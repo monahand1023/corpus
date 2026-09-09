@@ -318,3 +318,18 @@ def test_estimate_of_a_cached_document_counts_only_the_chunk() -> None:
     uncached, _ = estimate_chunk_cost_tokens(0, 400)
 
     assert uncached == 100
+
+
+# --- coverage reporting -----------------------------------------------------
+
+
+def test_coverage_is_absent_for_a_store_that_never_contextualized(tmp_path: Path) -> None:
+    # An install that has never run corpus-contextualize should see no extra
+    # output at all, rather than "0 contextualized, 0%" on every line.
+    store = _store(tmp_path)
+    store.upsert_batch([(_chunk(0), _emb())])
+
+    coverage = store.context_coverage()
+
+    assert coverage["notes"]["with_context"] == 0
+    store.close()

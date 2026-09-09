@@ -55,6 +55,11 @@ def _make_stored_chunk(
 def _make_mocks() -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
     """Return (store, embedder, retriever, config) mocks."""
     store = MagicMock()
+    # Default to "nothing contextualized". A bare MagicMock here returns a
+    # MagicMock from .get(), which is truthy and then blows up on a format
+    # spec — so an unconfigured mock would fail corpus_stats for a reason
+    # that has nothing to do with the test.
+    store.context_coverage.return_value = {}
     embedder = MagicMock()
     retriever = MagicMock()
     config = MagicMock()
@@ -579,3 +584,32 @@ class TestCorpusStats:
             out = asyncio.run(corpus_stats())
 
         assert "1,000,000" in out
+
+
+    def test_contextual_coverage_is_shown_when_present(self):
+        # An uncontextualized source retrieves noticeably worse on fragments,
+        # and that is a property of the index rather than the query — so a
+        # caller judging a thin result set needs to see it.
+        store, embedder, retriever, config = _make_mocks()
+        store.stats.return_value = {"total": 100, "by_source": {"notes": 100}}
+        store.context_coverage.return_value = {
+            "notes": {"total": 100, "with_context": 75}
+        }
+
+        with _patch_init(store, embedder, retriever, config):
+            out = asyncio.run(corpus_stats())
+
+        assert "75 contextualized" in out
+        assert "75%" in out
+
+    def test_no_coverage_line_when_nothing_is_contextualized(self):
+        # An install that never ran corpus-contextualize should see no noise.
+        store, embedder, retriever, config = _make_mocks()
+        store.stats.return_value = {"total": 100, "by_source": {"notes": 100}}
+        store.context_coverage.return_value = {"notes": {"total": 100, "with_context": 0}}
+
+        with _patch_init(store, embedder, retriever, config):
+            out = asyncio.run(corpus_stats())
+
+        assert "contextualized" not in out
+        assert "notes: 100" in out

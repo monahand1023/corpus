@@ -7,6 +7,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Yield-drop warning on ingest.** Each run records what a source yielded
+  in a new `source_yield` table and warns when the next one produces
+  materially fewer documents. The orphan-prune guard already refuses a
+  destructive sweep that looks too large; this covers the case it cannot
+  see — when pruning is suppressed because the connector reported unreadable
+  files, a collapse in yield deletes nothing, reports no failure, and looks
+  exactly like a healthy run. Advisory only, never blocking, since emptying
+  a folder on purpose is a normal thing to do. Reuses `[pruning]`'s existing
+  ratio and floor rather than adding a second pair of knobs that could
+  disagree with the first. Recorded only after a run completes, so an
+  aborted ingest cannot install a low-water mark that makes the next run's
+  collapse look normal.
+- **Contextual-Retrieval coverage in `corpus_stats`.** The MCP tool now
+  reports how much of each source has been contextualized, since an
+  uncontextualized source retrieves noticeably worse on fragments and that
+  is a property of the index rather than the query. Shown only where some
+  coverage exists, so an install that has never run `corpus-contextualize`
+  sees no extra output.
 - **Contextual Retrieval (`corpus-contextualize`).** For each chunk, a cheap
   model reads the chunk together with its parent document and writes one
   sentence situating it; the sentence is stored in a new `context` column and

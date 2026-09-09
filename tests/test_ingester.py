@@ -850,3 +850,131 @@ def test_connector_without_skipped_files_attribute_behaves_exactly_as_before(
         assert _chunk_count(store, "legacy2") < before
     finally:
         CONNECTOR_REGISTRY.pop("legacy2", None)
+
+
+# --- yield-drop warning -----------------------------------------------------
+#
+# The orphan-prune guard covers the destructive case: a sweep that would
+# delete too much is refused. It cannot see this one. When pruning is
+# suppressed — because the connector reported unreadable files — a connector
+# that under-yields deletes nothing, reports no failure, and produces output
+# indistinguishable from a healthy run. The index quietly stops matching
+# reality until someone notices searches returning less than they used to.
+
+
+def _yield_run(tmp_path: Path, name: str, first: int, second: int, failures: int = 0):
+    """Ingest `first` docs, then `second`, and return the second result."""
+    conn = _CountingConnector(name, [f"f{i}.txt" for i in range(first)])
+    _register(name, conn)
+    ing, _ = make_ingester_with_config(
+        tmp_path, [{"name": name, "type": name, "path": str(tmp_path)}]
+    )
+    ing.ingest(name)
+    conn._docs = [f"f{i}.txt" for i in range(second)]
+    conn._failures = failures
+    return ing.ingest(name)
+
+
+def test_yield_drop_is_reported_on_a_large_fall(tmp_path: Path) -> None:
+    try:
+        result = _yield_run(tmp_path, "ydrop", 100, 10)
+
+        assert result.yield_drop_detail is not None
+        assert "10" in result.yield_drop_detail
+        assert "100" in result.yield_drop_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("ydrop", None)
+
+
+def test_yield_drop_is_reported_even_when_pruning_is_suppressed(tmp_path: Path) -> None:
+    # The case that motivated this: failures suppress pruning, so nothing is
+    # deleted and every other number looks fine.
+    try:
+        result = _yield_run(tmp_path, "ysupp", 100, 10, failures=1)
+
+        assert result.pruning_performed is False
+        assert result.orphans_deleted == 0
+        assert result.yield_drop_detail is not None
+    finally:
+        CONNECTOR_REGISTRY.pop("ysupp", None)
+
+
+def test_a_small_fall_is_not_reported(tmp_path: Path) -> None:
+    # Files genuinely get deleted. Warning on every ordinary removal trains
+    # the operator to ignore the warning.
+    try:
+        result = _yield_run(tmp_path, "ysmall", 100, 95)
+
+        assert result.yield_drop_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("ysmall", None)
+
+
+def test_growth_is_never_reported(tmp_path: Path) -> None:
+    try:
+        result = _yield_run(tmp_path, "ygrow", 60, 200)
+
+        assert result.yield_drop_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("ygrow", None)
+
+
+def test_first_ever_run_has_nothing_to_compare(tmp_path: Path) -> None:
+    try:
+        conn = _CountingConnector("yfirst", ["a.txt", "b.txt"])
+        _register("yfirst", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "yfirst", "type": "yfirst", "path": str(tmp_path)}]
+        )
+
+        result = ing.ingest("yfirst")
+
+        assert result.yield_drop_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("yfirst", None)
+
+
+def test_tiny_sources_are_exempt(tmp_path: Path) -> None:
+    # Below min_chunks_for_guard, a couple of genuine deletions cross any
+    # ratio and the blast radius is too small to be worth a warning.
+    try:
+        result = _yield_run(tmp_path, "ytiny", 6, 1)
+
+        assert result.yield_drop_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("ytiny", None)
+
+
+def test_the_warning_never_blocks_the_ingest(tmp_path: Path) -> None:
+    # Advisory only. Emptying a folder on purpose is a normal thing to do,
+    # and this must not stand in its way.
+    try:
+        result = _yield_run(tmp_path, "yadvis", 100, 10)
+
+        assert result.documents == 10
+        assert result.yield_drop_detail is not None
+    finally:
+        CONNECTOR_REGISTRY.pop("yadvis", None)
+
+
+def test_an_aborted_run_does_not_install_a_low_water_mark(tmp_path: Path) -> None:
+    # If a crashed ingest recorded its partial yield, the NEXT run's collapse
+    # would compare against the wrong baseline and look normal.
+    try:
+        conn = _CountingConnector("yabort", [f"f{i}.txt" for i in range(100)])
+        _register("yabort", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "yabort", "type": "yabort", "path": str(tmp_path)}]
+        )
+        ing.ingest("yabort")
+
+        def _explode():
+            raise RuntimeError("connector died mid-run")
+
+        conn.load = _explode  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            ing.ingest("yabort")
+
+        assert store.last_yield("yabort") == (100, 100)
+    finally:
+        CONNECTOR_REGISTRY.pop("yabort", None)

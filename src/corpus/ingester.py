@@ -117,6 +117,13 @@ class IngestResult:
     # message, so the reasoning is written in exactly one place.
     prune_refused: bool = False
     prune_refused_detail: str | None = None
+    # Set when this run yielded materially fewer documents than the previous
+    # one for the same source. Advisory, never blocking -- the destructive
+    # case is already covered by the orphan-prune guard. This catches the
+    # NON-destructive case that guard cannot see: a connector that under-
+    # yields while pruning happens to be suppressed deletes nothing, reports
+    # no failures, and looks like a completely normal run.
+    yield_drop_detail: str | None = None
 
 
 class Ingester:
@@ -140,6 +147,48 @@ class Ingester:
             dim=config.embedder.dim,
         )
         self._owned_store = store is None
+
+    def _check_yield_drop(self, source_name: str, documents: int, chunks: int) -> str | None:
+        """Warn when a source yields far fewer documents than it did last time.
+
+        The orphan-prune guard already refuses a destructive sweep that looks
+        too large. It cannot see this case: when pruning is suppressed (a
+        connector reported unreadable files) a collapse in yield deletes
+        nothing, reports no failure, and produces output indistinguishable
+        from a healthy run. The index quietly stops matching reality until
+        someone happens to notice a search returning less than it used to.
+
+        Advisory only. A genuine bulk deletion -- a folder emptied on
+        purpose -- is a normal thing to do, and this must not stand in its
+        way. It exists so the operator is TOLD, not stopped.
+
+        Reuses `pruning.max_orphan_ratio` and `min_chunks_for_guard` rather
+        than introducing a second pair of knobs: "how big a drop is
+        suspicious" is the same judgment in both places, and two settings
+        that must agree are a way to get them disagreeing.
+        """
+        previous = self._store.last_yield(source_name)
+        if previous is None:
+            return None
+        previous_documents, _ = previous
+        max_drop_ratio, min_for_guard = _pruning_settings(self._config)
+        if previous_documents < min_for_guard:
+            return None
+        if documents >= previous_documents:
+            return None
+        dropped = previous_documents - documents
+        ratio = dropped / previous_documents
+        if ratio <= max_drop_ratio:
+            return None
+        detail = (
+            f"yielded {documents:,} documents, down from {previous_documents:,} "
+            f"last run ({ratio:.0%} fewer). If that is expected (files genuinely "
+            f"removed), nothing to do. If not, the connector may be under-"
+            f"enumerating -- check for an unreachable path or a skip that "
+            f"silently swallows files."
+        )
+        logger.warning("  %s: %s", source_name, detail)
+        return detail
 
     def ingest(self, source_name: str, prune_anyway: bool = False) -> IngestResult:
         source_cfg = self._config.source_by_name(source_name)
@@ -225,6 +274,7 @@ class Ingester:
                 source_name,
                 skipped_files,
             )
+        yield_drop_detail = self._check_yield_drop(source_name, documents, chunks_seen)
         prune = failed_files == 0 or prune_anyway
 
         orphans = 0
@@ -252,6 +302,11 @@ class Ingester:
                 failed_files,
             )
 
+        # Recorded only now, after a complete run: an aborted ingest must not
+        # install a low-water mark that makes the next run's collapse look
+        # like the new normal.
+        self._store.record_yield(source_name, documents, chunks_seen)
+
         return IngestResult(
             source_name=source_name,
             documents=documents,
@@ -263,6 +318,7 @@ class Ingester:
             elapsed_seconds=time.monotonic() - start,
             files_failed=failed_files,
             pruning_performed=prune,
+            yield_drop_detail=yield_drop_detail,
             files_skipped=skipped_files,
             prune_refused=prune_refused,
             prune_refused_detail=prune_refused_detail,

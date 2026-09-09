@@ -287,9 +287,20 @@ async def get_summary(
 async def corpus_stats() -> str:
     store, _, _, _ = _init()
     stats = await asyncio.to_thread(store.stats)
+    coverage = await asyncio.to_thread(store.context_coverage)
     lines = [f"Total chunks: {stats['total']:,}"]
     for src, n in sorted(stats["by_source"].items()):
-        lines.append(f"  {src}: {n:,}")
+        # Contextual-Retrieval coverage matters to a caller deciding how much
+        # to trust a thin result set: an uncontextualized source retrieves
+        # noticeably worse on fragments, and that is a property of the index,
+        # not of the query. Shown only where some coverage exists, so an
+        # install that has never run `corpus-contextualize` sees no noise.
+        with_context = coverage.get(src, {}).get("with_context", 0)
+        if with_context:
+            pct = with_context / n * 100 if n else 0.0
+            lines.append(f"  {src}: {n:,} ({with_context:,} contextualized, {pct:.0f}%)")
+        else:
+            lines.append(f"  {src}: {n:,}")
     return "\n".join(lines)
 
 

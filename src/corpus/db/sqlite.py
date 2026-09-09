@@ -372,6 +372,18 @@ class ChunkStore:
             CREATE INDEX IF NOT EXISTS idx_chunks_source_type ON chunks(source_type);
             CREATE INDEX IF NOT EXISTS idx_chunks_source_key ON chunks(source_key);
 
+            -- One row per source, rewritten at the end of every successful
+            -- ingest. Exists so the NEXT run can notice that a connector
+            -- yielded far fewer documents than it used to — a collapse that
+            -- is invisible when pruning is suppressed, because nothing is
+            -- deleted and the run looks entirely normal.
+            CREATE TABLE IF NOT EXISTS source_yield (
+              source_type TEXT PRIMARY KEY,
+              documents INTEGER NOT NULL,
+              chunks INTEGER NOT NULL,
+              recorded_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS schema_meta (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
@@ -964,6 +976,31 @@ class ChunkStore:
             c.content.split("\n\n", 1)[-1]
             for c in self.get_by_source_key(source_type, source_key)
         )
+
+    def last_yield(self, source_type: str) -> tuple[int, int] | None:
+        """(documents, chunks) from this source's last recorded ingest, or None."""
+        row = self._conn.execute(
+            "SELECT documents, chunks FROM source_yield WHERE source_type = ?",
+            (source_type,),
+        ).fetchone()
+        return (row["documents"], row["chunks"]) if row else None
+
+    def record_yield(self, source_type: str, documents: int, chunks: int) -> None:
+        """Record what this source yielded, for the next run to compare against.
+
+        Written only after a run completes, so an aborted or crashed ingest
+        never installs a low-water mark that makes the NEXT run's collapse
+        look normal.
+        """
+        with self._txn() as conn:
+            conn.execute(
+                "INSERT INTO source_yield (source_type, documents, chunks, recorded_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(source_type) DO UPDATE SET "
+                "documents = excluded.documents, chunks = excluded.chunks, "
+                "recorded_at = excluded.recorded_at",
+                (source_type, documents, chunks, datetime.now(UTC).isoformat()),
+            )
 
     def get_by_source_key(self, source_type: str, source_key: str) -> list[StoredChunk]:
         rows = self._conn.execute(
