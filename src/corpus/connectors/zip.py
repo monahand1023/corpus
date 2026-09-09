@@ -83,6 +83,15 @@ Safety properties (each a known archive-extraction failure mode):
     letting it silently truncate-and-overwrite the first — an overwrite here
     would delete content with no error and no count.
 
+Archive/OS packaging artifacts (macOS's `__MACOSX/` AppleDouble tree and
+`.DS_Store`, Windows' `Thumbs.db`) are filtered out before any of the above —
+before type matching, before extraction, before either counter. See
+`_is_archive_noise`; this is not a courtesy, it closes a real failure mode:
+an AppleDouble stub like `__MACOSX/reports/._q3.pdf` still matches the
+`.pdf` glob and would otherwise reach the PDF connector, fail to parse, and
+land in `failed_files` — which suppresses orphan pruning for the WHOLE
+source, permanently, for files that were never documents.
+
 Extension matching, once safely extracted: a member is recognized by any
 accepted spelling of its type, matched case-insensitively — `.htm` alongside
 `.html`, `.markdown` alongside `.md`, and `.PDF`/`.DOCX`-style uppercase from
@@ -185,6 +194,42 @@ def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
     }
     mapping.update(_EXTENSION_ALIASES)
     return mapping
+
+
+# Archive/OS packaging artifacts, never user content, seen constantly in
+# real-world zips: macOS Finder writes a parallel `__MACOSX/` tree of
+# `._filename` AppleDouble resource-fork stubs when it creates a zip (one
+# real archive from this connector's own target user had 5,202 of these
+# across ~8,400 total members), plus `.DS_Store` per directory; Windows
+# Explorer writes `Thumbs.db` thumbnail caches. None of these are documents,
+# and treating them as such is actively harmful, not just noisy: a stub like
+# `__MACOSX/reports/._q3.pdf` still matches the `.pdf` glob, gets handed to
+# the PDF connector, and fails to parse (it's a resource fork, not a PDF) --
+# counted in `failed_files`, which suppresses orphan pruning for the WHOLE
+# source, permanently, on every future run, for files that were never
+# documents to begin with. Filtered out here, before type matching and
+# before either counter, rather than "not documents" being downgraded to a
+# `skipped_files` count -- they're not almost-content, they're not content
+# at all. Deliberately a small explicit list, not a general glob/heuristic:
+# add another entry only for another artifact this specific, not "anything
+# that looks unimportant."
+_ARCHIVE_NOISE_BASENAMES = frozenset({".ds_store", "thumbs.db"})
+
+
+def _is_archive_noise(member_name: str) -> bool:
+    """True for a member that is archive/OS packaging, not user content —
+    see `_ARCHIVE_NOISE_BASENAMES` above. Checked on the raw member name
+    (before any path-containment resolution), since these are filtered out
+    entirely rather than merely refused."""
+    parts = [p for p in member_name.replace("\\", "/").split("/") if p]
+    if not parts:
+        return False
+    if "__MACOSX" in parts:
+        return True
+    basename = parts[-1]
+    if basename.startswith("._"):
+        return True
+    return basename.lower() in _ARCHIVE_NOISE_BASENAMES
 
 
 def _disambiguate(target: Path, *, moving: Path | None = None) -> Path:
@@ -367,12 +412,21 @@ class ZipConnector:
         archive; returns True in that case.
         """
         total_written = 0
+        noise_ignored = 0
         for info in infos:
             if info.is_dir():
                 # Nothing is written for a directory-only entry (we create
                 # parent directories implicitly, below, from file targets),
                 # so a directory entry poses no extraction risk even if its
                 # name would otherwise fail the containment check.
+                continue
+
+            if _is_archive_noise(info.filename):
+                # Checked first, before encryption/zip-slip/type matching:
+                # archive packaging, not content, not extracted, not counted
+                # in either counter. See `_is_archive_noise`'s docstring for
+                # why this matters more than it looks like it should.
+                noise_ignored += 1
                 continue
 
             if info.flag_bits & 0x1:
@@ -481,6 +535,16 @@ class ZipConnector:
                 )
                 self.failed_files += 1
                 continue
+
+        if noise_ignored:
+            logger.info(
+                "%s: ignored %d archive-packaging member(s) in '%s' "
+                "(__MACOSX/AppleDouble, .DS_Store, Thumbs.db) — not documents, "
+                "not counted in failed_files or skipped_files",
+                self.source_type,
+                noise_ignored,
+                archive_key,
+            )
         return True
 
     def _load_extracted(self, extract_dir: Path, archive_key: str) -> list[SourceDocument]:

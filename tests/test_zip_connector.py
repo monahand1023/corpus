@@ -102,6 +102,48 @@ def test_unsupported_extension_is_skipped_not_ingested(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Archive/OS packaging noise (__MACOSX/AppleDouble, .DS_Store, Thumbs.db)
+# ---------------------------------------------------------------------------
+
+
+def test_macos_appledouble_members_are_ignored_not_counted(tmp_path: Path) -> None:
+    """Real-world regression: a Mac-created zip's __MACOSX/._ resource-fork
+    twin of a .txt/.pdf/etc. file matches that type's extension and, without
+    filtering, would be handed to the real connector and either produce a
+    phantom document (for a text-parseable type) or fail to parse and land
+    in failed_files -- which suppresses orphan pruning for the WHOLE source,
+    permanently, for files that were never documents. None of these five
+    noise members should produce a document or move either counter."""
+    _make_zip(
+        tmp_path / "mac_export.zip",
+        {
+            "notes/report.txt": "real content",
+            "__MACOSX/notes/._report.txt": "resource-fork junk, not real content",
+            "._root_level_twin.txt": "AppleDouble twin outside __MACOSX/ too",
+            ".DS_Store": "folder metadata, not a document",
+            "Thumbs.db": "windows thumbnail cache, not a document",
+        },
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"mac_export.zip::notes/report.txt"}
+    assert conn.skipped_files == 0
+    assert conn.failed_files == 0
+
+
+def test_macosx_directory_entry_itself_is_ignored(tmp_path: Path) -> None:
+    """A bare __MACOSX/ directory entry (no filename component to trip the
+    `._` check) must not sneak through some other path."""
+    with zipfile.ZipFile(tmp_path / "with_dir.zip", "w") as zf:
+        zf.writestr("__MACOSX/", "")
+        zf.writestr("__MACOSX/notes/", "")
+        zf.writestr("real.txt", "real content")
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert {d.source_key for d in docs} == {"with_dir.zip::real.txt"}
+
+
+# ---------------------------------------------------------------------------
 # Extension aliases and case-insensitivity
 # ---------------------------------------------------------------------------
 

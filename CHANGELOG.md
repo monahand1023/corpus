@@ -32,7 +32,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.html`, `.markdown` alongside `.md`, `.PDF`/`.DOCX`-style uppercase from
   non-Unix tooling) — `.doc`/`.xls` are deliberately not treated as
   spelling variants, since they're different container formats
-  python-docx/openpyxl cannot read.
+  python-docx/openpyxl cannot read. Archive/OS packaging artifacts — macOS's
+  `__MACOSX/` AppleDouble resource-fork tree and `.DS_Store`, Windows'
+  `Thumbs.db` — are filtered out before type matching and before either
+  counter, since an AppleDouble stub otherwise still matches its twin's
+  extension glob, reaches the real connector, fails to parse, and lands in
+  `failed_files` — which suppresses orphan pruning for the whole source,
+  permanently, for files that were never documents.
 - **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
   built-in connectors apply and ingests each matching file type as its own
   source, with no `[[sources]]` block to write. `corpus.toml` still supplies the
