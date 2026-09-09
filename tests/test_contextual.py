@@ -333,3 +333,38 @@ def test_coverage_is_absent_for_a_store_that_never_contextualized(tmp_path: Path
 
     assert coverage["notes"]["with_context"] == 0
     store.close()
+
+
+# --- placeholder contexts ---------------------------------------------------
+#
+# A model asked to situate an empty or fully-redacted chunk has nothing to
+# work with and says so. Measured on a real archive, 0.037% of generated
+# contexts came back this way. Storing one would prepend a meaningless token
+# to the chunk's embedding AND mark the chunk done, so it would never be
+# reconsidered — the answer is honest, but keeping it is not free.
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["<UNKNOWN>", "unknown", "N/A", "None", "Empty or redacted document section.", "", "   "],
+)
+def test_placeholder_contexts_are_rejected(placeholder: str) -> None:
+    from corpus.contextual.contextualizer import is_useful_context
+
+    assert is_useful_context(placeholder) is False
+
+
+def test_a_real_context_is_accepted() -> None:
+    from corpus.contextual.contextualizer import is_useful_context
+
+    assert is_useful_context(
+        "From the July 2015 meeting minutes thread discussing Seller of Record changes."
+    )
+
+
+def test_a_short_but_meaningful_context_is_still_rejected() -> None:
+    # Under the length floor the blurb cannot situate anything, whatever it
+    # says — and the chunk stays eligible for a later, better attempt.
+    from corpus.contextual.contextualizer import is_useful_context
+
+    assert is_useful_context("A PR-FAQ.") is False

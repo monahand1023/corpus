@@ -37,7 +37,11 @@ from corpus.contextual.batch_util import (  # noqa: F401 — re-exported for bac
     pack_batches,
     retry_with_backoff,
 )
-from corpus.contextual.contextualizer import DEFAULT_MIN_TOKENS, should_contextualize
+from corpus.contextual.contextualizer import (
+    DEFAULT_MIN_TOKENS,
+    is_useful_context,
+    should_contextualize,
+)
 from corpus.db.sqlite import ChunkStore, StoredChunk
 
 logger = logging.getLogger(__name__)
@@ -168,6 +172,7 @@ class BatchContextualizer:
         context), so re-applying an already-applied batch is a harmless no-op."""
         applied = 0
         errors = 0
+        skipped_useless = 0
         results = retry_with_backoff(lambda: list(self._client.messages.batches.results(batch_id)),
                               f"results({batch_id})")
         for row in results:
@@ -191,6 +196,14 @@ class BatchContextualizer:
                     c = chunk_by_id.get(cid)
                     if c is None:
                         continue  # already applied / no longer missing
+                    if not is_useful_context(ctx):
+                        # The model correctly declining to situate an empty or
+                        # fully-redacted chunk. Storing that answer would
+                        # prepend a meaningless token to the embedding and
+                        # mark the chunk done, so it would never be retried.
+                        # Leaving it NULL costs nothing and keeps it eligible.
+                        skipped_useless += 1
+                        continue
                     to_embed.append(f"{ctx}\n\n{c.content}")
                     order.append((cid, ctx))
                 if not to_embed:
@@ -205,6 +218,12 @@ class BatchContextualizer:
                                  getattr(row, "custom_id", "?"))
         if errors:
             logger.warning("apply %s: %d result rows skipped due to errors", batch_id, errors)
+        if skipped_useless:
+            logger.info(
+                "batch %s: %d context(s) were placeholders and were left unset",
+                batch_id,
+                skipped_useless,
+            )
         return applied
 
     # -------------------------------------------------------------- state io

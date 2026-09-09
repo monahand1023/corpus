@@ -116,3 +116,23 @@ def estimate_chunk_cost_tokens(doc_chars: int, chunk_chars: int) -> tuple[int, i
     doc = min(doc_chars, MAX_DOC_CHARS)
     chunk = min(chunk_chars, MAX_CHUNK_CHARS)
     return (doc + chunk) // 4, 42
+
+
+# A model asked to situate an empty or fully-redacted chunk has nothing to
+# work with, and says so. Measured on a real archive: 0.037% of generated
+# contexts came back as "<UNKNOWN>" or a bare "Empty or redacted document
+# section." Those are honest answers, not failures — but storing one
+# prepends a meaningless token to the chunk's embedding AND marks the chunk
+# done, so it is never reconsidered.
+_PLACEHOLDER_CONTEXTS = frozenset(
+    {"<unknown>", "unknown", "n/a", "none", "empty", "empty or redacted document section."}
+)
+MIN_USEFUL_CONTEXT_CHARS = 20
+
+
+def is_useful_context(context: str) -> bool:
+    """Whether a generated context is worth storing and embedding."""
+    text = (context or "").strip()
+    if len(text) < MIN_USEFUL_CONTEXT_CHARS:
+        return False
+    return text.lower() not in _PLACEHOLDER_CONTEXTS
