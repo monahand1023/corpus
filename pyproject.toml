@@ -64,6 +64,9 @@ all = [
 xls = [
     "xlrd>=2.0.2",
 ]
+music = [
+    "mutagen>=1.48.1",
+]
 
 [project.scripts]
 corpus-init = "corpus.cli.init:main"

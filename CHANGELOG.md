@@ -7,6 +7,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`music` connector** (`[music]` extra, uses `mutagen`). One document per
+  album, built from tags only — no transcription, no audio analysis. A song's
+  audio is not searchable text, and a per-TRACK document would be a title,
+  an artist and a number: too thin to retrieve on, and 4,000 of them would be
+  near-identical chunks competing with each other. An album is the unit
+  people actually ask about, and its track listing gives the document enough
+  text to match.
+  - Album identity comes from the DIRECTORY, not the tags. Music is
+    near-universally laid out `Artist/Album/track.mp3`, the directory is what
+    `source_key` needs anyway, and tags disagree constantly — half an album
+    tagged "The Beatles" and half "Beatles, The" would otherwise split in
+    two. Field values are the commonest across the album's files, so one
+    mistagged track cannot rename a record.
+  - The same logical field has three unrelated spellings (ID3 `TALB`, MP4
+    `©alb`, Vorbis `album`), so every lookup goes through one table.
+  - **A directory whose files carry no album or artist tag is skipped, not
+    emitted.** A real library mixes voice memos and app exports into the same
+    containers; measured on one, `.m4a` files included VoiceMemos captures
+    with no music tags at all. Those are transcription material, and an
+    "Unknown Album" document for them would be unsearchable AND misleading
+    about what the library holds.
+  - Extensions are swept one glob at a time rather than combined:
+    `Path.glob` has no alternation, and any single pattern wide enough for
+    `.mp3` and `.flac` also matches `.md`, which made `--path` detect a music
+    source in a folder of notes.
 - **Yield-drop warning on ingest.** Each run records what a source yielded
   in a new `source_yield` table and warns when the next one produces
   materially fewer documents. The orphan-prune guard already refuses a

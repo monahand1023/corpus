@@ -121,6 +121,13 @@ _UNMEASURED_DEFAULTS: dict[str, float] = {
     # safe-high default, which would estimate a contacts backup at hundreds of
     # times its real cost.
     "abcdp": 0.05,
+    # A music file's bytes are almost entirely encoded audio; this connector
+    # extracts only tags, and emits ONE document per album rather than per
+    # track, so the text produced is a few hundred characters against tens of
+    # megabytes. The same structural argument as `aup3`: applying the
+    # safe-high default would price a 40 GB library at billions of tokens for
+    # what is actually a few thousand words of track listings.
+    "music": 0.00002,
     # Legacy `.xls` (OLE2/BIFF) holds the same tabular content as `.xlsx`
     # but in a denser binary container with no zip compression, so its
     # chars-per-byte should land at or below xlsx's measured 0.3025. Not

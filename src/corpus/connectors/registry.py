@@ -34,6 +34,10 @@ DEFAULT_GLOBS: dict[str, str] = {
     "tsv": "**/*.tsv",
     "aup3": "**/*.aup3",
     "abcdp": "**/*.abcdp",
+    # Detection pattern only. The connector itself sweeps every extension in
+    # `music.MUSIC_EXTENSIONS`; Path.glob has no alternation, so one pattern
+    # cannot express them all without also matching `.md`.
+    "music": "**/*.mp3",
     "olm": "**/*.olm",
 }
 
@@ -250,6 +254,24 @@ def _build_abcdp(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_music(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    try:
+        import mutagen  # noqa: F401
+
+        from corpus.connectors.music import MusicConnector
+    except ImportError as e:
+        raise ImportError(
+            "Music connector requires the [music] extra. "
+            "Install with `pip install corpus-rag[music]` or `uv add mutagen`."
+        ) from e
+    connector = MusicConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob,
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 def _build_olm(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard: olm.py needs only the stdlib `zipfile`, and it reads
     # members straight out of the archive rather than extracting and
@@ -288,6 +310,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
     "abcdp": _build_abcdp,
+    "music": _build_music,
     "olm": _build_olm,
     "zip": _build_zip,
     "pptx": _build_pptx,
