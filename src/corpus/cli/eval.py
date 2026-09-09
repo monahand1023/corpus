@@ -20,15 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from corpus.cli._common import load_config_or_exit
+from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_query
 from corpus.retriever import Retriever
-
-load_dotenv()
 
 
 @dataclass(frozen=True)
@@ -256,6 +253,10 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    # Resolve credentials now that --config is known (env var > .env beside
+    # --config > .env in cwd). See corpus.credentials for the precedence.
+    resolve_dotenv(args.config)
 
     queries_path = Path(args.queries)
     if not queries_path.is_file():

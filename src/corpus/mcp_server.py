@@ -19,20 +19,15 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
 
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from corpus.config import ConfigError, CorpusConfig
+from corpus.credentials import describe_search, resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
-
-# .env from CWD, then from this file's parent (handy when Claude Code spawns
-# from arbitrary cwds).
-load_dotenv()
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -321,6 +316,13 @@ def main() -> None:
     global _config_path_override
     _config_path_override = args.config
 
+    # Resolve credentials predictably, now that --config is known: an
+    # already-set env var wins, then a .env beside --config, then a .env in
+    # the cwd. This library never reads secrets out of its own source tree
+    # (see corpus.credentials) -- a checkout of corpus holding a live API key
+    # is not a precondition for using it.
+    resolve_dotenv(args.config)
+
     try:
         config = CorpusConfig.load(args.config)
     except ConfigError as e:
@@ -337,8 +339,10 @@ def main() -> None:
     keys = expected_key if isinstance(expected_key, tuple) else (expected_key,)
     if not any(os.environ.get(k) for k in keys):
         logger.error(
-            "Embedder provider '%s' requires one of: %s. Set in .env before starting.",
-            config.embedder.provider, ", ".join(keys),
+            "Embedder provider '%s' requires one of: %s. corpus looked for a "
+            ".env: %s. Set the variable in your shell, or add it to one of "
+            "those files.",
+            config.embedder.provider, ", ".join(keys), describe_search(args.config),
         )
         sys.exit(2)
 

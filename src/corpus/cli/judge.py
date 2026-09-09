@@ -21,15 +21,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from corpus._anthropic import make_client
 from corpus.cli._common import load_config_or_exit, load_python_export
+from corpus.credentials import resolve_dotenv
 from corpus.eval.generation import GENERATOR_DEFAULT_MODEL, answer_from_context
 from corpus.eval.judge import JUDGE_DEFAULT_MODEL, aggregate_verdicts, judge_answer
 from corpus.eval.validation import JudgeCase, run_validation_study
-
-load_dotenv()
 
 
 def _load_kappa_floor(path: Path) -> float:
@@ -238,6 +235,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main_argv(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
+    # Resolve credentials now that --config is known (env var > .env beside
+    # --config > .env in cwd). See corpus.credentials for the precedence.
+    resolve_dotenv(args.config)
     if args.validate:
         return _run_validate(args)
     if args.build_fixture:

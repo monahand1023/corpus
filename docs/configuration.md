@@ -259,7 +259,7 @@ nested unbounded quantifiers like `(a+)+`.
 | `GEMINI_API_KEY` | when `provider="gemini"` | embedder | https://aistudio.google.com/apikey (or `GOOGLE_API_KEY`) |
 | `ANTHROPIC_API_KEY` | when running `corpus-summarize` | summarizer | https://console.anthropic.com/ |
 
-`corpus` uses `python-dotenv` — set these in `.env` (gitignored), in your shell, or in your MCP server's environment block.
+`corpus` uses `python-dotenv`, with a predictable, explicit precedence: an already-set shell/CI environment variable wins; then a `.env` next to whatever `--config` you passed; then a `.env` in the current directory; then a clear error naming what's missing and where it looked. corpus never reads a credential out of its own installed source tree. See "Credentials" in the [README](../README.md#credentials) for the full precedence order.
 
 ## Validation
 

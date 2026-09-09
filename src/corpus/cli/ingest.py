@@ -12,14 +12,11 @@ import argparse
 import logging
 import sys
 
-from dotenv import load_dotenv
-
 from corpus.cli._common import load_config_or_exit
 from corpus.connectors.registry import DEFAULT_GLOBS
+from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester
 from corpus.util.autodetect import detect_sources
-
-load_dotenv()
 
 
 def main() -> int:
@@ -56,6 +53,10 @@ def main() -> int:
     parser.add_argument("--config", default=None, help="Path to corpus.toml (default: ./corpus.toml)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+
+    # Resolve credentials now that --config is known (env var > .env beside
+    # --config > .env in cwd). See corpus.credentials for the precedence.
+    resolve_dotenv(args.config)
 
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,

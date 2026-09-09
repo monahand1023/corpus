@@ -18,15 +18,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-from dotenv import load_dotenv
-
 from corpus.cli._common import load_config_or_exit
+from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
 
 if TYPE_CHECKING:
     from corpus.summarizer.anthropic_summarizer import SummaryResult
-
-load_dotenv()
 
 # Haiku 4.5 pricing as of 2026:
 PRICE_INPUT = 1.0 / 1_000_000
@@ -49,6 +46,10 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+
+    # Resolve credentials now that --config is known (env var > .env beside
+    # --config > .env in cwd). See corpus.credentials for the precedence.
+    resolve_dotenv(args.config)
 
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,

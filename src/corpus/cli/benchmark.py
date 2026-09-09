@@ -36,15 +36,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from corpus.cli._common import load_config_or_exit
 from corpus.config import CorpusConfig
+from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
-
-load_dotenv()
 
 # Default queries if no --queries file is provided. Deliberately mixed:
 # prose, identifier-shaped, short, long, multilingual.
@@ -319,6 +316,10 @@ def main() -> int:
     parser.add_argument("--json", default=None, help="Write report to FILE as JSON")
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
+
+    # Resolve credentials now that --config is known (env var > .env beside
+    # --config > .env in cwd). See corpus.credentials for the precedence.
+    resolve_dotenv(args.config)
 
     config = load_config_or_exit(args.config)
 

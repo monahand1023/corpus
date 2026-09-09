@@ -100,6 +100,17 @@ description = "Jira-style ticket keys"
 
 Schema hazard: changing `embedder.dim` after data has been ingested would silently corrupt retrieval. `corpus` validates the dim against the existing schema at startup and refuses to proceed on mismatch.
 
+## Credentials
+
+Every CLI and the MCP server resolve API keys (`VOYAGE_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`) the same, predictable way, regardless of whether corpus is invoked as a console script (`corpus-query`) or imported as a library — both funnel through the same resolution, so which one you used never changes the answer. In order:
+
+1. **An environment variable that's already set.** Never overwritten by a `.env` file — your real shell or CI environment always wins.
+2. **A `.env` file next to the config file passed via `--config`.** This is the normal setup for a private archive repo: keep `corpus.toml` (or `docs.toml`, etc.) and `.env` together in that repo, and run the CLI from wherever you like.
+3. **A `.env` file found by walking up from the current working directory.**
+4. **Nothing.** corpus fails with a clear error naming the missing variable and exactly where it looked (beside `--config`, and in the cwd) — it never silently proceeds without a credential, and it never reads one out of corpus's own installed source tree.
+
+corpus is a public engine, consumed by separate private archive repos — a checkout of corpus is never expected to hold a live API key itself, and it doesn't look for one there. See `corpus/credentials.py` for the implementation.
+
 ## Ingesting content
 
 Ingestion turns a directory of files into searchable chunks. Point a `[[sources]]` block in `corpus.toml` at your data, then run the ingester:

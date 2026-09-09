@@ -37,7 +37,7 @@ cp .env.example .env
 # edit .env, paste your key
 ```
 
-`.env` is loaded via `python-dotenv` at process start. If you set the var in your shell `.zshrc` / `.bashrc`, it'll also work, but `.env` is the standard place. Don't commit `.env` — it's gitignored by default.
+`.env` is loaded via `python-dotenv`, next to whatever `--config` you passed if there is one there, else from the current directory — see "Credentials" in the [README](../README.md#credentials) for the full precedence. If you set the var in your shell `.zshrc` / `.bashrc`, it'll also work (a real environment variable always wins over any `.env`). Don't commit `.env` — it's gitignored by default.
 
 ### `EmbeddingDimMismatch: DB was created with embedding_dim=X, but this run requests Y`
 
