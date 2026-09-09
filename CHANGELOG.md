@@ -7,6 +7,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Contextual Retrieval (`corpus-contextualize`).** For each chunk, a cheap
+  model reads the chunk together with its parent document and writes one
+  sentence situating it; the sentence is stored in a new `context` column and
+  the chunk is re-embedded as context + content. This targets the structural
+  problem with chunking prose: a fragment reading "Yes, approved, let's go
+  with option B" names no project, person, or date, so no query for any of
+  them finds it. Anthropic's published result is a ~35% reduction in
+  retrieval failure rate, ~49% combined with reranking (which
+  `corpus.reranker` already provides).
+  - Affordable through prompt caching: each request sends the parent document
+    as a cached prefix billed at ~10% on re-reads, so a document pays full
+    price once and its remaining chunks are ~90% cheaper. This is why
+    `chunks_missing_context` orders by `(source_key, chunk_index)` and the
+    batch builder windows by document — break that adjacency and cost
+    multiplies by chunks-per-document.
+  - Resumable: batch ids and their chunk mappings are persisted before each
+    submit, so an interrupted run never re-pays for results already computed.
+  - `--dry-run` prices a run before it spends anything, counting each parent
+    document once rather than once per chunk.
+  - `--clear` removes stored contexts and restores plain-text FTS rows. It
+    cannot restore pre-context embeddings (overwritten in place) and says so.
+  - A `min_tokens` floor (default 50, per-source overridable) skips chunks a
+    context would harm rather than help — below it the blurb rivals the
+    content and the embedding describes the blurb. Measured on a real
+    archive, source code needs a far higher floor than prose: a code chunk
+    already carries the identifiers people search for, and on one corpus it
+    was 65% of all chunks with the least to gain.
+  - `content` is never rewritten, so a bad run is reverted by clearing one
+    column instead of re-ingesting.
 - **`corpus-index` CLI.** One command from "here's a folder" to "it's
   searchable": surveys the directory (reusing `corpus-survey census`),
   reports the gap (file types with no connector — printed first, since it's

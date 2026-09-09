@@ -167,6 +167,11 @@ class StoredChunk:
     # Retriever so the reranker can score against summary+content. NOT persisted on
     # the chunk row; None unless the retriever populated it.
     summary: str | None = None
+    # Contextual-Retrieval blurb, persisted in the chunk's own `context`
+    # column. Unlike `summary` this IS stored, because the chunk's embedding
+    # and FTS row are computed over `context + content` — see
+    # `corpus.contextual`.
+    context: str | None = None
 
 
 class EmbeddingDimMismatch(RuntimeError):
@@ -390,7 +395,28 @@ class ChunkStore:
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, tokenize = 'porter unicode61')"
         )
+        self._migrate_context_column(conn)
         conn.commit()
+
+    def _migrate_context_column(self, conn: sqlite3.Connection | None = None) -> None:
+        """Add the `context` column to an existing store, in place.
+
+        Contextual Retrieval keeps its blurb in its own column rather than
+        rewriting `content`, so the canonical text is never mutated and a bad
+        contextualization run is undone by clearing one column instead of
+        re-ingesting. Added by ALTER rather than in the CREATE above so a
+        database written before this feature migrates on first open.
+
+        Silently does nothing on a read-only connection: a query-only caller
+        (the MCP server) has no business writing schema, and a store old
+        enough to lack the column simply has no contexts to read.
+        """
+        conn = conn or self._conn
+        if self._read_only:
+            return
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(chunks)")}
+        if "context" not in cols:
+            conn.execute("ALTER TABLE chunks ADD COLUMN context TEXT")
 
     def _guard_embedding_dim(self, conn: sqlite3.Connection | None = None) -> None:
         """If the DB has previous data, the embedding dim must match."""
@@ -692,7 +718,7 @@ class ChunkStore:
             rows = self._conn.execute(
                 """
                 SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                       c.title, c.url, f.rank
+                       c.title, c.url, c.context, f.rank
                 FROM chunks_fts f
                 JOIN chunks c ON c.rowid = f.rowid
                 WHERE f.content MATCH ?
@@ -719,6 +745,7 @@ class ChunkStore:
                     metadata=json.loads(row["metadata"]),
                     title=row["title"],
                     url=row["url"],
+                    context=row["context"],
                     distance=row["rank"],
                 )
             )
@@ -746,7 +773,7 @@ class ChunkStore:
             rows = self._conn.execute(
                 f"""
                 SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                       c.title, c.url, v.distance
+                       c.title, c.url, c.context, v.distance
                 FROM chunks_vec v
                 JOIN chunks c ON c.rowid = v.rowid
                 WHERE v.embedding MATCH ? AND k = ?
@@ -759,7 +786,7 @@ class ChunkStore:
             rows = self._conn.execute(
                 """
                 SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
-                       c.title, c.url, v.distance
+                       c.title, c.url, c.context, v.distance
                 FROM chunks_vec v
                 JOIN chunks c ON c.rowid = v.rowid
                 WHERE v.embedding MATCH ? AND k = ?
@@ -782,6 +809,7 @@ class ChunkStore:
                     metadata=json.loads(row["metadata"]),
                     title=row["title"],
                     url=row["url"],
+                    context=row["context"],
                     distance=row["distance"],
                 )
             )
@@ -791,7 +819,8 @@ class ChunkStore:
 
     def get_by_id(self, chunk_id: str) -> StoredChunk | None:
         row = self._conn.execute(
-            "SELECT id, source_type, source_key, content, metadata, title, url FROM chunks WHERE id = ?",
+            "SELECT id, source_type, source_key, content, metadata, title, url, context "
+            "FROM chunks WHERE id = ?",
             (chunk_id,),
         ).fetchone()
         if not row:
@@ -804,12 +833,142 @@ class ChunkStore:
             metadata=json.loads(row["metadata"]),
             title=row["title"],
             url=row["url"],
+            context=row["context"],
+        )
+
+    def set_context(
+        self, chunk_id: str, context: str, embedding: Sequence[float]
+    ) -> bool:
+        """Attach a Contextual-Retrieval blurb to a chunk and re-index it.
+
+        `context` goes in its own column; `content` is never touched, so a bad
+        run is reverted by clearing one column rather than re-ingesting. The
+        vector and FTS rows are then replaced with ones computed over
+        `context + "\n\n" + content` — that replacement is the whole point,
+        since a context nobody searches against buys nothing.
+
+        Idempotent: re-calling overwrites. Returns False for an unknown id
+        rather than raising, so a stale batch result (a chunk deleted between
+        submit and apply) is a counted no-op instead of a crashed run.
+        """
+        if len(embedding) != self._embedding_dim:
+            raise ValueError(
+                f"embedding dim mismatch: got {len(embedding)}, "
+                f"expected {self._embedding_dim}"
+            )
+        row = self._conn.execute(
+            "SELECT rowid, content FROM chunks WHERE id = ?", (chunk_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        rowid = row["rowid"]
+        combined = f"{context}\n\n{row['content']}"
+        with self._txn() as conn:
+            conn.execute(
+                "UPDATE chunks SET context = ? WHERE id = ?", (context, chunk_id)
+            )
+            blob = sqlite_vec.serialize_float32(list(embedding))
+            conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
+            conn.execute(
+                "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob)
+            )
+            conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
+            conn.execute(
+                "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)", (rowid, combined)
+            )
+        return True
+
+    def clear_context(self, source_type: str) -> int:
+        """Drop every context for a source and restore its plain-text FTS rows.
+
+        The escape hatch for a contextualization run that produced bad blurbs.
+        Note what this does NOT do: it cannot restore the pre-context
+        embeddings, because those were overwritten in place. Vectors stay as
+        they are until the source is re-ingested or re-contextualized — which
+        is why this prints a count rather than claiming a clean revert.
+        """
+        rows = self._conn.execute(
+            "SELECT rowid, content FROM chunks WHERE source_type = ? AND context IS NOT NULL",
+            (source_type,),
+        ).fetchall()
+        with self._txn() as conn:
+            for r in rows:
+                conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (r["rowid"],))
+                conn.execute(
+                    "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+                    (r["rowid"], r["content"]),
+                )
+            conn.execute(
+                "UPDATE chunks SET context = NULL WHERE source_type = ?", (source_type,)
+            )
+        return len(rows)
+
+    def chunks_missing_context(
+        self, source_type: str, limit: int | None = None
+    ) -> list[StoredChunk]:
+        """Chunks of this source with no context yet.
+
+        Ordered by (source_key, chunk_index) so every chunk of a document
+        arrives together. That adjacency is what lets a batch send the parent
+        document once as a cached prompt prefix instead of once per chunk —
+        the difference between paying full input price per chunk and paying
+        roughly a tenth of it.
+        """
+        sql = (
+            "SELECT id, source_type, source_key, content, metadata, title, url, context "
+            "FROM chunks WHERE source_type = ? AND context IS NULL "
+            "ORDER BY source_key, chunk_index"
+        )
+        params: list[Any] = [source_type]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(sql, tuple(params)).fetchall()
+        return [
+            StoredChunk(
+                id=r["id"],
+                source_type=r["source_type"],
+                source_key=r["source_key"],
+                content=r["content"],
+                metadata=json.loads(r["metadata"]),
+                title=r["title"],
+                url=r["url"],
+                context=r["context"],
+            )
+            for r in rows
+        ]
+
+    def context_coverage(self) -> dict[str, dict[str, int]]:
+        """Per-source total and contextualized counts."""
+        rows = self._conn.execute(
+            "SELECT source_type, COUNT(*) AS total, "
+            "SUM(CASE WHEN context IS NOT NULL THEN 1 ELSE 0 END) AS with_context "
+            "FROM chunks GROUP BY source_type"
+        ).fetchall()
+        return {
+            r["source_type"]: {
+                "total": r["total"],
+                "with_context": r["with_context"] or 0,
+            }
+            for r in rows
+        }
+
+    def doc_body(self, source_type: str, source_key: str) -> str:
+        """Reconstruct a document's body from its stored chunks.
+
+        Each chunk carries a title preamble the chunker prepended; stripping
+        it before joining keeps that boilerplate from being repeated once per
+        chunk inside the prompt a contextualizer pays for.
+        """
+        return "\n\n".join(
+            c.content.split("\n\n", 1)[-1]
+            for c in self.get_by_source_key(source_type, source_key)
         )
 
     def get_by_source_key(self, source_type: str, source_key: str) -> list[StoredChunk]:
         rows = self._conn.execute(
             """
-            SELECT id, source_type, source_key, content, metadata, title, url
+            SELECT id, source_type, source_key, content, metadata, title, url, context
             FROM chunks
             WHERE source_type = ? AND source_key = ?
             ORDER BY chunk_index
@@ -825,6 +984,7 @@ class ChunkStore:
                 metadata=json.loads(row["metadata"]),
                 title=row["title"],
                 url=row["url"],
+                context=row["context"],
             )
             for row in rows
         ]
@@ -843,7 +1003,7 @@ class ChunkStore:
             params.extend(filter_sources)
 
         sql = f"""
-            SELECT id, source_type, source_key, content, metadata, title, url, updated_at
+            SELECT id, source_type, source_key, content, metadata, title, url, context, updated_at
             FROM chunks
             WHERE {" AND ".join(clauses)}
             ORDER BY updated_at DESC

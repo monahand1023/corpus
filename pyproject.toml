@@ -68,6 +68,7 @@ xls = [
 [project.scripts]
 corpus-init = "corpus.cli.init:main"
 corpus-ingest = "corpus.cli.ingest:main"
+corpus-contextualize = "corpus.cli.contextualize:main"
 corpus-query = "corpus.cli.query:main"
 corpus-eval = "corpus.cli.eval:main"
 corpus-judge = "corpus.cli.judge:main"

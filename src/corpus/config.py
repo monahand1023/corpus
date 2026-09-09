@@ -131,6 +131,23 @@ class PerformanceConfig(BaseModel):
     temp_store_memory: bool = True
 
 
+class ContextualConfig(BaseModel):
+    """Settings for `corpus-contextualize`.
+
+    Off by default: it calls a paid API over every eligible chunk, so opting
+    in is a decision the operator makes rather than something a fresh config
+    does on their behalf.
+    """
+
+    model: str = "claude-haiku-4-5-20251001"
+    # Global floor; a source can raise or lower it via `context_min_tokens`.
+    min_tokens: int = 50
+    # Chunks per request. Each request re-sends the parent document, so a
+    # larger window means fewer paid document copies — bounded by the model's
+    # output limit, since every chunk in the window needs a context back.
+    window_size: int = 40
+
+
 class SourceConfig(BaseModel):
     name: str = Field(pattern=SOURCE_TYPE_PATTERN)
     type: str  # which built-in connector to use, e.g. "markdown"
@@ -168,6 +185,12 @@ class SourceConfig(BaseModel):
     # each reply added rather than re-embedding the quoted thread once per
     # message. See `corpus.connectors.olm`'s module docstring for the
     # measurements behind both defaults.
+    # Contextual Retrieval, per source. `contextualize` opts this source in;
+    # `context_min_tokens` overrides the global floor for it, because the
+    # right floor is corpus-shaped: prose fragments benefit far below the
+    # threshold that source code does. See `corpus.contextual`.
+    contextualize: bool = False
+    context_min_tokens: int | None = None
     olm_folders: list[str] | None = None
     olm_skip_mirror_tree: bool = True
     olm_trim_quotes: bool = True
@@ -196,6 +219,7 @@ class CorpusConfig(BaseModel):
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     pruning: PruningConfig = Field(default_factory=PruningConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
+    contextual: ContextualConfig = ContextualConfig()
     sources: list[SourceConfig] = Field(default_factory=list)
     references: list[ReferencePattern] = Field(default_factory=list)
 
