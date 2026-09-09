@@ -4,12 +4,42 @@ human-readable output, and CLI-level error handling)."""
 from __future__ import annotations
 
 import json
+import math
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from corpus.cli.survey import main_argv
+from corpus.db.sqlite import ChunkStore
+from corpus.types import Chunk, ChunkKind, ChunkMetadata
+from corpus.util.hash import chunk_id, sha256
+
+_OVERLAP_DIM = 8
+
+
+def _fake_embedding(seed: int) -> list[float]:
+    return [math.sin((seed + 1) * (i + 1) * 0.001) for i in range(_OVERLAP_DIM)]
+
+
+def _build_overlap_db(db_path: Path, docs: dict[str, str]) -> None:
+    store = ChunkStore(db_path, embedding_dim=_OVERLAP_DIM)
+    try:
+        items = []
+        for i, (key, content) in enumerate(docs.items()):
+            chunk = Chunk(
+                id=chunk_id("archive", key, ChunkKind.SECTION, 0),
+                content=content,
+                content_hash=sha256(content),
+                metadata=ChunkMetadata(
+                    source_type="archive", source_key=key, chunk_kind=ChunkKind.SECTION,
+                    chunk_index=0, title=key,
+                ),
+            )
+            items.append((chunk, _fake_embedding(i)))
+        store.upsert_batch(items)
+    finally:
+        store.close()
 
 
 def _touch(root: Path, rel: str, content: str = "x") -> Path:
@@ -146,6 +176,63 @@ def test_media_nonexistent_path_errors_cleanly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     rc = main_argv(["media", str(tmp_path / "nope")])
+
+    assert rc == 1
+    assert "not a directory" in capsys.readouterr().err
+
+
+def test_overlap_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    tree = tmp_path / "tree"
+    db_path = tmp_path / "archive.db"
+    phrase = "The quarterly planning review covered budget allocations for next year"
+    _touch(tree, "doc.txt", f"{phrase}\n")
+    _build_overlap_db(db_path, {"doc": phrase})
+
+    rc = main_argv(["overlap", str(tree), "--db", str(db_path), "--json", "--sample-size", "5"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["eligible_document_count"] == 1
+    assert payload["sample_size"] == 1
+    assert payload["matched_count"] == 1
+    assert payload["confidence_interval_95"] is not None
+    assert "method" in payload
+
+
+def test_overlap_human_output_states_method_and_caveat(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tree = tmp_path / "tree"
+    db_path = tmp_path / "archive.db"
+    _touch(tree, "doc.txt", "too short\n")
+    _build_overlap_db(db_path, {"x": "irrelevant"})
+
+    rc = main_argv(["overlap", str(tree), "--db", str(db_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "No eligible documents" in out
+
+
+def test_overlap_missing_db_errors_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+
+    rc = main_argv(["overlap", str(tree), "--db", str(tmp_path / "nope.db")])
+
+    assert rc == 1
+    assert "database not found" in capsys.readouterr().err
+
+
+def test_overlap_nonexistent_path_errors_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "archive.db"
+    _build_overlap_db(db_path, {"x": "irrelevant"})
+
+    rc = main_argv(["overlap", str(tmp_path / "nope"), "--db", str(db_path)])
 
     assert rc == 1
     assert "not a directory" in capsys.readouterr().err

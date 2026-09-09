@@ -27,6 +27,13 @@ from corpus.survey.media import (
     TypeSurvey,
     run_media_survey,
 )
+from corpus.survey.overlap import (
+    DEFAULT_MIN_WORDS,
+    DEFAULT_SAMPLE_SIZE,
+    OverlapResult,
+    SampledDocument,
+    run_overlap_survey,
+)
 
 _DESCRIPTION_BY_CATEGORY = {
     "indexable": "Indexable (corpus has a connector)",
@@ -320,6 +327,97 @@ def _run_media(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sampled_doc_to_dict(s: SampledDocument) -> dict[str, Any]:
+    return {"path": s.rel_path, "phrase": s.phrase, "matched": s.matched, "matched_source": s.matched_source}
+
+
+_OVERLAP_METHOD = (
+    "Reservoir-sampled up to N plain-text-decodable documents (.txt/.md/.markdown/"
+    ".rst/.log/.csv/.tsv/.json/.yaml/.yml — binary formats like PDF/DOCX are not "
+    "sampled by this version; see corpus-survey census for their share of the tree), "
+    "extracted one distinctive phrase per document (the longest line with at least "
+    "--min-words words), and checked each phrase against the target database: an "
+    "FTS5 BM25 search for candidate chunks, then a literal case-insensitive "
+    "substring confirmation against each candidate's content (not just shared "
+    "vocabulary). estimated_overlap_fraction is matched/sampled with a 95% Wilson "
+    "confidence interval. Caveats: small samples carry wide intervals — increase "
+    "--sample-size for a tighter one; a match means this exact phrase text is "
+    "present somewhere in the target database, not that the whole document is "
+    "identical or unchanged; content reformatted or edited since it was indexed "
+    "may be undercounted as 'not found'."
+)
+
+
+def _overlap_result_to_dict(result: OverlapResult) -> dict[str, Any]:
+    ci = result.confidence_interval_95
+    return {
+        "root": result.root,
+        "db_path": result.db_path,
+        "excludes": list(result.excludes),
+        "default_excludes_applied": result.use_default_excludes,
+        "follows_symlinks": False,
+        "eligible_document_count": result.eligible_document_count,
+        "sample_size": result.sample_size,
+        "matched_count": result.matched_count,
+        "estimated_overlap_fraction": result.estimated_overlap_fraction,
+        "confidence_interval_95": list(ci) if ci is not None else None,
+        "sample": [_sampled_doc_to_dict(s) for s in result.sample],
+        "method": _OVERLAP_METHOD,
+    }
+
+
+def _run_overlap(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 1
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"error: database not found: {db_path}", file=sys.stderr)
+        return 1
+
+    try:
+        result = run_overlap_survey(
+            root,
+            db_path,
+            excludes=tuple(args.excludes),
+            use_default_excludes=not args.no_default_excludes,
+            sample_size=args.sample_size,
+            min_words=args.min_words,
+        )
+    except OSError as e:
+        print(f"error: could not open database {db_path}: {e}", file=sys.stderr)
+        return 1
+
+    if args.as_json:
+        print(json.dumps(_overlap_result_to_dict(result), indent=2))
+        return 0
+
+    print(f"corpus-survey overlap: {result.root}  vs.  {result.db_path}")
+    print(
+        f"{human_count(result.eligible_document_count)} eligible plain-text document(s) found "
+        "(binary formats like PDF/DOCX are not sampled — see corpus-survey census)."
+    )
+    if not result.sample:
+        print("No eligible documents to sample — no estimate.")
+        return 0
+
+    print(f"Sampled {human_count(result.sample_size)}, {human_count(result.matched_count)} matched.")
+    frac = result.estimated_overlap_fraction
+    ci = result.confidence_interval_95
+    if frac is not None and ci is not None:
+        print(f"Estimated overlap: {frac:.0%}  (95% CI: {ci[0]:.0%}–{ci[1]:.0%})")
+    print(
+        "\nMethod: FTS5 candidate recall + literal substring confirmation of one "
+        "distinctive phrase per sampled document. This is an estimate, not a count "
+        "— small samples carry wide confidence intervals; increase --sample-size "
+        "for a tighter one. A match means the exact phrase text was found "
+        "somewhere in the target database, not that the whole document is "
+        "identical; reformatted/edited content may be undercounted as 'not found'."
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="corpus-survey", description="Read-only reconnaissance for deciding what to index"
@@ -357,6 +455,27 @@ def build_parser() -> argparse.ArgumentParser:
         "projects processing time from the estimated total hours",
     )
     p_media.set_defaults(func=_run_media)
+
+    p_overlap = sub.add_parser(
+        "overlap", help="Estimate how much of a directory is already indexed elsewhere"
+    )
+    _add_common_tree_args(p_overlap)
+    p_overlap.add_argument(
+        "--db", required=True, metavar="PATH", help="Path to the existing corpus SQLite database"
+    )
+    p_overlap.add_argument(
+        "--sample-size",
+        type=int,
+        default=DEFAULT_SAMPLE_SIZE,
+        help=f"Documents to sample (default {DEFAULT_SAMPLE_SIZE})",
+    )
+    p_overlap.add_argument(
+        "--min-words",
+        type=int,
+        default=DEFAULT_MIN_WORDS,
+        help=f"Minimum words for a line to count as a distinctive phrase (default {DEFAULT_MIN_WORDS})",
+    )
+    p_overlap.set_defaults(func=_run_overlap)
 
     return parser
 
