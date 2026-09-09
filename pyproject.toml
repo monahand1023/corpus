@@ -71,6 +71,7 @@ corpus-summarize = "corpus.cli.summarize:main"
 corpus-benchmark = "corpus.cli.benchmark:main"
 corpus-list = "corpus.cli.list_sources:main"
 corpus-reset = "corpus.cli.reset:main"
+corpus-survey = "corpus.cli.survey:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,74 @@
+"""Tests for the `corpus-survey` CLI entrypoint (argparse wiring, --json,
+human-readable output, and CLI-level error handling)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from corpus.cli.survey import main_argv
+
+
+def _touch(root: Path, rel: str, content: str = "x") -> Path:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    return p
+
+
+def test_census_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _touch(tmp_path, "notes.md", "hello")
+    _touch(tmp_path, "deck.foo", "world")
+
+    rc = main_argv(["census", str(tmp_path), "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["files_scanned"] == 2
+    assert payload["follows_symlinks"] is False
+    assert {b["bucket"] for b in payload["indexable"]} == {".md"}
+    assert {b["bucket"] for b in payload["gap"]} == {".foo"}
+
+
+def test_census_human_output_mentions_symlink_policy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _touch(tmp_path, "notes.md")
+
+    rc = main_argv(["census", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "not followed" in out
+    assert "Gap" in out
+    assert "Indexable" in out
+
+
+def test_census_nonexistent_path_errors_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = main_argv(["census", str(tmp_path / "nope")])
+
+    assert rc == 1
+    assert "not a directory" in capsys.readouterr().err
+
+
+def test_census_exclude_flag_is_repeatable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _touch(tmp_path, "keep.md")
+    _touch(tmp_path, "skip1/a.md")
+    _touch(tmp_path, "skip2/b.md")
+
+    rc = main_argv(
+        ["census", str(tmp_path), "--exclude", "skip1", "--exclude", "skip2", "--json"]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["files_scanned"] == 1
+
+
+def test_no_subcommand_errors(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main_argv([])
