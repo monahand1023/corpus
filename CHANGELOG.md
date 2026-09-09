@@ -256,6 +256,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **`corpus-index`'s cost estimate overstated by up to ~400x for compressed
+  formats.** The estimate was a flat `file_size / 4`, i.e. "roughly one
+  character of text per byte of file" — true for plain text/markdown, wildly
+  false for PDF/DOCX/XLSX/ZIP/etc., which pack images, fonts, and XML/binary
+  scaffolding into their file size alongside (or instead of) extractable
+  text. Measured against a real, mixed large mixed corpus: PDFs yield about
+  0.16 characters of text per 100 bytes of file, not ~100. Concretely, a
+  large PDF-heavy source was reported as an alarmingly largetoken estimate (an operation to think twice about) when its actual extracted
+  text was a tiny fraction of that (a few cents). An estimate that scary
+  makes people decline runs they should just do — the opposite of what a
+  cost estimate is for. New `corpus.util.text_yield` module holds a
+  per-connector-type text-yield ratio (chars extracted per byte of source
+  file) from that measurement, reused by both `corpus.planner` (the
+  `corpus-index` plan) and `corpus-survey census`'s indexable-bucket table
+  (now shows an `est. tokens` column and JSON field, same calibration, so
+  the two tools agree). Deliberately biased against understating: an
+  unmeasured connector type defaults to the old ~1:1 assumption (the safe,
+  conservative direction) rather than a guessed-low ratio, EXCEPT where
+  that would reproduce this exact bug for a different reason — `aup3`
+  project files are mostly binary audio sample data with a small,
+  roughly-fixed-size generated description, so defaulting to ~1:1 there
+  would "estimate" a large project at hundreds of millions of tokens for a
+  few hundred words of actual output; it gets a low, reasoned default
+  instead (see the module docstring). Final token counts always round up,
+  never down. `corpus-index`'s and `corpus-survey census`'s printed output
+  now state the method and its uncertainty explicitly (a scanned PDF with
+  no text layer yields close to nothing until OCR'd, for instance) rather
+  than presenting a single number as exact.
 - **`corpus-index` claimed noise directories were "not ingested" — they
   were.** The plan (`corpus.survey.census`, via `corpus.survey.walk`)
   already excluded `node_modules`, `.git`, build caches, `.photoslibrary`

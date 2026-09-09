@@ -34,6 +34,7 @@ from corpus.survey.overlap import (
     SampledDocument,
     run_overlap_survey,
 )
+from corpus.util.text_yield import estimate_tokens_from_bytes
 
 _DESCRIPTION_BY_CATEGORY = {
     "indexable": "Indexable (corpus has a connector)",
@@ -61,24 +62,49 @@ def _add_common_tree_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--json", action="store_true", dest="as_json", help="Emit machine-readable JSON")
 
 
-def _print_bucket_table(title: str, rows: list[BucketStat], show_detail: bool) -> None:
+def _print_bucket_table(
+    title: str, rows: list[BucketStat], show_detail: bool, show_estimate: bool = False
+) -> None:
     print(f"\n{title}")
     if not rows:
         print("  (none)")
         return
     header = f"  {'bucket':<24} {'count':>10} {'size':>12}"
+    if show_estimate:
+        header += f" {'est. tokens':>14}"
     if show_detail:
         header += "  detail"
     print(header)
+    total_tokens = 0
     for r in rows:
         line = f"  {r.bucket:<24} {human_count(r.count):>10} {human_size(r.total_bytes):>12}"
+        if show_estimate:
+            # `r.detail` is the connector type (e.g. "pdf") for an indexable
+            # bucket -- see `corpus.survey.classify` -- the same key
+            # `corpus.util.text_yield` is keyed by.
+            tokens = estimate_tokens_from_bytes(r.detail, r.total_bytes)
+            total_tokens += tokens
+            line += f" {human_count(tokens):>14}"
         if show_detail:
             line += f"  {r.detail}"
         print(line)
+    if show_estimate:
+        print(
+            f"  -> ~{human_count(total_tokens)} estimated token(s) total. Calibrated "
+            "per format from a measured real corpus, not the embedder's real "
+            "tokenizer count, and rounded up rather than down when uncertain — see "
+            "corpus.util.text_yield. A scanned PDF with no text layer yields close "
+            "to nothing until OCR'd, for instance; treat this as a ceiling, not a "
+            "quote."
+        )
 
 
 def _bucket_to_dict(b: BucketStat) -> dict[str, Any]:
     return {"bucket": b.bucket, "detail": b.detail, "count": b.count, "total_bytes": b.total_bytes}
+
+
+def _indexable_bucket_to_dict(b: BucketStat) -> dict[str, Any]:
+    return {**_bucket_to_dict(b), "estimated_tokens": estimate_tokens_from_bytes(b.detail, b.total_bytes)}
 
 
 def _census_result_to_dict(result: CensusResult) -> dict[str, Any]:
@@ -98,7 +124,7 @@ def _census_result_to_dict(result: CensusResult) -> dict[str, Any]:
             "stat_errors": result.walk_stats.stat_errors,
             "files_excluded": result.walk_stats.files_excluded,
         },
-        "indexable": [_bucket_to_dict(b) for b in result.indexable],
+        "indexable": [_indexable_bucket_to_dict(b) for b in result.indexable],
         "gap": [_bucket_to_dict(b) for b in result.gap],
         "noise": [_bucket_to_dict(b) for b in result.noise],
     }
@@ -142,7 +168,9 @@ def _run_census(args: argparse.Namespace) -> int:
         print("  " + "; ".join(error_bits))
 
     _print_bucket_table(_DESCRIPTION_BY_CATEGORY["gap"], result.gap, show_detail=False)
-    _print_bucket_table(_DESCRIPTION_BY_CATEGORY["indexable"], result.indexable, show_detail=True)
+    _print_bucket_table(
+        _DESCRIPTION_BY_CATEGORY["indexable"], result.indexable, show_detail=True, show_estimate=True
+    )
     _print_bucket_table(_DESCRIPTION_BY_CATEGORY["noise"], result.noise, show_detail=True)
     return 0
 

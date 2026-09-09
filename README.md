@@ -284,10 +284,14 @@ It surveys the directory (reusing `corpus-survey census`), then prints,
   loose-file noise (`.DS_Store`, minified JS, ...) found alongside real
   content.
 - **the plan** — exactly which connectors will run over which files, with
-  per-source file counts, sizes, and an estimated token count (a rough
-  ceiling from file size, not a real tokenizer count — embedding is billed
-  per token, and this is meant to catch a surprise before it happens, not
-  to be exact).
+  per-source file counts, sizes, and an estimated token count. Calibrated
+  per format from a real, measured corpus rather than a flat file-size/4
+  guess — a compressed container format like PDF or DOCX extracts to a
+  small fraction of its file size (packed with images, fonts, XML
+  scaffolding), so a flat guess overstated real PDF-heavy sources by
+  roughly 400x in practice. Still an estimate, not the embedder's real
+  tokenizer count, and rounded up rather than down when uncertain — meant
+  to catch a real surprise before it happens without inventing a fake one.
 - optionally, with `--check-overlap corpus.db`, an estimate of how much of
   the directory is already indexed somewhere else (reusing `corpus-survey
   overlap`) — so you can skip paying to re-embed content you already have.
@@ -311,13 +315,21 @@ Noise (excluded from the plan, not ingested)
 Plan — sources that would be written to corpus.toml and ingested
   name                     type      files       size   est. tokens
   export_markdown          markdown    340     6.1 MB      1,600,000
-  export_pdf                pdf         52    18.4 MB      4,800,000
-  TOTAL                                392    24.5 MB      6,400,000
+  export_pdf                pdf         52    18.4 MB          7,400
+  TOTAL                                392    24.5 MB      1,607,400
+
+  Estimated tokens = raw bytes × a per-format text-yield ratio measured
+  against a real corpus (pdf ~0.2%, docx ~2.9%, html ~35.3%, text ~99.5% —
+  see corpus.util.text_yield), ÷ 4. Not the embedder's real tokenizer
+  count; rounded up rather than down when uncertain.
 
 Write these sources to corpus.toml and ingest? [y/N]
 ```
 
-(Illustrative numbers — run it against your own directory.)
+(Illustrative numbers — run it against your own directory. Note how little
+the 18.4 MB of PDFs actually costs to embed compared to the markdown, even
+though it's a bigger source by file size — that gap is exactly what a flat
+file-size/4 estimate used to hide.)
 
 Confirmed sources are **merged into corpus.toml** (`[[sources]]` blocks are
 appended, existing ones are never touched), not ingested transiently — a

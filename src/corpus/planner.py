@@ -35,21 +35,8 @@ from corpus.config import SourceConfig
 from corpus.survey.census import BucketStat, CensusResult, run_census
 from corpus.survey.overlap import OverlapResult
 from corpus.util.autodetect import detect_sources, normalize_source_name
+from corpus.util.text_yield import estimate_tokens_from_bytes
 from corpus.util.toml_write import toml_str
-
-# Rough token estimate from raw file size, not a real tokenizer count: the
-# chars/4 heuristic corpus already uses for chunk-boundary math (see
-# `corpus.util.tokens.estimate_tokens`), applied to bytes-on-disk because
-# nothing has parsed the files yet at planning time — the whole point of a
-# plan is to show cost *before* paying to open every file with an optional
-# connector extra that might not even be installed. This is a ceiling for
-# plain-text formats (bytes ≈ chars for ASCII/UTF-8 prose) but can diverge
-# substantially for binary containers (PDF/DOCX/PPTX/XLSX), where the file
-# size reflects compressed XML/binary structure, not extracted text length.
-# Reported as an estimate with that caveat spelled out, never as a bare
-# number — same honesty standard `corpus-survey media`/`overlap` hold their
-# own extrapolations to.
-BYTES_PER_TOKEN_ESTIMATE = 4
 
 
 @dataclass
@@ -63,7 +50,18 @@ class PlannedSource:
 
     @property
     def estimated_tokens(self) -> int:
-        return self.total_bytes // BYTES_PER_TOKEN_ESTIMATE
+        # Rough token estimate, not a real tokenizer count: raw bytes ->
+        # format-calibrated character estimate (`corpus.util.text_yield`,
+        # measured per connector type against a real corpus, since a
+        # compressed/binary container's file size says almost nothing about
+        # its extracted text length) -> chars/4. Computed from bytes-on-disk
+        # because nothing has parsed the files yet at planning time — the
+        # whole point of a plan is to show cost *before* paying to open
+        # every file with an optional connector extra that might not even
+        # be installed. Reported as an estimate with that caveat spelled
+        # out, never as a bare number — same honesty standard
+        # `corpus-survey media`/`overlap` hold their own extrapolations to.
+        return estimate_tokens_from_bytes(self.source.type, self.total_bytes)
 
 
 @dataclass

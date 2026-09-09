@@ -10,6 +10,7 @@ import pytest
 
 from corpus.config import SourceConfig
 from corpus.planner import build_plan, merge_sources_into_toml
+from corpus.util.text_yield import estimate_tokens_from_bytes
 
 
 def _touch(root: Path, rel: str, content: str = "hello world this is a test\n") -> Path:
@@ -39,14 +40,16 @@ def test_build_plan_detects_sources_with_counts_and_bytes(tmp_path: Path) -> Non
     assert by_type["text"].file_count == 1
 
 
-def test_build_plan_estimated_tokens_is_bytes_over_four(tmp_path: Path) -> None:
+def test_build_plan_estimated_tokens_uses_calibrated_text_yield(tmp_path: Path) -> None:
+    """Token estimate is calibrated per connector type (`corpus.util.text_yield`),
+    not a flat bytes/4 -- see `corpus.planner.PlannedSource.estimated_tokens`."""
     root = tmp_path / "Inbox"
     _touch(root, "a.txt", "x" * 400)
 
     plan = build_plan(root)
     (p,) = plan.sources
     assert p.total_bytes == 400
-    assert p.estimated_tokens == 100
+    assert p.estimated_tokens == estimate_tokens_from_bytes("text", 400)
 
 
 def test_build_plan_reports_gap(tmp_path: Path) -> None:
@@ -123,7 +126,9 @@ def test_build_plan_totals(tmp_path: Path) -> None:
 
     assert plan.total_file_count == 2
     assert plan.total_bytes == 100
-    assert plan.total_estimated_tokens == 25
+    assert plan.total_estimated_tokens == (
+        estimate_tokens_from_bytes("markdown", 40) + estimate_tokens_from_bytes("text", 60)
+    )
 
 
 # ---------------------------------------------------------------------------

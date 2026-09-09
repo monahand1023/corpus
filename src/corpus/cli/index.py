@@ -72,15 +72,10 @@ from corpus.cli._common import load_config_or_exit
 from corpus.config import DEFAULT_CONFIG_PATH
 from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester, IngestResult
-from corpus.planner import (
-    BYTES_PER_TOKEN_ESTIMATE,
-    IndexPlan,
-    MergeResult,
-    build_plan,
-    merge_sources_into_toml,
-)
+from corpus.planner import IndexPlan, MergeResult, build_plan, merge_sources_into_toml
 from corpus.survey.format import human_count, human_size
 from corpus.survey.overlap import run_overlap_survey
+from corpus.util.text_yield import MEASURED_TEXT_YIELD_RATIOS
 
 
 def _print_gap(plan: IndexPlan) -> None:
@@ -178,12 +173,20 @@ def _print_plan_table(plan: IndexPlan, provider: str, model: str) -> None:
         f"  {'TOTAL':<28} {'':<10} {human_count(plan.total_file_count):>8} "
         f"{human_size(plan.total_bytes):>12} {human_count(plan.total_estimated_tokens):>14}"
     )
+    ratio_examples = ", ".join(
+        f"{t} ~{MEASURED_TEXT_YIELD_RATIOS[t]:.1%}"
+        for t in ("pdf", "docx", "html", "text")
+        if t in MEASURED_TEXT_YIELD_RATIOS
+    )
     print(
-        f"\n  Estimated tokens = file size ÷ {BYTES_PER_TOKEN_ESTIMATE} — a rough ceiling "
-        "from raw bytes, not the embedder's real tokenizer count. Binary formats "
-        "(PDF/DOCX/PPTX/XLSX) extract to substantially less text than their file "
-        f"size; embedding is billed per token by your provider (embedder: "
-        f"{provider}/{model}) — check its current pricing before a large first run."
+        "\n  Estimated tokens = raw bytes × a per-format text-yield ratio measured "
+        f"against a real corpus ({ratio_examples} — see corpus.util.text_yield), ÷ 4. "
+        "NOT the embedder's real tokenizer count, and rounded up, not down, when "
+        "uncertain: an unmeasured or unusually image/scan-heavy file can still cost "
+        "less or more than this shows — a scanned PDF with no text layer yields "
+        f"close to nothing until OCR'd, for instance. Embedding is billed per token "
+        f"by your provider (embedder: {provider}/{model}) — check its current "
+        "pricing before a large first run."
     )
 
 
