@@ -137,3 +137,22 @@ def test_dedupes_identical_decks(tmp_path: Path) -> None:
     _save_deck(tmp_path / "b.pptx", build)
     docs = list(PptxConnector(source_type="decks", path=tmp_path).load())
     assert len(docs) == 1
+
+
+# --- shared permanence classifier -------------------------------------------
+
+
+def test_office_lock_file_is_skipped(tmp_path: Path) -> None:
+    # Word/PowerPoint leave `~$name.pptx` beside an open document and delete
+    # it on close; an ungraceful quit leaves it behind. It is invisible in
+    # Finder and a glob picks it up anyway. Counting it as a FAILURE would
+    # suppress this source's orphan pruning forever, for a file that is not a
+    # document at all.
+    (tmp_path / "~$deck.pptx").write_bytes(b"\x00" * 32)
+    conn = PptxConnector(source_type="decks", path=tmp_path)
+
+    docs = list(conn.load())
+
+    assert docs == []
+    assert conn.skipped_files == 1
+    assert conn.failed_files == 0

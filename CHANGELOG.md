@@ -303,6 +303,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **Office lock files and renamed legacy documents no longer block orphan
+  pruning forever.** A file a connector cannot read is reported as
+  `failed_files`, which suppresses pruning — correct for a momentarily-locked
+  file, wrong for one that will never be readable, because it recurs
+  identically on every future run and the source can then never prune a
+  genuinely deleted document. Measured on a real archive, the `.docx` files a
+  source could not open included a Word owner-lock file (`~$name.docx`, not a
+  document at all and invisible in Finder) and three legacy `.doc` files
+  renamed rather than converted. New `corpus.util.ooxml` classifies both as
+  permanent, shared by the docx, pptx and xlsx connectors so they cannot
+  drift on what "permanently unreadable" means. `pptx.py`'s own OLE2 check is
+  now that shared one rather than a second copy.
+  - The bar is deliberately high and asymmetric: "empty" and "not a zip" stay
+    TRANSIENT, because a large file mid-copy is not a valid zip yet and an
+    interrupted copy leaves a zero-byte file. A stale suppressed prune leaves
+    an out-of-date index and is recoverable with `--prune-anyway`; a wrong
+    permanence call lets the next prune delete a real document's chunks.
+- **One malformed shape no longer costs an entire presentation.** python-pptx
+  reports `has_text_frame` / `has_notes_slide` as True while the frame itself
+  is None, and `.text` can raise on a malformed shape — either of which
+  raised out of the slide loop and lost the whole deck. Measured: a real
+  40-slide presentation yielding nothing because of a single placeholder. A
+  bad shape now costs only that shape.
 - **Byte-order marks are honoured before the text-decoding ladder.** A
   BOM-carrying UTF-16 file previously fell through UTF-8 to CP932 or
   latin-1, both of which "succeed" on UTF-16 bytes and return one NUL per

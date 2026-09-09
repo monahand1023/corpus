@@ -59,9 +59,13 @@ from pathlib import Path
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
+from corpus.util.ooxml import permanent_read_failure_reason
 
 logger = logging.getLogger(__name__)
 
+# Kept for tests and for readers of this module; the live check is
+# `corpus.util.ooxml.permanent_read_failure_reason`, shared with docx/xlsx so
+# the three cannot drift apart on what "permanently unreadable" means.
 # Standard Compound File Binary (OLE2) magic — every legacy `.ppt`/`.doc`/
 # `.xls` starts with these 8 bytes. See the module docstring: this is the
 # only reliable way to tell "old binary format, will never parse" apart from
@@ -88,7 +92,7 @@ def _extract_slide_text(slide: object) -> tuple[str | None, list[str]]:
     if title_shape is not None:
         title_id = getattr(title_shape, "shape_id", None)
         if getattr(title_shape, "has_text_frame", False):
-            t = title_shape.text_frame.text.strip()
+            t = _frame_text(getattr(title_shape, "text_frame", None))
             title_text = t or None
 
     lines: list[str] = []
@@ -101,7 +105,7 @@ def _extract_slide_text(slide: object) -> tuple[str | None, list[str]]:
                 walk(shape.shapes)
                 continue
             if getattr(shape, "has_text_frame", False):
-                text = shape.text_frame.text.strip()
+                text = _frame_text(getattr(shape, "text_frame", None))
                 if text:
                     lines.append(text)
             elif getattr(shape, "has_table", False):
@@ -114,10 +118,28 @@ def _extract_slide_text(slide: object) -> tuple[str | None, list[str]]:
     return title_text, lines
 
 
+def _frame_text(frame: object) -> str:
+    """Text from a python-pptx text frame, tolerating the ones that lie.
+
+    `has_text_frame` / `has_notes_slide` can be True while the frame itself
+    is None, and a frame's `.text` can raise on a malformed shape. Both
+    happen in real decks. Without this, one bad shape raises out of the whole
+    slide loop and the ENTIRE presentation is lost — measured: a 40-slide
+    deck yielding nothing because of a single placeholder.
+    """
+    if frame is None:
+        return ""
+    try:
+        return str(getattr(frame, "text", "") or "").strip()
+    except Exception:
+        return ""
+
+
 def _extract_notes(slide: object) -> str:
     if not getattr(slide, "has_notes_slide", False):
         return ""
-    return str(slide.notes_slide.notes_text_frame.text).strip()  # type: ignore[attr-defined]
+    notes_slide = getattr(slide, "notes_slide", None)
+    return _frame_text(getattr(notes_slide, "notes_text_frame", None))
 
 
 def _slide_section(index: int, title: str | None, body_lines: list[str], notes: str) -> str | None:
@@ -164,26 +186,16 @@ class PptxConnector:
 
         seen: dict[str, str] = {}
         for path in discover_files(self._root, self._glob):
-            try:
-                with path.open("rb") as f:
-                    header = f.read(len(_OLE2_MAGIC))
-            except OSError as e:
-                logger.warning(
-                    "Pptx source '%s': cannot read %s: %s", self.source_type, path, e
-                )
-                self.failed_files += 1
-                continue
-
-            if header.startswith(_OLE2_MAGIC):
+            # Permanent conditions are skipped, not failed: they recur
+            # identically on every run, so counting them as failures
+            # would suppress this source's orphan pruning forever.
+            reason = permanent_read_failure_reason(path)
+            if reason is not None:
                 logger.info(
-                    "%s: skipping '%s' — legacy binary .ppt (OLE2) format; "
-                    "python-pptx cannot read this and never will",
-                    self.source_type,
-                    path.name,
+                    "%s: skipping '%s' — %s", self.source_type, path.name, reason
                 )
                 self.skipped_files += 1
                 continue
-
             try:
                 presentation = Presentation(str(path))
                 # python-pptx parses lazily too: materialize everything we

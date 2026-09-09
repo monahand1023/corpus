@@ -26,6 +26,7 @@ from pathlib import Path
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
+from corpus.util.ooxml import permanent_read_failure_reason
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class DocxConnector:
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
         self.failed_files = 0
+        self.skipped_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
         # Per-file read failures are counted, not just logged: a skipped file
@@ -50,6 +52,7 @@ class DocxConnector:
         # non-zero. Reset per run so a reused instance cannot suppress pruning
         # forever on the strength of an old failure.
         self.failed_files = 0
+        self.skipped_files = 0
         import docx
 
         if not self._root.is_dir():
@@ -59,6 +62,16 @@ class DocxConnector:
 
         seen: dict[str, str] = {}
         for path in discover_files(self._root, self._glob):
+            # Permanent conditions are skipped, not failed: they recur
+            # identically on every run, so counting them as failures
+            # would suppress this source's orphan pruning forever.
+            reason = permanent_read_failure_reason(path)
+            if reason is not None:
+                logger.info(
+                    "%s: skipping '%s' — %s", self.source_type, path.name, reason
+                )
+                self.skipped_files += 1
+                continue
             try:
                 document = docx.Document(str(path))
                 # python-docx parses lazily as well: a malformed package can

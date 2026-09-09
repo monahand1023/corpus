@@ -7,6 +7,10 @@ import pytest
 
 from corpus.connectors.docx import DocxConnector
 
+# The connector checks a file's real signature before parsing, so a
+# fixture standing in for a readable .docx has to carry a genuine zip
+# local-file-header magic. (b"PK fake" merely looked zip-ish.)
+
 
 def _make_mock_docx(paragraphs: list[str], tables: list[list[list[str]]] | None = None,
                     title: str | None = None) -> MagicMock:
@@ -23,7 +27,7 @@ def _make_mock_docx(paragraphs: list[str], tables: list[list[list[str]]] | None 
 
 
 def test_loads_paragraphs_and_tables(tmp_path: Path) -> None:
-    (tmp_path / "report.docx").write_bytes(b"PK fake")
+    (tmp_path / "report.docx").write_bytes(b"PK\x03\x04 fake")
     doc = _make_mock_docx(
         ["First paragraph.", "", "Second paragraph."],
         tables=[[["Name", "Qty"], ["Widget", "3"]]],
@@ -41,14 +45,14 @@ def test_loads_paragraphs_and_tables(tmp_path: Path) -> None:
 
 
 def test_title_falls_back_to_filename_stem(tmp_path: Path) -> None:
-    (tmp_path / "untitled-doc.docx").write_bytes(b"PK fake")
+    (tmp_path / "untitled-doc.docx").write_bytes(b"PK\x03\x04 fake")
     with patch("docx.Document", return_value=_make_mock_docx(["Body text here."])):
         docs = list(DocxConnector(source_type="docs", path=tmp_path).load())
     assert docs[0].title == "untitled-doc"
 
 
 def test_skips_empty_documents(tmp_path: Path) -> None:
-    (tmp_path / "empty.docx").write_bytes(b"PK fake")
+    (tmp_path / "empty.docx").write_bytes(b"PK\x03\x04 fake")
     with patch("docx.Document", return_value=_make_mock_docx(["", "   "])):
         docs = list(DocxConnector(source_type="docs", path=tmp_path).load())
     assert docs == []
@@ -67,8 +71,8 @@ def test_missing_dir_raises() -> None:
 
 
 def test_dedupes_identical_documents(tmp_path: Path) -> None:
-    (tmp_path / "a.docx").write_bytes(b"PK")
-    (tmp_path / "b.docx").write_bytes(b"PK")
+    (tmp_path / "a.docx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "b.docx").write_bytes(b"PK\x03\x04")
     with patch("docx.Document", return_value=_make_mock_docx(["Same body."])):
         docs = list(DocxConnector(source_type="docs", path=tmp_path).load())
     assert len(docs) == 1
@@ -78,8 +82,8 @@ def test_lazy_parse_failure_is_contained_to_the_file(tmp_path: Path) -> None:
     """python-docx parses lazily too: a malformed file can construct fine and
     only raise when `.paragraphs` is touched. That access must be inside the
     per-file guard, or one bad file aborts the whole source."""
-    (tmp_path / "broken.docx").write_bytes(b"PK fake")
-    (tmp_path / "fine.docx").write_bytes(b"PK fake")
+    (tmp_path / "broken.docx").write_bytes(b"PK\x03\x04 fake")
+    (tmp_path / "fine.docx").write_bytes(b"PK\x03\x04 fake")
 
     def doc_factory(path: str) -> MagicMock:
         d = MagicMock()
