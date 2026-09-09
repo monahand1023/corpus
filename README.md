@@ -404,6 +404,19 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 
 If you need any of the above, `corpus` is the wrong starting point — though its pieces (the SQLite schema, connectors, retriever) are small enough to lift into something larger.
 
+## Where your data lives
+
+`corpus` is a generic engine — a library that builds and serves an index, not a place to keep one. It never holds data itself.
+
+The intended shape is one private *consumer* repo per archive (the pattern used by `a mail consumer`, `a media consumer`, `a document consumer`, and similar projects): its own `data/` directory for the database, its own `corpus.toml` pointing at real source paths, and no public remote. That consumer repo depends on `corpus`; `corpus` never depends on knowing where anyone's data lives, and its own source tree is never where an index belongs.
+
+A database or a real `corpus.toml` inside `corpus`'s own package directory or repo root is always a mistake, even though nothing stops you from creating one by accident:
+
+- It survives only as long as `.gitignore` happens to stay correct — and `corpus` is a public repo, so one rewritten `.gitignore`, one `git add -f`, or one new file pattern nobody thought to exclude is the distance between an accident and a real leak.
+- An untracked file sitting there is exactly what `git clean -fdx` deletes outright.
+
+`corpus` notices and warns when a database path resolves inside its own package or checkout (see `ChunkStore`), and its own test suite fails if a database or a real config ever appears in this repo. But the fix, if you see that warning, is architectural, not a flag to silence it: move `db_path` outside `corpus` entirely, into your own consumer project.
+
 ## Documentation
 
 | Doc | What it covers |
@@ -424,12 +437,15 @@ Want to hack on the framework, write a new connector, or run the tests? Clone an
 git clone https://github.com/monahand1023/corpus.git
 cd corpus
 uv sync --all-extras                 # creates .venv with all deps (incl. embedders)
+./scripts/install-hooks.sh           # wires this checkout's pre-commit guard (see below)
 uv run pytest tests/ -q              # run the suite
 uv run ruff check src/ tests/        # lint
 uv run corpus-init                   # the CLI scripts are also available via `uv run`
 ```
 
 The repo includes `examples/sample_corpus/` (synthetic markdown notes) and `examples/corpus.toml.example` (wired to point at it) for try-before-you-config experiments.
+
+`scripts/install-hooks.sh` points this checkout's `core.hooksPath` at the tracked `.githooks/` directory, whose `pre-commit` hook blocks committing a database file, a root `corpus.toml`, or `.env` — even via `git add -f`. `core.hooksPath` is per-checkout git config, not something a clone inherits, so this is a convenience for catching your own mistakes locally, not a guarantee: run the script again after every fresh clone. `tests/test_repo_hygiene.py` (part of the normal test suite, and run in CI) is the guard that actually can't be skipped.
 
 ## License
 

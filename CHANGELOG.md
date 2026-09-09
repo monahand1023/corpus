@@ -63,6 +63,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   safe even on constrained hardware. Raise `mmap_size_mb` if your
   `corpus.db` is bigger than 1GiB to get the full benefit. See
   [`configuration.md`](docs/configuration.md#performance--sqlite-memory-tuning).
+- **`ChunkStore` warns when a database path resolves inside corpus's own
+  package directory or (in a source checkout) its repo root.** That location
+  is never correct for a consumer's index — it means personal data is being
+  written into a library's own source tree, where it survives only as long
+  as `.gitignore` stays correct. Advisory only (logs a `WARNING`, never
+  raises), so an existing database at such a path is never locked out of its
+  own data by an upgrade. See the new "Where your data lives" README section.
+- **Guardrails against personal data landing in this repo.**
+  `tests/test_repo_hygiene.py` fails the suite — locally on every `pytest`
+  run and in CI — if a `*.db`/`*.db-wal`/`*.db-shm` file or a real root
+  `corpus.toml` ever appears anywhere in the repository. A tracked
+  `.githooks/pre-commit` (wired up per-checkout via `scripts/install-hooks.sh`)
+  additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
 - **One unreadable PDF no longer aborts an entire source.** `pypdf` and
