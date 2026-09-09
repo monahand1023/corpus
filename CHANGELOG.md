@@ -58,6 +58,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   abort an entire `--all` run. Found by ingesting 3,247 real PDFs, where a
   single encrypted file left the source with zero chunks; after the fix, 2,719
   documents and tens of thousands of chunks.
+- **A real `mypy` type error in the test suite** (`upsert_batch` was handed a
+  `list[float] | None` where a `Sequence[float]` was required — the embedder's
+  optional-embedding return type, not asserted away before use). CI only ran
+  `mypy src/`, so this was invisible: `mypy src tests` surfaces it alongside
+  ~225 unrelated `no-untyped-def`-style errors from Mock-heavy test helpers.
+  Fixed the real bug; made the src-only scope explicit via `[tool.mypy]
+  exclude` (with rationale) rather than leaving it an unstated accident that
+  could hide the next real one.
 
 ## [0.3.0] - 2026-09-08
 

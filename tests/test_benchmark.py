@@ -99,7 +99,7 @@ def test_instrumented_query_times_the_real_retriever_query(tmp_path) -> None:
     dim = 32
     store = ChunkStore(tmp_path / "bench.db", embedding_dim=dim)
     embedder = HashEmbedder(dim=dim)
-    items = []
+    items: list[tuple[Chunk, list[float]]] = []
     for stype in ("notes", "papers"):
         for i in range(3):
             content = f"{stype} chunk {i} about testing"
@@ -115,7 +115,15 @@ def test_instrumented_query_times_the_real_retriever_query(tmp_path) -> None:
                     title=content,
                 ),
             )
-            items.append((chunk, embedder.embed_documents([content])[0]))
+            # embed_documents returns list[float] | None per position (None
+            # marks a skipped embedding elsewhere); HashEmbedder never
+            # returns None for non-empty input, so this holds in practice --
+            # the assert makes that explicit for mypy (this line was the one
+            # real bug CI's `mypy src/`-only scope was hiding: upsert_batch
+            # wants Sequence[float], not `| None`).
+            embedding = embedder.embed_documents([content])[0]
+            assert embedding is not None
+            items.append((chunk, embedding))
     store.upsert_batch(items)
 
     retriever = Retriever(store=store, embedder=embedder)

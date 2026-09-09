@@ -115,6 +115,17 @@ ignore = ["E501", "RUF001", "RUF003", "SIM108", "UP047", "SIM103"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+# CI runs `mypy src/` only, and this exclude makes that a deliberate choice
+# rather than an accident: `mypy src tests` (as of 2026-09) surfaces ~225
+# errors across 19 files, nearly all `no-untyped-def`/`no-untyped-call` from
+# Mock-heavy test helpers and fixtures, not real bugs. Widening CI to cover
+# tests/ would mean annotating the suite -- a real, separately-scoped piece of
+# work, not something to fold in here. The exclude keeps `mypy tests/` (or
+# `mypy .`) from re-surfacing that noise for anyone who runs it directly, and
+# stops a genuine bug in a test file (as one was, once) from hiding in that
+# noise unnoticed. If you DO annotate the suite later, drop this line and add
+# tests/ to CI's mypy step in the same change.
+exclude = ["^tests/"]
 
 # sqlite-vec ships no stubs or py.typed marker.
 [[tool.mypy.overrides]]
