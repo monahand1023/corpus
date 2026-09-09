@@ -256,6 +256,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **Byte-order marks are honoured before the text-decoding ladder.** A
+  BOM-carrying UTF-16 file previously fell through UTF-8 to CP932 or
+  latin-1, both of which "succeed" on UTF-16 bytes and return one NUL per
+  ASCII character — worse than the `errors="replace"` behaviour the ladder
+  replaced, because U+FFFD announces the damage while mojibake looks like
+  text to a search index. Measured over 66 mis-decoded files in one
+  archive: 1,811 stray NUL characters across 8 files became 65 in 1 (a
+  1995 telnet capture with genuinely embedded NULs). Also strips UTF-8
+  BOMs that were riding into the first chunk of a document as U+FEFF.
+- **NUL characters are stripped from chunk content.** 239 chunks in one
+  archive carried them, all from PDFs whose fonts had no usable encoding.
+  FTS5 indexing and terminal display both truncate at the first NUL,
+  silently hiding the rest of an otherwise-fine chunk. Applied in
+  `MarkdownChunker`, which every connector routes through, before the
+  content hash is taken.
+- **`corpus-ingest` / `corpus-index` no longer bury their output in
+  extraction noise.** pypdf logs one ERROR per page for an unimplemented
+  CMap and trafilatura one per empty HTML fragment, neither actionable.
+  One archive of Japanese PDFs emitted ~2,000 such lines, scrolling every
+  per-source summary off the screen; the same run now prints 12. Raised to
+  CRITICAL rather than silenced, and `--verbose` restores them in full.
+- **`zip` and `pptx` cost estimates re-measured against many real sources.**
+  `zip` was 0.0001 chars/byte, derived from a single mostly-binary archive
+  and 107x below the aggregate across four real zip sources — an
+  UNDER-estimate, the direction `text_yield`'s own docstring calls the
+  worse error, since the user only finds out after being billed. `pptx`
+  was 0.0287, inherited from `docx` because both are OOXML containers; the
+  container is shared but the content is not, and one 176 MB source
+  estimated at 1.26M tokens actually cost 15,487.
 - **`corpus-index`'s cost estimate overstated by up to ~400x for compressed
   formats.** The estimate was a flat `file_size / 4`, i.e. "roughly one
   character of text per byte of file" — true for plain text/markdown, wildly

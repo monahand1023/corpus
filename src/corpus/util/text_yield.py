@@ -8,8 +8,9 @@ this directly against a real, mixed large mixed corpus on 2026-09-09 (see
 SOURCE file, by connector type:
 
     type        chars/byte   source example
-    pdf           0.0016     papers (source pages, fonts, images dominate)
-    zip           0.0001     archives (compressed; most of it isn't text)
+    pptx          0.0006     several sources (slide media dominates)
+    pdf           0.0016     several sources (pages, fonts, images dominate)
+    zip           0.0107     several sources (compressed; mixed contents)
     docx          0.0287     word_docs (OOXML zip: styles/media overhead)
     rtf           0.0850     rich_text
     xlsx          0.3025     spreadsheets
@@ -17,6 +18,28 @@ SOURCE file, by connector type:
                              the binary formats above)
     text          0.9951     texts (already plain text; ~1:1 as expected)
     markdown      1.0054     notes (already plain text; ~1:1 as expected)
+
+`zip` and `pptx` were re-measured on 2026-09-09 against many real sources
+after the first pass proved unrepresentative, and both moved by ~2 orders
+of magnitude:
+
+  - `zip` was 0.0001, taken from a single archive of mostly-binary content.
+    Across several real zip sources it runs 0.00056 (that same archive, itself
+    5.6x above the number derived from it) to 0.03208 (an archive of office
+    documents) — a 57x spread, since a zip's yield is entirely a property of
+    what someone put in it. The old value understated a large archive's cost
+    by 107x, which is the direction this module explicitly calls the worse
+    error.
+  - `pptx` was 0.0287, inherited from `docx` on the reasoning that both are
+    OOXML zip containers. Measured, it runs 0.00037 to 0.04371 across three
+    sources — the container shape is shared but the CONTENT is not: a deck
+    is mostly embedded media, a Word document mostly text. One 13-file,
+    176 MB source was estimated at 1.26M tokens and cost 15,487.
+
+Both replacements are corpus-wide aggregates, the same methodology as every
+other row (the `pdf` row spans 0.00146 to 0.03050 across its six sources and
+its aggregate predicted the total to within 1%). An aggregate is the right
+estimator for a whole-source cost, and the wrong one for any single file.
 
 The old flat assumption (ratio 1.0, i.e. `bytes / 4` tokens) overstated a
 large PDF source's embedding cost by roughly 400x — a
@@ -63,8 +86,9 @@ import math
 # has one of those type strings and a byte count can look up a ratio here
 # with no translation layer.
 MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
+    "pptx": 0.0006,
     "pdf": 0.0016,
-    "zip": 0.0001,
+    "zip": 0.0107,
     "docx": 0.0287,
     "rtf": 0.0850,
     "xlsx": 0.3025,
@@ -78,10 +102,6 @@ MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
 # `MEASURED_TEXT_YIELD_RATIOS` so it's never mistaken for real data — see
 # `TEXT_YIELD_RATIOS` below, which merges both for lookup purposes.
 _UNMEASURED_DEFAULTS: dict[str, float] = {
-    # Same OOXML zip-container shape as `docx` (styles/media/theme XML
-    # alongside the actual slide text) -- treated the same until measured
-    # rather than guessed independently.
-    "pptx": 0.0287,
     # `csv`/`tsv` source bytes are already plain text (no binary container
     # tax the way docx/xlsx/pptx have), so the safe ceiling (1.0) applies
     # for the common case this connector fully renders. The one thing that
@@ -101,9 +121,12 @@ _UNMEASURED_DEFAULTS: dict[str, float] = {
     # "estimated" at over a hundred million tokens for a document that's
     # actually a few hundred words. This is a structural fact about the
     # format, not genuine uncertainty calling for the conservative-high
-    # default -- so it gets a low ratio, the same order of magnitude as
-    # `zip` (also a container whose declared size is dominated by content
-    # this engine doesn't turn into proportionally-sized text).
+    # default -- so it gets a low ratio. (This was originally described as
+    # "the same order of magnitude as `zip`". It no longer is: `zip` was
+    # re-measured from 0.0001 to 0.0107. The reasoning here never depended
+    # on that comparison -- an `.aup3` description really is a fixed few
+    # hundred words regardless of file size, which is not true of a zip --
+    # so the value stands on its own and the comparison is dropped.)
     "aup3": 0.0001,
 }
 
