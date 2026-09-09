@@ -46,7 +46,14 @@ def main() -> int:
     # silently auto-created empty DB -- there's nothing to query before the
     # first `corpus-ingest` anyway.
     try:
-        store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim, read_only=True)
+        store = ChunkStore(
+            config.db_path,
+            embedding_dim=config.embedder.dim,
+            read_only=True,
+            cache_size_mb=config.performance.cache_size_mb,
+            mmap_size_mb=config.performance.mmap_size_mb,
+            temp_store_memory=config.performance.temp_store_memory,
+        )
     except FileNotFoundError:
         print(f"error: no database at {config.db_path} yet. Run corpus-ingest first.")
         return 1

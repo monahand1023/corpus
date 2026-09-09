@@ -125,3 +125,40 @@ device = "mps"
 """)
     config = CorpusConfig.load(cfg)
     assert config.reranker.device == "mps"
+
+
+def test_performance_defaults(tmp_path: Path) -> None:
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text("")
+    config = CorpusConfig.load(cfg)
+    assert config.performance.cache_size_mb == 64
+    assert config.performance.mmap_size_mb == 1024
+    assert config.performance.temp_store_memory is True
+
+
+def test_performance_override(tmp_path: Path) -> None:
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text("""
+[corpus]
+db_path = "./test.db"
+
+[performance]
+cache_size_mb = 16
+mmap_size_mb = 4096
+temp_store_memory = false
+""")
+    config = CorpusConfig.load(cfg)
+    assert config.performance.cache_size_mb == 16
+    assert config.performance.mmap_size_mb == 4096
+    assert config.performance.temp_store_memory is False
+
+
+def test_performance_sizes_must_be_positive() -> None:
+    from pydantic import ValidationError
+
+    from corpus.config import PerformanceConfig
+
+    with pytest.raises(ValidationError):
+        PerformanceConfig(cache_size_mb=0)
+    with pytest.raises(ValidationError):
+        PerformanceConfig(mmap_size_mb=-1)

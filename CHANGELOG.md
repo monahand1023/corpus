@@ -46,6 +46,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no way to opt out. A migration that does run against a store with
   existing chunks is now logged at WARNING (not INFO) with the path, before
   and after, including the row count rebuilt.
+- **`[performance]` SQLite memory-tuning pragmas** (`cache_size_mb`,
+  `mmap_size_mb`, `temp_store_memory`), applied on every `ChunkStore`
+  connection. Isolated each pragma individually on a synthetic
+  150,000-chunk/711MB store rather than shipping a bundled guess:
+  `mmap_size` turned out to be responsible for effectively the entire
+  effect (measured 3.18x-3.29x on vector search once its window covered
+  the whole store; only 1.37x covering about a third of it — `corpus`'s
+  vector index does an exhaustive per-query scan with no ANN index, so
+  there's no "hot" subset for a bigger page cache to help, but
+  memory-mapped I/O still turns every page touch into a direct memory
+  read). `cache_size` and `temp_store` both measured no effect on this
+  workload and default conservatively; `mmap_size` defaults generously
+  (1GiB) since — unlike `cache_size` — it's a ceiling on a lazily-paged-in,
+  evictable mapping rather than a memory reservation, so a large value is
+  safe even on constrained hardware. Raise `mmap_size_mb` if your
+  `corpus.db` is bigger than 1GiB to get the full benefit. See
+  [`configuration.md`](docs/configuration.md#performance--sqlite-memory-tuning).
 
 ### Fixed
 - **One unreadable PDF no longer aborts an entire source.** `pypdf` and

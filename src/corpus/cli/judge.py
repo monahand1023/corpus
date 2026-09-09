@@ -86,7 +86,13 @@ def _retriever_from_config(config_path: str | None, rerank: bool = False) -> Any
     from corpus.retriever import Retriever
 
     config = load_config_or_exit(config_path)
-    store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
+    store = ChunkStore(
+        config.db_path,
+        embedding_dim=config.embedder.dim,
+        cache_size_mb=config.performance.cache_size_mb,
+        mmap_size_mb=config.performance.mmap_size_mb,
+        temp_store_memory=config.performance.temp_store_memory,
+    )
     embedder = make_embedder(
         provider=config.embedder.provider,
         model=config.embedder.model,

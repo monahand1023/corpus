@@ -66,6 +66,15 @@ class BGEReranker:
     # negligible — factor it in before turning `--rerank` on by default
     # anywhere. Set `[reranker] device = "mps"` in corpus.toml if you know
     # the GPU is free and want the ~2.7x speedup.
+    #
+    # For scale: with the pragma tuning in `corpus.config.PerformanceConfig`
+    # applied, a full vector KNN search costs ~50ms — so one CPU rerank pair
+    # (~390ms) alone costs ~8x an entire tuned search, before multiplying by
+    # however many candidates are in the pool. Reranking is not a cheap
+    # finishing touch on top of search; it's the dominant cost by almost an
+    # order of magnitude per pair. That gap — not just the GPU-contention
+    # risk above — is why `rerank=False` stays the default rather than
+    # something to flip on casually.
     def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", device: str = "cpu"):
         self._model_name = model_name
         self._device = device

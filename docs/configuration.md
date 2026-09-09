@@ -11,6 +11,7 @@ Everything that varies between deployments lives in `corpus.toml`. This doc is t
 [embedder]     # Which provider, model, and dim.
 [retriever]    # Defaults for the query pipeline.
 [pruning]      # Orphan-deletion blast-radius guard.
+[performance]  # SQLite memory tuning (cache_size/mmap_size/temp_store).
 [[sources]]    # Repeatable. Each = one connector instance.
 [[references]] # Optional. Reference patterns for expand_context.
 ```
@@ -147,6 +148,29 @@ corpus-ingest --source photos --prune-anyway
 ```
 
 `--prune-anyway` also overrides the pre-existing `failed_files` gate (see [`troubleshooting.md`](troubleshooting.md)); both are the same "I've reviewed this, delete anyway" escape hatch.
+
+## `[performance]` — SQLite memory tuning
+
+| Setting | Type | Default | Notes |
+|---|---|---|---|
+| `cache_size_mb` | int | `64` | SQLite's own page cache. Measured **no effect** on vector search (see below); kept modest as a safety net for other access patterns. |
+| `mmap_size_mb` | int | `1024` | Memory-mapped I/O window. This is the setting that matters — see below. Raise it if your store is bigger than 1GiB. |
+| `temp_store_memory` | bool | `true` | Keep SQLite's temp tables in memory instead of a temp file on disk. Measured no effect at corpus's current query sizes; free to leave on. |
+
+```toml
+[performance]
+cache_size_mb = 64
+mmap_size_mb = 1024
+temp_store_memory = true
+```
+
+SQLite's own default page cache is tiny (~2MB) — fine for a small corpus, not for the hundreds-of-MB-to-multi-GB indexes a real personal archive reaches. Before picking these defaults, each pragma was isolated individually (not just bundled together) on a synthetic 150,000-chunk / 711MB store:
+
+- **`mmap_size_mb` is responsible for effectively the entire speedup**: measured 3.18x-3.29x on vector search once the memory-mapped window covered the whole store, only 1.37x covering about a third of it. `corpus`'s vector index does an exhaustive scan per query (no ANN index), so there's no "hot" subset a bigger page cache could protect — but memory-mapped I/O still helps because it turns every page touch into a direct memory read instead of a `read()` syscall + copy, a win that applies uniformly regardless of caching. **If your `corpus.db` is bigger than 1GiB, raise `mmap_size_mb` to (at least) match it** to get the benefit on the whole store.
+- **`cache_size_mb` measured no effect**, confirmed twice: cold reopened connections, and a single persistent connection re-running the same queries six times in a row. Kept modest rather than large, both because it showed no benefit here and because — unlike `mmap_size_mb` — its memory is a real, non-evictable-the-same-way allocation, so a large value has a real cost.
+- **`temp_store_memory` measured no effect either.** `EXPLAIN QUERY PLAN` confirms vector search's final sort does use a temp b-tree, but it only orders the small `top_k` result set — trivially cheap on disk or in memory either way at that size.
+
+Fixed defaults rather than scaled off detected physical memory: there's no portable way to read total RAM from the standard library (no `os.sysconf` on Windows), and `corpus` keeps its base install dependency-minimal by design (see "Why embedders are optional extras" above) — pulling in a dependency just for this felt like the wrong tradeoff against a one-line override here. `mmap_size_mb`'s generous default is safe on constrained hardware anyway: it's a ceiling on a lazily-paged-in, evictable mapping, not a memory reservation, so setting it larger than your store costs nothing until pages are actually touched.
 
 ## `[[sources]]` — repeatable
 

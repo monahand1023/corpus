@@ -68,6 +68,69 @@ class PruningConfig(BaseModel):
     min_chunks_for_guard: int = Field(default=50, ge=0)
 
 
+class PerformanceConfig(BaseModel):
+    """SQLite memory-tuning pragmas, beyond the engine's fixed baseline
+    (WAL journal mode, synchronous=NORMAL, busy_timeout=5000 -- see
+    `ChunkStore._open_connection`). SQLite's own default page cache is
+    tiny (~2MB), which is fine for a small corpus but not for the
+    hundreds-of-MB-to-multi-GB indexes a real personal archive reaches.
+
+    These defaults come from isolating each pragma's actual contribution
+    on a synthetic 150k-chunk / 711MB store (2026-09-09; see
+    .superpowers/sdd/2026-09-09-corpus-hardening/pragma-benchmark.md for
+    the full methodology and raw numbers), not from bundling all three on
+    faith:
+
+    - `mmap_size` is responsible for effectively the ENTIRE speedup.
+      sqlite-vec's `chunks_vec` (vec0) does an exhaustive scan per KNN
+      query -- there's no ANN index, so every query touches ~all of it,
+      meaning there is no "hot" subset for a bigger page cache to protect.
+      Memory-mapped I/O still helps enormously because it turns each page
+      touch into a direct memory read instead of a read() syscall + copy,
+      a win that applies to literally every page regardless of caching.
+      Measured 3.18x-3.29x on vector KNN (k=20) once the mmap window
+      covered the whole file; only 1.37x at a window covering ~1/3 of it.
+      **mmap_size must cover the store's actual size to get most of the
+      benefit** -- a "few tens of MB" default (reasonable for cache_size)
+      would barely move the needle here.
+    - `cache_size` measured NO effect, even reusing a single persistent
+      connection across six repeated rounds of the same queries (SQLite's
+      own page cache had every chance to warm and never helped) --
+      expected, given the point above: nothing to cache helps a query
+      that touches everything anyway. Kept at a modest default regardless,
+      as a safety net for access patterns this benchmark didn't exercise
+      (point lookups: `get_by_id`, the `id IN (...)` dedup check ingest
+      runs before every batch, etc.) which DO have real page locality.
+    - `temp_store_memory` also measured no effect. `EXPLAIN QUERY PLAN`
+      confirms `vector_search`'s `ORDER BY` genuinely does use a temp
+      b-tree (`fts_search`'s rank-ordered `LIMIT` does not) -- but it
+      only sorts the ~`top_k` result rows, trivially cheap on disk or in
+      memory either way at that size. Left on anyway: free today, and a
+      margin against some future query shape that sorts something larger.
+
+    Why `mmap_size` gets a generous default while `cache_size` stays
+    conservative, and both are fixed rather than scaled off detected
+    physical memory: `mmap_size` is a CEILING on a lazily-paged-in, clean,
+    evictable virtual mapping, not a memory reservation -- setting it
+    larger than the store costs nothing until pages are actually touched,
+    and a store bigger than the ceiling just falls back to ordinary I/O
+    for the excess rather than erroring. `cache_size`'s memory, by
+    contrast, is a real allocation proportional to what's configured, so
+    it stays small. Scaling either off detected total RAM was the other
+    option the brief for this offered; skipped because there's no portable
+    stdlib way to read total physical memory (no `os.sysconf` on Windows),
+    and corpus already keeps its base install dependency-minimal on
+    purpose (see "Why embedders are optional extras" in
+    docs/configuration.md) -- pulling in `psutil` just for this felt like
+    the wrong tradeoff against a fixed, documented, one-line override in
+    `corpus.toml`.
+    """
+
+    cache_size_mb: int = Field(default=64, gt=0)
+    mmap_size_mb: int = Field(default=1024, gt=0)
+    temp_store_memory: bool = True
+
+
 class SourceConfig(BaseModel):
     name: str = Field(pattern=SOURCE_TYPE_PATTERN)
     type: str  # which built-in connector to use, e.g. "markdown"
@@ -97,6 +160,7 @@ class CorpusConfig(BaseModel):
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     pruning: PruningConfig = Field(default_factory=PruningConfig)
+    performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
     references: list[ReferencePattern] = Field(default_factory=list)
 
@@ -120,6 +184,7 @@ class CorpusConfig(BaseModel):
             "retriever": raw.get("retriever", {}),
             "reranker": raw.get("reranker", {}),
             "pruning": raw.get("pruning", {}),
+            "performance": raw.get("performance", {}),
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }

@@ -173,7 +173,13 @@ def _run_benchmark(
     runs_per_query: int,
     top_k: int,
 ) -> dict[str, Any]:
-    store = ChunkStore(config.db_path, embedding_dim=dim)
+    store = ChunkStore(
+        config.db_path,
+        embedding_dim=dim,
+        cache_size_mb=config.performance.cache_size_mb,
+        mmap_size_mb=config.performance.mmap_size_mb,
+        temp_store_memory=config.performance.temp_store_memory,
+    )
     embedder = make_embedder(provider=provider, model=model, dim=dim)
     retriever = Retriever(
         store=store, embedder=embedder,

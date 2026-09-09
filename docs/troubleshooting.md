@@ -234,7 +234,7 @@ Typical numbers for a few-thousand-chunk corpus on M-series Mac:
 
 If `embed_query` is 500ms+, your network to the embedding provider is the bottleneck. Gemini and Voyage are both routed via global Anthropic / Google networks; usually fast, but cellular hotspot will obviously hurt.
 
-If `vector_search` is >50ms, your corpus is past the ~100K-chunk point where brute-force `vec0` starts feeling slow. Time to add HNSW indexing or partition by source type.
+If `vector_search` is >50ms, your corpus is past the ~100K-chunk point where brute-force `vec0` starts feeling slow. First check `[performance] mmap_size_mb` in `corpus.toml` (see [`configuration.md`](configuration.md#performance--sqlite-memory-tuning)) — it needs to cover your `corpus.db`'s actual file size to give its full benefit (measured 3x+ on a store where it does, only ~1.4x when it covers a third of the file); `corpus-list` prints the chunk count, `ls -lh corpus.db` the file size. If it's already sized to the file and still slow, you're past what pragma tuning alone fixes — time to add HNSW indexing or partition by source type.
 
 ### `corpus-summarize` is rate-limit-throttled
 

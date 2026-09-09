@@ -58,6 +58,53 @@ device = "cpu"
 max_orphan_ratio = 0.20
 min_chunks_for_guard = 50
 
+[performance]
+# SQLite memory-tuning pragmas. Isolated each one individually on a
+# synthetic 150k-chunk/711MB store before picking these defaults, rather
+# than bundling all three on the assumption they all help equally:
+#
+#   mmap_size_mb       -- THE knob that matters. sqlite-vec's vector index
+#                          does an exhaustive scan per search (no ANN index),
+#                          so memory-mapped I/O -- turning each page touch
+#                          into a direct memory read instead of a read()
+#                          syscall + copy -- helps every query, uniformly.
+#                          Measured 3.18x-3.29x on vector search once the
+#                          window covered the whole store; only 1.37x
+#                          covering about a third of it. Must cover your
+#                          store's actual file size to get most of the
+#                          benefit -- raise this if your corpus.db is
+#                          bigger than the default 1GiB. Safe to set large:
+#                          it's a ceiling on a lazily-paged-in, evictable
+#                          mapping, not a memory reservation, and a store
+#                          bigger than the ceiling just falls back to
+#                          ordinary I/O for the excess rather than erroring.
+#   cache_size_mb       -- Measured NO effect on vector search (confirmed
+#                          twice: cold connections, and a single persistent
+#                          connection re-running the same queries six times
+#                          in a row -- nothing to cache helps a query that
+#                          touches ~everything anyway). Kept modest as a
+#                          safety net for other access patterns this
+#                          benchmark didn't cover (point lookups during
+#                          ingest dedup, get_by_id, etc.) which do have
+#                          real locality. Unlike mmap_size, this memory IS
+#                          a real allocation, so it stays conservative
+#                          (tens of MB) rather than scaling with your RAM.
+#   temp_store_memory   -- Also measured no effect (EXPLAIN QUERY PLAN
+#                          confirms vector search's ORDER BY does use a
+#                          temp b-tree, but it only sorts the ~top_k result
+#                          rows -- trivially cheap either way at that
+#                          size). Left on: free today, margin against a
+#                          future query shape that sorts more.
+#
+# Full methodology + raw numbers in the corpus-hardening project notes.
+# Defaults are fixed, not scaled off detected RAM -- no portable stdlib way
+# to read total physical memory (no os.sysconf on Windows), and corpus
+# keeps its base install dependency-minimal by design. Raise mmap_size_mb
+# if `corpus-list` shows your corpus.db bigger than the current setting.
+cache_size_mb = 64
+mmap_size_mb = 1024
+temp_store_memory = true
+
 # Each source = one place to read documents from.
 # `name` is a free-form label used everywhere as the chunk's source_type.
 # `type` selects which built-in connector to use.

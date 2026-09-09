@@ -30,7 +30,13 @@ def main() -> int:
     counts: dict[str, int] = {}
     db_exists = Path(config.db_path).exists()
     if db_exists:
-        store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
+        store = ChunkStore(
+            config.db_path,
+            embedding_dim=config.embedder.dim,
+            cache_size_mb=config.performance.cache_size_mb,
+            mmap_size_mb=config.performance.mmap_size_mb,
+            temp_store_memory=config.performance.temp_store_memory,
+        )
         try:
             counts = store.stats()["by_source"]
         finally:

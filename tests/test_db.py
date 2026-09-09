@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from corpus.db.sqlite import (
+    DEFAULT_CACHE_SIZE_MB,
+    DEFAULT_MMAP_SIZE_MB,
     ChunkStore,
     EmbeddingDimMismatch,
     OrphanPruneRefused,
@@ -592,3 +594,55 @@ def test_fresh_store_creation_does_not_log_a_migration_warning(
     store.close()
 
     assert not any(r.levelname == "WARNING" for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Memory-tuning pragmas (cache_size / mmap_size / temp_store). See
+# corpus.config.PerformanceConfig for the benchmark behind the defaults --
+# mmap_size is the pragma that actually matters for vector search; these
+# tests only check that ChunkStore applies whatever it's configured with,
+# not the resulting speedup (that needs a store far too large for the unit
+# test suite; see the scratch benchmark referenced in the config docstring).
+# ---------------------------------------------------------------------------
+
+def test_performance_pragmas_apply_defaults(store: ChunkStore) -> None:
+    conn = store._conn
+    assert conn.execute("PRAGMA cache_size").fetchone()[0] == -(DEFAULT_CACHE_SIZE_MB * 1024)
+    assert conn.execute("PRAGMA mmap_size").fetchone()[0] == DEFAULT_MMAP_SIZE_MB * 1024 * 1024
+    assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2  # 2 == MEMORY
+
+
+def test_performance_pragmas_are_configurable(tmp_path: Path) -> None:
+    store = ChunkStore(
+        tmp_path / "perf.db",
+        embedding_dim=DIM,
+        cache_size_mb=8,
+        mmap_size_mb=32,
+        temp_store_memory=False,
+    )
+    try:
+        conn = store._conn
+        assert conn.execute("PRAGMA cache_size").fetchone()[0] == -8192
+        assert conn.execute("PRAGMA mmap_size").fetchone()[0] == 32 * 1024 * 1024
+        assert conn.execute("PRAGMA temp_store").fetchone()[0] == 0  # 0 == DEFAULT, not MEMORY
+    finally:
+        store.close()
+
+
+def test_performance_pragmas_apply_on_read_only_connections_too(tmp_path: Path) -> None:
+    """mmap_size composes with read_only=True -- benchmarked exclusively
+    through read-only connections, matching how corpus-mcp / corpus-query
+    actually use it, per the brief item that asked this to be checked
+    rather than assumed."""
+    path = tmp_path / "perf_ro.db"
+    w = ChunkStore(path, embedding_dim=DIM, mmap_size_mb=16)
+    w.upsert_batch([(make_chunk("DOC-0", 0, ChunkKind.SECTION, "x"), fake_embedding(0))])
+    w.close()
+
+    ro = ChunkStore(path, embedding_dim=DIM, read_only=True, mmap_size_mb=16)
+    try:
+        assert ro._conn.execute("PRAGMA mmap_size").fetchone()[0] == 16 * 1024 * 1024
+        # Still fully functional, not just configured.
+        assert len(ro.fts_search("x", top_k=5)) == 1
+    finally:
+        ro.close()

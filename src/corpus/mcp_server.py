@@ -88,7 +88,14 @@ def _init() -> tuple[ChunkStore, Embedder, Retriever, CorpusConfig]:
         # get_doc, timeline, ...) -- none ingest or otherwise mutate. Opening
         # the store any other way risks silently running a schema migration
         # (see ChunkStore._migrate_fts) as a side effect of a search request.
-        _store = ChunkStore(_config.db_path, embedding_dim=_config.embedder.dim, read_only=True)
+        _store = ChunkStore(
+            _config.db_path,
+            embedding_dim=_config.embedder.dim,
+            read_only=True,
+            cache_size_mb=_config.performance.cache_size_mb,
+            mmap_size_mb=_config.performance.mmap_size_mb,
+            temp_store_memory=_config.performance.temp_store_memory,
+        )
     if _embedder is None:
         _embedder = make_embedder(
             provider=_config.embedder.provider,

@@ -265,7 +265,13 @@ def main() -> int:
     queries = _load_queries(queries_path)
 
     config = load_config_or_exit(args.config)
-    store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
+    store = ChunkStore(
+        config.db_path,
+        embedding_dim=config.embedder.dim,
+        cache_size_mb=config.performance.cache_size_mb,
+        mmap_size_mb=config.performance.mmap_size_mb,
+        temp_store_memory=config.performance.temp_store_memory,
+    )
     embedder = make_embedder(
         provider=config.embedder.provider,
         model=config.embedder.model,

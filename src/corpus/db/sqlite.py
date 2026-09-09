@@ -35,6 +35,14 @@ FTS_VERSION = "2"
 DEFAULT_MAX_ORPHAN_RATIO = 0.20
 DEFAULT_MIN_CHUNKS_FOR_GUARD = 50
 
+# Defaults for the SQLite memory-tuning pragmas (see corpus.config.
+# PerformanceConfig for the full rationale and the benchmark these come
+# from -- mirrored here as the fallback for a caller using ChunkStore
+# directly, same pattern as the orphan-guard defaults above).
+DEFAULT_CACHE_SIZE_MB = 64
+DEFAULT_MMAP_SIZE_MB = 1024
+DEFAULT_TEMP_STORE_MEMORY = True
+
 
 @dataclass(frozen=True)
 class UpsertResult:
@@ -107,7 +115,16 @@ class OrphanPruneRefused(RuntimeError):
 
 
 class ChunkStore:
-    def __init__(self, db_path: Path | str, *, embedding_dim: int, read_only: bool = False):
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        embedding_dim: int,
+        read_only: bool = False,
+        cache_size_mb: int = DEFAULT_CACHE_SIZE_MB,
+        mmap_size_mb: int = DEFAULT_MMAP_SIZE_MB,
+        temp_store_memory: bool = DEFAULT_TEMP_STORE_MEMORY,
+    ):
         """Open or create the chunk store.
 
         `embedding_dim` is checked against the existing schema if the DB
@@ -126,6 +143,14 @@ class ChunkStore:
         mutate raises `ReadOnlyStoreError` on a read-only store. Requires the
         file to already exist — read-only mode never creates a store.
 
+        `cache_size_mb` / `mmap_size_mb` / `temp_store_memory` are the
+        memory-tuning pragmas from `corpus.config.PerformanceConfig` (see
+        there for the benchmark behind the defaults) — applied to every
+        connection this store opens, read-only or not; mmap composes fine
+        with read-only mode; it was in fact benchmarked exclusively through
+        read-only `mode=ro` connections, matching how the MCP server and
+        query CLI actually use it.
+
         Threading: each thread gets its own sqlite3.Connection via thread-local
         storage. WAL mode handles concurrent readers; ingest (single-threaded)
         is the only writer path. The MCP server uses `asyncio.to_thread` so
@@ -135,6 +160,9 @@ class ChunkStore:
         self._db_path = Path(db_path)
         self._embedding_dim = embedding_dim
         self._read_only = read_only
+        self._cache_size_mb = cache_size_mb
+        self._mmap_size_mb = mmap_size_mb
+        self._temp_store_memory = temp_store_memory
         self._tls = threading.local()
         # All opened connections, tracked so close() can shut them all down.
         # Guarded by a lock since connections open on arbitrary worker threads.
@@ -188,6 +216,17 @@ class ChunkStore:
         # running) raises `database is locked` immediately instead of
         # waiting briefly for the writer to finish its transaction.
         conn.execute("PRAGMA busy_timeout = 5000")
+        # Memory tuning -- see corpus.config.PerformanceConfig for the
+        # benchmark behind these three. Short version: mmap_size is the
+        # pragma that actually matters for vector search (measured
+        # 3.18x-3.29x once its window covers the whole store); cache_size
+        # and temp_store measured no effect on that workload but cost
+        # little and are kept as a safety net for other access patterns.
+        # Applied on every connection, read-only or not.
+        conn.execute(f"PRAGMA cache_size = -{self._cache_size_mb * 1024}")
+        conn.execute(f"PRAGMA mmap_size = {self._mmap_size_mb * 1024 * 1024}")
+        if self._temp_store_memory:
+            conn.execute("PRAGMA temp_store = MEMORY")
         with self._conns_lock:
             self._all_conns.append(conn)
         return conn
