@@ -152,6 +152,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dependency/build artifacts — one archive's entire 243 "documents" were
   third-party npm package READMEs that would otherwise have been chunked,
   embedded, and indexed as if they were the user's own content.
+- **`aup3` connector.** Audacity 3 project files are SQLite databases holding
+  raw audio directly in a `sampleblocks` table — nothing (not ffmpeg, not any
+  existing connector) could read one before this, so their content was
+  entirely invisible. `.aup3`'s `sampleformat` 262159 (`floatSample`) stores
+  `samples` as little-endian float32 — verified by hand against a real
+  project, and self-verifying in code: decoding a block and recomputing its
+  min/max/RMS is checked against the block's own stored
+  `summin`/`summax`/`sumrms`, and a mismatch is treated as an unsupported
+  format rather than guessed at. `int16Sample`/`int24Sample` blocks are
+  recognized but deliberately not decoded (their on-disk layout wasn't
+  independently verified the way floatSample's was). Ships as a connector
+  plus a companion `extract_audio()` API, not a connector that extracts
+  automatically: `load()` yields one lightweight metadata document per
+  project (duration, block count, sample-format verdict, source path) from
+  cheap SQL aggregates alone, so ingest stays fast even over a large archive
+  of recordings; `extract_audio()` is a separate, explicitly-called function
+  that decodes every floatSample block (in `blockid` order — real projects
+  have non-contiguous blockids from deleted audio) and writes a normal,
+  playable file — WAV by default (16-bit PCM, stdlib only), FLAC/MP3 via
+  `ffmpeg` when available — adjacent to the source by default, since the
+  point is that a person can play it. The source `.aup3` is opened via a
+  `mode=ro` SQLite URI and is never written, migrated, moved, or deleted —
+  these are irreplaceable recordings; a test asserts the source's mtime and
+  size are byte-for-byte unchanged after extraction. Sample rate and channel
+  count are NOT recoverable from the project file (they live only in
+  `project.doc`, Audacity's own unparseable binary-XML dialect with a
+  string dictionary) — defaults to 44100 Hz mono, both overridable per
+  source (`sample_rate`, `channels` in `corpus.toml`), documented as
+  assumptions rather than pretended detection. Handles a corrupt/truncated
+  database (`failed_files`, transient), a database that just isn't an
+  Audacity project (`skipped_files`, permanent), a project with zero sample
+  blocks (a valid, empty project — reported, not an error), and a
+  mixed-format project (`load()` reports the split; `extract_audio` refuses
+  the whole file rather than writing a WAV with an unannounced gap where the
+  unsupported blocks would have been).
 - **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
   built-in connectors apply and ingests each matching file type as its own
   source, with no `[[sources]]` block to write. `corpus.toml` still supplies the

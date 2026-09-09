@@ -145,6 +145,18 @@ class SourceConfig(BaseModel):
     # see `corpus.connectors.zip._is_dependency_noise`. Set to false to index
     # a library's vendored docs on purpose.
     exclude_dependencies: bool = True
+    # `aup3` connector only -- every other connector ignores these two.
+    # Audacity's `.aup3` project files store sample rate and channel count
+    # only inside their unparseable binary-XML `project.doc` column (see
+    # `corpus.connectors.aup3`'s module docstring), so neither is ever
+    # detected -- these are the assumed values, reported as assumptions in
+    # the generated document, overridable here when you know the real ones
+    # for a given source. Defaults mirror
+    # `corpus.connectors.aup3.DEFAULT_SAMPLE_RATE_HZ`/`DEFAULT_CHANNELS`
+    # (not imported from there -- config.py stays free of any dependency on
+    # a specific connector's module).
+    sample_rate: int = 44100
+    channels: int = 1
 
     def resolved_path(self) -> Path:
         return Path(os.path.expanduser(self.path)).resolve()

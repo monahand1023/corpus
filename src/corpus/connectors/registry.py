@@ -31,6 +31,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "pptx": "**/*.pptx",
     "csv": "**/*.csv",
     "tsv": "**/*.tsv",
+    "aup3": "**/*.aup3",
 }
 
 
@@ -197,6 +198,24 @@ def _build_tsv(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_aup3(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # No import guard, like zip/csv: aup3.py depends only on the stdlib
+    # (sqlite3, wave, array). ffmpeg is an external binary, not a pip
+    # package, and is only touched by `extract_audio(..., audio_format=
+    # "flac"/"mp3")` — a separate, explicitly-called function this factory
+    # never invokes.
+    from corpus.connectors.aup3 import AupThreeConnector
+
+    connector = AupThreeConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["aup3"],
+        sample_rate=cfg.sample_rate,
+        channels=cfg.channels,
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard here, unlike the factories above: zip.py depends only on
     # the stdlib `zipfile`. It composes the OTHER factories in this dict at
@@ -227,6 +246,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "pptx": _build_pptx,
     "csv": _build_csv,
     "tsv": _build_tsv,
+    "aup3": _build_aup3,
 }
 
 

@@ -141,6 +141,17 @@ temp_store_memory = true
 #              indexed as if they were your own notes. Set
 #              `exclude_dependencies = false` on a [[sources]] block below to
 #              turn this off and index vendored docs on purpose.
+#   aup3     — Audacity 3 project files (default glob: **/*.aup3); no extra needed
+#              (stdlib sqlite3). These are SQLite databases holding raw audio, so
+#              the indexed document is metadata only (duration, block count,
+#              sample-format verdict) -- not the audio itself. Call
+#              corpus.connectors.aup3.extract_audio() separately to write a
+#              playable WAV (stdlib)/FLAC/MP3 (needs ffmpeg) file next to the
+#              source, for a future transcription pass. The source .aup3 is
+#              opened read-only and never modified. Sample rate and channel
+#              count can't be recovered from the project file -- defaults to
+#              44100 Hz mono; override per source with `sample_rate` / `channels`
+#              below if you know the real values.
 #
 # Adding a new source type? See docs/adding_a_source.md.
 
@@ -201,6 +212,13 @@ path = "~/Documents/notes"
 # type = "zip"
 # path = "~/Documents/zipped-reports"
 # exclude_dependencies = true  # optional; default true, see the zip note above
+
+# [[sources]]
+# name = "family_recordings"
+# type = "aup3"
+# path = "~/Documents/audacity-projects"
+# sample_rate = 44100  # optional; default shown, override only if you know the real rate
+# channels = 1         # optional; default shown, override only if you know the real layout
 
 # Reference patterns that `expand_context` will look for inside a chunk's
 # content, plus that auto-tune BM25 weight when the user's query contains them.
