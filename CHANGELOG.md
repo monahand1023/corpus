@@ -15,6 +15,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `inbox_pdf`) because orphan pruning is scoped by source type — two folders
   sharing a bare `pdf` name in one database would delete each other's chunks.
   Cannot be combined with `--source` or `--all`.
+- **Orphan-pruning blast-radius guard.** `delete_orphans` now refuses (and
+  exits non-zero from the CLI) when the chunks it's about to delete for a
+  source exceed a configurable fraction of that source's existing chunks —
+  `[pruning] max_orphan_ratio` (default 20%), enforced only above
+  `min_chunks_for_guard` (default 50) chunks so small/new sources aren't
+  blocked by noise. Closes a real gap: the only prior protection was a
+  connector's `failed_files` count, which stays 0 for a connector that
+  silently under-yields documents while still honestly reporting success —
+  found by ingesting a large archive twice and comparing the numbers, which a
+  reviewer does not reliably do. `corpus-ingest --source NAME --prune-anyway`
+  overrides the guard (as it already did for `failed_files`) for a genuine
+  bulk deletion. See [`configuration.md`](docs/configuration.md#pruning--orphan-deletion-blast-radius-guard).
 - **`ChunkStore(path, read_only=True)`.** Opens the store through a `mode=ro`
   SQLite URI and never runs the FTS schema migration; any mutating method call
   raises a clear `ReadOnlyStoreError` naming the cause. `corpus-mcp` and

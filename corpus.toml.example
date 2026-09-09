@@ -43,6 +43,21 @@ hybrid = true              # combine vector + BM25 via reciprocal rank fusion
 # want the speedup.
 device = "cpu"
 
+[pruning]
+# Guards orphan deletion during ingest against a connector that silently
+# under-yields documents while still honestly reporting zero failures (a real
+# incident: a connector that skipped files it believed were unchanged, then on
+# a later run matched almost nothing and would have deleted the whole source's
+# index -- `failed_files` never saw it, because the connector wasn't reporting
+# any failure). `corpus-ingest` refuses to prune a source when the chunks about
+# to be deleted exceed max_orphan_ratio of that source's existing chunk count,
+# UNLESS the source has fewer than min_chunks_for_guard chunks to begin with
+# (a small/new source can cross 20% on a handful of genuine deletions, and the
+# blast radius is too small to matter). `corpus-ingest --source NAME
+# --prune-anyway` bypasses this deliberately, for a real bulk deletion.
+max_orphan_ratio = 0.20
+min_chunks_for_guard = 50
+
 # Each source = one place to read documents from.
 # `name` is a free-form label used everywhere as the chunk's source_type.
 # `type` selects which built-in connector to use.

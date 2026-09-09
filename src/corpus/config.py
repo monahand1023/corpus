@@ -47,6 +47,27 @@ class RerankerConfig(BaseModel):
     device: str = "cpu"
 
 
+class PruningConfig(BaseModel):
+    """Guards `Ingester.ingest`'s orphan sweep against a connector that
+    under-yields documents while still honestly reporting zero failures — a
+    connector-side bug the `failed_files` counter cannot see, because the
+    connector isn't reporting any failure. If it happened once (a connector
+    skipping unchanged files by fingerprint, which then yielded nothing at
+    all on a later run) it can happen again, so the engine enforces a rail
+    rather than relying on every connector author to get this right.
+
+    `delete_orphans` refuses to prune a source when the chunks it would
+    delete exceed `max_orphan_ratio` of that source's existing chunk count —
+    UNLESS the source has fewer than `min_chunks_for_guard` chunks to begin
+    with, since a small or freshly-created source can cross a 20% ratio on
+    a handful of genuine deletions and the blast radius is too small to
+    matter. `--prune-anyway` at the CLI (or `force=True` on `delete_orphans`)
+    bypasses the guard entirely for a deliberate bulk deletion."""
+
+    max_orphan_ratio: float = Field(default=0.20, gt=0.0, le=1.0)
+    min_chunks_for_guard: int = Field(default=50, ge=0)
+
+
 class SourceConfig(BaseModel):
     name: str = Field(pattern=SOURCE_TYPE_PATTERN)
     type: str  # which built-in connector to use, e.g. "markdown"
@@ -75,6 +96,7 @@ class CorpusConfig(BaseModel):
     embedder: EmbedderConfig = Field(default_factory=EmbedderConfig)
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+    pruning: PruningConfig = Field(default_factory=PruningConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
     references: list[ReferencePattern] = Field(default_factory=list)
 
@@ -97,6 +119,7 @@ class CorpusConfig(BaseModel):
             "embedder": raw.get("embedder", {}),
             "retriever": raw.get("retriever", {}),
             "reranker": raw.get("reranker", {}),
+            "pruning": raw.get("pruning", {}),
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }

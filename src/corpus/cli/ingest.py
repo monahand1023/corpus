@@ -47,7 +47,10 @@ def main() -> int:
         action="store_true",
         help=(
             "Delete orphaned chunks even when the connector reported files it "
-            "could not read. Requires --source; refused with --all."
+            "could not read, OR when the blast-radius guard would otherwise "
+            "refuse a prune that looks too large relative to the source's "
+            "existing chunks (see [pruning] in corpus.toml). Requires "
+            "--source; refused with --all."
         ),
     )
     parser.add_argument("--config", default=None, help="Path to corpus.toml (default: ./corpus.toml)")
@@ -129,7 +132,14 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
-            if r.pruning_performed:
+            if r.prune_refused:
+                # A refusal is a failure the operator must see and act on, not
+                # just a note in the log — same reasoning as the exit_code=1
+                # branch below for a source that couldn't be enumerated.
+                print("  orphans deleted:  0  (pruning REFUSED — blast-radius guard tripped)")
+                print(f"  {r.prune_refused_detail}")
+                exit_code = 1
+            elif r.pruning_performed:
                 print(f"  orphans deleted:  {r.orphans_deleted:,}")
             else:
                 print(f"  files unreadable: {r.files_failed:,}")

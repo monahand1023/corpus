@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from corpus.db.sqlite import ChunkStore, EmbeddingDimMismatch, ReadOnlyStoreError
+from corpus.db.sqlite import (
+    ChunkStore,
+    EmbeddingDimMismatch,
+    OrphanPruneRefused,
+    ReadOnlyStoreError,
+)
 from corpus.types import Chunk, ChunkKind, ChunkMetadata
 from corpus.util.hash import chunk_id, sha256
 
@@ -217,7 +222,11 @@ def test_delete_orphans_handles_many_rows(store: ChunkStore) -> None:
     The old implementation deleted `chunks` via a single
     `WHERE id IN (?,?,...)` with one bind variable per orphan — that crashes
     with 'too many SQL variables' past ~32k. Per-rowid deletes in the loop have
-    no such limit. 1001 rows proves the loop path is taken and stays correct."""
+    no such limit. 1001 rows proves the loop path is taken and stays correct.
+
+    force=True: this test is about the delete mechanics, not the
+    blast-radius guard (see test_delete_orphans_refuses_when_orphan_ratio_
+    exceeds_threshold) — dropping 1000/1001 rows would otherwise trip it."""
     n = 1001
     items = [
         (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"orphan {i}"), fake_embedding(i))
@@ -228,13 +237,104 @@ def test_delete_orphans_handles_many_rows(store: ChunkStore) -> None:
 
     # Keep only one — everything else is an orphan.
     seen_ids = {items[0][0].id}
-    deleted = store.delete_orphans("notes", seen_ids)
+    deleted = store.delete_orphans("notes", seen_ids, force=True)
     assert deleted == n - 1
 
     conn = store._conn
     assert conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM chunks_vec").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM chunks_fts").fetchone()["c"] == 1
+
+
+def test_delete_orphans_refuses_when_orphan_ratio_exceeds_threshold(store: ChunkStore) -> None:
+    """The blast-radius guard: pruning almost all of a source's existing
+    chunks in one call is refused (nothing deleted) rather than silently
+    carried out, above the small-source floor."""
+    n = 100
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
+        for i in range(n)
+    ]
+    store.upsert_batch(items)
+
+    with pytest.raises(OrphanPruneRefused) as exc_info:
+        store.delete_orphans("notes", set())  # every chunk would be an orphan
+    err = exc_info.value
+    assert err.source_type == "notes"
+    assert err.existing == n
+    assert err.orphans == n
+    assert err.ratio == 1.0
+    assert "notes" in str(err)
+    assert store.stats()["total"] == n, "refusal must delete nothing"
+
+
+def test_delete_orphans_force_bypasses_the_guard(store: ChunkStore) -> None:
+    """force=True (wired to --prune-anyway) deletes anyway, for a genuine
+    bulk deletion."""
+    n = 100
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
+        for i in range(n)
+    ]
+    store.upsert_batch(items)
+
+    deleted = store.delete_orphans("notes", set(), force=True)
+    assert deleted == n
+    assert store.stats()["total"] == 0
+
+
+def test_delete_orphans_floor_allows_small_source_to_legitimately_drop_to_zero(
+    store: ChunkStore,
+) -> None:
+    """A source with 3 chunks that legitimately drops to 0 is not blocked by
+    the floor -- default min_chunks_for_guard=50 means the ratio check never
+    even runs for a source this small."""
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
+        for i in range(3)
+    ]
+    store.upsert_batch(items)
+
+    deleted = store.delete_orphans("notes", set())
+    assert deleted == 3
+    assert store.stats()["total"] == 0
+
+
+def test_delete_orphans_under_threshold_prunes_normally(store: ChunkStore) -> None:
+    """A routine re-ingest that drops well under the ratio threshold prunes
+    without any guard involvement."""
+    n = 100
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
+        for i in range(n)
+    ]
+    store.upsert_batch(items)
+    seen_ids = {items[i][0].id for i in range(90)}  # drop 10/100 = 10% < 20%
+
+    deleted = store.delete_orphans("notes", seen_ids)
+    assert deleted == 10
+    assert store.stats()["total"] == 90
+
+
+def test_delete_orphans_guard_thresholds_are_configurable(store: ChunkStore) -> None:
+    """max_orphan_ratio / min_chunks_for_guard are per-call overrides (the
+    caller resolves them from corpus.toml's [pruning] section)."""
+    n = 20
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"x {i}"), fake_embedding(i))
+        for i in range(n)
+    ]
+    store.upsert_batch(items)
+
+    # Default floor (50) would never guard a 20-chunk source; a caller-supplied
+    # floor of 5 makes the guard apply here.
+    with pytest.raises(OrphanPruneRefused):
+        store.delete_orphans("notes", set(), min_chunks_for_guard=5)
+
+    # A caller-supplied ratio of 1.0 (never refuse) lets the same deletion
+    # through even though it drops 100% of the source.
+    deleted = store.delete_orphans("notes", set(), min_chunks_for_guard=5, max_orphan_ratio=1.0)
+    assert deleted == n
 
 
 def test_delete_by_source_clears_vec_and_fts(store: ChunkStore) -> None:

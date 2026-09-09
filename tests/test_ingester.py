@@ -569,3 +569,124 @@ def test_raise_partway_through_iteration_still_does_not_prune(tmp_path: Path) ->
         assert _chunk_count(store, "raiser") == before
     finally:
         CONNECTOR_REGISTRY.pop("raiser", None)
+
+
+# ---------------------------------------------------------------------------
+# Orphan-pruning blast-radius guard (delete_orphans' OrphanPruneRefused)
+#
+# `failed_files` only protects against a connector that KNOWS it failed. The
+# regression this guard is for is a connector that reports failed_files == 0
+# while silently yielding far fewer documents than it should (e.g. skipping
+# files it believes are unchanged) -- these tests exercise that path through
+# the full Ingester, one level above the ChunkStore-level guard tests in
+# test_db.py.
+# ---------------------------------------------------------------------------
+
+def test_orphan_guard_refuses_when_connector_silently_under_yields(tmp_path: Path) -> None:
+    """The core regression: failed_files == 0 does not mean seen_ids is
+    trustworthy. A connector that silently yields almost nothing must not be
+    allowed to prune the rest of the source away."""
+    try:
+        docs = [f"doc-{i}.txt" for i in range(60)]
+        conn = _CountingConnector("bulk", docs)
+        _register("bulk", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "bulk", "type": "bulk", "path": str(tmp_path)}]
+        )
+        first = ing.ingest("bulk")
+        before = _chunk_count(store, "bulk")
+        assert before > 50, "fixture must be above the guard's default floor"
+        assert first.prune_refused is False
+
+        # The under-yield bug: the connector reports NO failures but only
+        # yields one document (e.g. it silently skipped the rest).
+        conn._docs = ["doc-0.txt"]
+        result = ing.ingest("bulk")
+
+        assert result.files_failed == 0  # the exact case failed_files can't see
+        assert result.prune_refused is True
+        assert result.pruning_performed is False
+        assert result.orphans_deleted == 0
+        assert result.prune_refused_detail is not None
+        assert "bulk" in result.prune_refused_detail
+        assert _chunk_count(store, "bulk") == before, "chunks were pruned despite the guard"
+    finally:
+        CONNECTOR_REGISTRY.pop("bulk", None)
+
+
+def test_prune_anyway_overrides_the_orphan_guard_too(tmp_path: Path) -> None:
+    """--prune-anyway (prune_anyway=True) is the one escape hatch, for a
+    deliberate bulk deletion the operator has actually reviewed."""
+    try:
+        docs = [f"doc-{i}.txt" for i in range(60)]
+        conn = _CountingConnector("bulk2", docs)
+        _register("bulk2", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "bulk2", "type": "bulk2", "path": str(tmp_path)}]
+        )
+        ing.ingest("bulk2")
+        before = _chunk_count(store, "bulk2")
+        assert before > 50
+
+        conn._docs = ["doc-0.txt"]
+        result = ing.ingest("bulk2", prune_anyway=True)
+
+        assert result.prune_refused is False
+        assert result.pruning_performed is True
+        assert result.orphans_deleted > 0
+        assert _chunk_count(store, "bulk2") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("bulk2", None)
+
+
+def test_orphan_guard_floor_allows_small_source_to_drop_to_zero(tmp_path: Path) -> None:
+    """A source with only 3 chunks that legitimately drops to 0 is not
+    blocked by the ratio guard -- the floor exists exactly for this case."""
+    try:
+        conn = _CountingConnector("tiny", ["a.txt", "b.txt", "c.txt"])
+        _register("tiny", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "tiny", "type": "tiny", "path": str(tmp_path)}]
+        )
+        ing.ingest("tiny")
+        assert _chunk_count(store, "tiny") == 3
+
+        conn._docs = []
+        result = ing.ingest("tiny")
+
+        assert result.prune_refused is False
+        assert result.pruning_performed is True
+        assert result.orphans_deleted == 3
+        assert _chunk_count(store, "tiny") == 0
+    finally:
+        CONNECTOR_REGISTRY.pop("tiny", None)
+
+
+def test_orphan_guard_uses_configured_pruning_thresholds(tmp_path: Path) -> None:
+    """A real CorpusConfig's [pruning] section actually reaches
+    delete_orphans -- not just the engine's own hardcoded defaults."""
+    try:
+        docs = [f"doc-{i}.txt" for i in range(10)]
+        conn = _CountingConnector("configured", docs)
+        _register("configured", conn)
+        config = CorpusConfig.model_validate({
+            "db_path": tmp_path / "config_test.db",
+            "sources": [{"name": "configured", "type": "configured", "path": str(tmp_path)}],
+            # Floor of 5 makes the guard apply to a source this small, where
+            # the engine default (50) would not.
+            "pruning": {"max_orphan_ratio": 0.2, "min_chunks_for_guard": 5},
+        })
+        store = ChunkStore(tmp_path / "test.db", embedding_dim=DIM)
+        ing = Ingester(config=config, store=store, embedder=fake_embedder())
+        try:
+            ing.ingest("configured")
+            assert _chunk_count(store, "configured") == 10
+
+            conn._docs = ["doc-0.txt"]  # drops 9/10 = 90%
+            result = ing.ingest("configured")
+
+            assert result.prune_refused is True
+        finally:
+            store.close()
+    finally:
+        CONNECTOR_REGISTRY.pop("configured", None)

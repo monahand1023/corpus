@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 FTS_VERSION = "2"
 
+# Defaults for the orphan-pruning blast-radius guard (see OrphanPruneRefused).
+# Mirrored in corpus.config.PruningConfig, which is the normal way a caller
+# overrides them via corpus.toml; these are the fallback when no config is
+# threaded through (e.g. a caller using ChunkStore directly).
+DEFAULT_MAX_ORPHAN_RATIO = 0.20
+DEFAULT_MIN_CHUNKS_FOR_GUARD = 50
+
 
 @dataclass(frozen=True)
 class UpsertResult:
@@ -64,6 +71,39 @@ class ReadOnlyStoreError(RuntimeError):
     check exists to fail immediately with a message that names the actual
     cause, rather than surfacing SQLite's generic 'attempt to write a
     readonly database' from wherever the query happens to be."""
+
+
+class OrphanPruneRefused(RuntimeError):
+    """Raised by `delete_orphans` when pruning would delete more than
+    `max_orphan_ratio` of a source's existing chunks (and that source has at
+    least `min_chunks_for_guard` chunks to begin with).
+
+    This is the blast-radius guard for a connector that honestly reports
+    zero failures while silently under-yielding documents — e.g. one that
+    skips files whose fingerprint looks unchanged and, on a later run,
+    yields nothing for the source at all. `failed_files` can't catch this:
+    the connector isn't reporting any failure. Only the *shape* of the
+    result — almost everything for this source vanished — is evidence
+    something is wrong, which is exactly what this guard checks.
+
+    Pass `force=True` (wired to `--prune-anyway` in the ingest CLI) when the
+    drop is a genuine bulk deletion rather than a connector bug."""
+
+    def __init__(
+        self, source_type: str, existing: int, orphans: int, ratio: float, max_orphan_ratio: float
+    ):
+        self.source_type = source_type
+        self.existing = existing
+        self.orphans = orphans
+        self.ratio = ratio
+        self.max_orphan_ratio = max_orphan_ratio
+        super().__init__(
+            f"refusing to prune '{source_type}': {orphans}/{existing} existing chunks "
+            f"({ratio:.0%}) would be deleted as orphans, exceeding the {max_orphan_ratio:.0%} "
+            "guard. This usually means a connector under-yielded documents while "
+            "reporting no failures, not a genuine bulk deletion. Re-run with "
+            "--prune-anyway if it is."
+        )
 
 
 class ChunkStore:
@@ -415,7 +455,26 @@ class ChunkStore:
             self._conn.execute("DELETE FROM chunks WHERE source_type = ?", (source_type,))
         return len(rowids)
 
-    def delete_orphans(self, source_type: str, seen_ids: set[str]) -> int:
+    def delete_orphans(
+        self,
+        source_type: str,
+        seen_ids: set[str],
+        *,
+        max_orphan_ratio: float = DEFAULT_MAX_ORPHAN_RATIO,
+        min_chunks_for_guard: int = DEFAULT_MIN_CHUNKS_FOR_GUARD,
+        force: bool = False,
+    ) -> int:
+        """Delete every chunk of `source_type` whose id is absent from
+        `seen_ids`.
+
+        Blast-radius guard: refuses (raising `OrphanPruneRefused`, deleting
+        nothing) when the chunks about to be pruned exceed `max_orphan_ratio`
+        of the source's existing chunk count, unless that source has fewer
+        than `min_chunks_for_guard` chunks to begin with (too small a blast
+        radius to matter -- see `OrphanPruneRefused` and
+        `corpus.config.PruningConfig` for the full rationale). Pass
+        `force=True` to delete anyway, e.g. for a deliberate bulk deletion.
+        """
         self._require_writable("delete_orphans")
         existing = self._conn.execute(
             "SELECT id, rowid FROM chunks WHERE source_type = ?", (source_type,)
@@ -423,6 +482,25 @@ class ChunkStore:
         orphans = [(row["id"], row["rowid"]) for row in existing if row["id"] not in seen_ids]
         if not orphans:
             return 0
+
+        if not force and len(existing) > min_chunks_for_guard:
+            ratio = len(orphans) / len(existing)
+            if ratio > max_orphan_ratio:
+                logger.error(
+                    "refusing to prune '%s': %d/%d existing chunks (%.0f%%) would be "
+                    "deleted, exceeding the %.0f%% guard (enforced above %d chunks). "
+                    "Re-run with --prune-anyway if this is a genuine bulk deletion.",
+                    source_type,
+                    len(orphans),
+                    len(existing),
+                    ratio * 100,
+                    max_orphan_ratio * 100,
+                    min_chunks_for_guard,
+                )
+                raise OrphanPruneRefused(
+                    source_type, len(existing), len(orphans), ratio, max_orphan_ratio
+                )
+
         # Delete chunks by rowid in the loop (same as vec/fts) rather than a single
         # `WHERE id IN (?,?,...)` — a one-shot IN clause blows SQLite's variable cap
         # (~32k) when a re-ingest produces hundreds of thousands of orphans (e.g. a

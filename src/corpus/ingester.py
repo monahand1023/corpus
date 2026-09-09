@@ -10,9 +10,14 @@ import logging
 import time
 from dataclasses import dataclass
 
-from corpus.config import CorpusConfig
+from corpus.config import CorpusConfig, PruningConfig
 from corpus.connectors.registry import build_pipeline
-from corpus.db.sqlite import ChunkStore
+from corpus.db.sqlite import (
+    DEFAULT_MAX_ORPHAN_RATIO,
+    DEFAULT_MIN_CHUNKS_FOR_GUARD,
+    ChunkStore,
+    OrphanPruneRefused,
+)
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
 from corpus.types import Chunk
@@ -42,6 +47,24 @@ def _reported_failures(connector: object) -> int:
     return raw
 
 
+def _pruning_settings(config: object) -> tuple[float, int]:
+    """Resolve `delete_orphans`'s guard thresholds from `config.pruning`.
+
+    Falls back to the engine defaults unless `config.pruning` is a real
+    `PruningConfig` -- tests routinely construct `Ingester` with a
+    `MagicMock` config (see `_reported_failures` for the same defensive
+    posture toward connectors), and a MagicMock's auto-vivified
+    `.pruning.max_orphan_ratio` is another MagicMock, not a float. Falling
+    back to the same defaults `delete_orphans` itself bakes in is exactly
+    the right behavior anyway: a config double that never mentions pruning
+    should behave like a corpus.toml that never mentions `[pruning]`.
+    """
+    pruning = getattr(config, "pruning", None)
+    if isinstance(pruning, PruningConfig):
+        return pruning.max_orphan_ratio, pruning.min_chunks_for_guard
+    return DEFAULT_MAX_ORPHAN_RATIO, DEFAULT_MIN_CHUNKS_FOR_GUARD
+
+
 @dataclass
 class IngestResult:
     source_name: str
@@ -54,6 +77,14 @@ class IngestResult:
     elapsed_seconds: float
     files_failed: int = 0
     pruning_performed: bool = True
+    # True when delete_orphans refused to prune because the orphan count
+    # exceeded the blast-radius guard (OrphanPruneRefused) -- distinct from
+    # pruning_performed=False due to failed_files, which is a DIFFERENT
+    # reason pruning didn't run. prune_refused_detail carries the readable
+    # numbers for the CLI/caller to surface; it's the exception's own
+    # message, so the reasoning is written in exactly one place.
+    prune_refused: bool = False
+    prune_refused_detail: str | None = None
 
 
 class Ingester:
@@ -133,12 +164,38 @@ class Ingester:
         # only PARTIALLY (e.g. a PDF page that failed to extract): the shorter
         # body produces fewer chunks, so the tail chunk ids vanish from seen_ids
         # and would be pruned even though the document itself was yielded.
+        #
+        # `failed_files` is deliberately NOT the only rail: it protects against
+        # a connector that KNOWS it failed on specific files. It says nothing
+        # about a connector that silently under-enumerates while reporting
+        # zero failures -- e.g. one that skips files it believes are unchanged
+        # and, on a later run, matches nothing at all. That bug produces
+        # `failed_files == 0` and a `seen_ids` that is quietly wrong, which is
+        # exactly what `delete_orphans`'s blast-radius guard below exists to
+        # catch: it refuses when the fraction of a source's existing chunks
+        # about to be pruned is implausibly large for a routine re-ingest,
+        # independent of what the connector reported.
         failed_files = _reported_failures(connector)
         prune = failed_files == 0 or prune_anyway
+
+        orphans = 0
+        prune_refused = False
+        prune_refused_detail: str | None = None
         if prune:
-            orphans = self._store.delete_orphans(source_name, seen_ids)
+            max_orphan_ratio, min_chunks_for_guard = _pruning_settings(self._config)
+            try:
+                orphans = self._store.delete_orphans(
+                    source_name,
+                    seen_ids,
+                    max_orphan_ratio=max_orphan_ratio,
+                    min_chunks_for_guard=min_chunks_for_guard,
+                    force=prune_anyway,
+                )
+            except OrphanPruneRefused as e:
+                prune = False
+                prune_refused = True
+                prune_refused_detail = str(e)
         else:
-            orphans = 0
             logger.warning(
                 "  %s: %d file(s) could not be fully read; pruning skipped "
                 "(re-run this source with --prune-anyway to prune regardless)",
@@ -157,6 +214,8 @@ class Ingester:
             elapsed_seconds=time.monotonic() - start,
             files_failed=failed_files,
             pruning_performed=prune,
+            prune_refused=prune_refused,
+            prune_refused_detail=prune_refused_detail,
         )
 
     def _flush(self, chunks: list[Chunk]) -> tuple[int, int]:

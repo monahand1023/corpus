@@ -107,3 +107,57 @@ def test_prune_anyway_is_refused_with_all(
     assert "--source NAME" in out
     # It must refuse BEFORE doing any ingestion work at all.
     assert "=== Ingesting" not in out
+
+
+def test_orphan_guard_refuses_and_prune_anyway_overrides_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end regression for the blast-radius guard, through the real
+    CLI: a source that goes from 60 files to 5 between runs (however that
+    happened -- a connector bug or a genuine bulk deletion look identical to
+    the engine) is refused with a non-zero exit and the DB left untouched,
+    then --prune-anyway forces it through."""
+    notes_dir = tmp_path / "notes_source"
+    notes_dir.mkdir()
+    for i in range(60):
+        (notes_dir / f"note-{i}.md").write_text(f"# Note {i}\n\nBody text for note {i}.\n")
+    docx_dir = tmp_path / "docx_source"
+    docx_dir.mkdir()
+
+    cfg_path = tmp_path / "corpus.toml"
+    db_path = tmp_path / "test.db"
+    _write_config(cfg_path, db_path, notes_dir, docx_dir)
+
+    exit_code, _ = _run(cfg_path, ["--source", "notes"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "documents:        60" in out
+
+    # 55 of 60 files vanish before the next run.
+    for i in range(55):
+        (notes_dir / f"note-{i}.md").unlink()
+
+    exit_code, _ = _run(cfg_path, ["--source", "notes"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "pruning REFUSED" in out
+    assert "60" in out and "55" in out  # the actual numbers, per the brief
+
+    from corpus.db.sqlite import ChunkStore
+
+    store = ChunkStore(db_path, embedding_dim=256, read_only=True)
+    try:
+        assert store.stats()["by_source"].get("notes") == 60, "refusal must leave the DB untouched"
+    finally:
+        store.close()
+
+    exit_code, _ = _run(cfg_path, ["--source", "notes", "--prune-anyway"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "orphans deleted:  55" in out
+
+    store = ChunkStore(db_path, embedding_dim=256, read_only=True)
+    try:
+        assert store.stats()["by_source"].get("notes") == 5
+    finally:
+        store.close()

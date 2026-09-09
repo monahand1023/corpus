@@ -94,6 +94,19 @@ Add a card at https://dash.voyageai.com/billing. You won't be charged unless you
 
 You hit the ~1,500 requests/day rolling limit. Wait a few hours for the window to roll, or switch to Voyage.
 
+### `pruning REFUSED — blast-radius guard tripped` / exit code 1
+
+`corpus-ingest` refused to delete orphaned chunks because doing so would remove more than `max_orphan_ratio` (default 20%) of that source's existing chunks. The printed line names the actual numbers (existing, orphans, percentage). Two possible causes:
+
+1. **A connector bug.** The connector silently yielded far fewer documents than it should while still reporting `failed_files = 0` — this is exactly the failure mode the guard exists to catch (see [`configuration.md`](configuration.md#pruning--orphan-deletion-blast-radius-guard)). Investigate before doing anything else; don't just re-run with `--prune-anyway`.
+2. **A genuine bulk deletion.** You actually removed most of that source (deleted a folder, changed the connector's `path`/`glob`). If you've confirmed this, force it through:
+
+```sh
+corpus-ingest --source NAME --prune-anyway
+```
+
+The index is left untouched either way until you decide — nothing is deleted on refusal.
+
 ### Re-ingest is slow even though content didn't change
 
 The content-hash skip works at the chunk level. Common reasons it doesn't kick in:

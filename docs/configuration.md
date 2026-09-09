@@ -10,6 +10,7 @@ Everything that varies between deployments lives in `corpus.toml`. This doc is t
 [corpus]       # Where the DB lives.
 [embedder]     # Which provider, model, and dim.
 [retriever]    # Defaults for the query pipeline.
+[pruning]      # Orphan-deletion blast-radius guard.
 [[sources]]    # Repeatable. Each = one connector instance.
 [[references]] # Optional. Reference patterns for expand_context.
 ```
@@ -123,6 +124,29 @@ hybrid = true
 ```
 
 These are *defaults*. CLI flags (`-k`, `--no-hybrid`) and MCP tool args override per call.
+
+## `[pruning]` — orphan-deletion blast-radius guard
+
+| Setting | Type | Default | Notes |
+|---|---|---|---|
+| `max_orphan_ratio` | float | `0.20` | Refuse to prune a source when the chunks about to be deleted exceed this fraction of its existing chunk count. |
+| `min_chunks_for_guard` | int | `50` | Only enforce the ratio above this many existing chunks; a small/new source can legitimately cross 20% on a handful of deletions. |
+
+```toml
+[pruning]
+max_orphan_ratio = 0.20
+min_chunks_for_guard = 50
+```
+
+Every `corpus-ingest` run deletes chunks whose id is no longer present in what the connector just yielded ("orphans") — that's how a deleted or renamed file gets removed from the index. The only other protection against this happening for the wrong reason is `failed_files == 0`, which a connector with a genuine bug can still report honestly: one that silently yields fewer documents than it should (e.g. skips files it believes are unchanged) reports zero failures right up until the run that deletes the whole source's index.
+
+This guard adds a second, independent check: if pruning would remove more than `max_orphan_ratio` of a source's existing chunks, `corpus-ingest` refuses — it logs the actual numbers, leaves the index untouched, and exits non-zero — rather than deleting first and hoping the numbers looked right. Pass `--prune-anyway` when the drop really is a deliberate bulk deletion:
+
+```sh
+corpus-ingest --source photos --prune-anyway
+```
+
+`--prune-anyway` also overrides the pre-existing `failed_files` gate (see [`troubleshooting.md`](troubleshooting.md)); both are the same "I've reviewed this, delete anyway" escape hatch.
 
 ## `[[sources]]` — repeatable
 
