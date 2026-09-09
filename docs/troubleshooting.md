@@ -235,6 +235,19 @@ ls -lh corpus.db
 
 Most of the size is embeddings (1024 floats × 4 bytes × chunk count). 50K chunks ≈ 200 MB. Compressed not. Acceptable for personal use; if you need to ship the DB around, gzip cuts it ~3x.
 
+### Opening a store rewrote it (a schema migration ran)
+
+`ChunkStore(path)` runs a one-time FTS index migration automatically when it opens a store whose `fts_version` is stale — normal, and how a single-user DB stays correct without a separate "remember to migrate" step. When it runs against a store that already has chunks, it logs at WARNING with the path and the before/after chunk count, so it's never silent.
+
+If you need to open a store WITHOUT any chance of this happening — e.g. to inspect a backup's on-disk state, or compare before/after some other change — open it read-only, which never migrates and raises a clear error on any write attempt:
+
+```python
+from corpus.db.sqlite import ChunkStore
+store = ChunkStore(path, embedding_dim=1024, read_only=True)
+```
+
+`corpus-mcp` and `corpus-query` already open the store this way, since neither ever writes to it.
+
 ## Security notes
 
 - **`corpus-eval` / `corpus-benchmark` execute the `--queries` file you pass.**

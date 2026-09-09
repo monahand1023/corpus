@@ -39,7 +39,17 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config_or_exit(args.config)
-    store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim)
+    # read_only=True: corpus-query only ever reads. Opening the store any
+    # other way risks silently running a schema migration (see
+    # ChunkStore._migrate_fts) as a side effect of an ad-hoc query. This does
+    # mean a store that doesn't exist yet is now a clean error instead of a
+    # silently auto-created empty DB -- there's nothing to query before the
+    # first `corpus-ingest` anyway.
+    try:
+        store = ChunkStore(config.db_path, embedding_dim=config.embedder.dim, read_only=True)
+    except FileNotFoundError:
+        print(f"error: no database at {config.db_path} yet. Run corpus-ingest first.")
+        return 1
     embedder = make_embedder(
         provider=config.embedder.provider,
         model=config.embedder.model,

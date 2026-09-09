@@ -134,8 +134,13 @@ Out-of-the-box formats: **markdown**, **text**, **pdf** (`[pdf]` extra), **html*
 > `chunks_fts` table from content already stored in `chunks` (no
 > re-embedding, no API cost, no network access), and it's crash-safe: if the
 > process is killed mid-migration, it retries cleanly on the next open
-> instead of leaving a half-rebuilt index. You'll see a one-line log message
-> (`rebuilt FTS index for N chunks`) the first time it runs.
+> instead of leaving a half-rebuilt index. If the store already has chunks,
+> you'll see two WARNING-level log lines naming the database path — one
+> before the rebuild starts, one after with the row count rebuilt — because a
+> migration rewriting your data should never be a silent side effect of
+> opening a file. To open a store with a hard guarantee that it will *never*
+> migrate (e.g. to inspect a backup unmodified), pass `read_only=True` to
+> `ChunkStore` — `corpus-mcp` and `corpus-query` already do.
 
 ## Search behavior
 

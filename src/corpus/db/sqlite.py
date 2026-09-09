@@ -57,13 +57,34 @@ class EmbeddingDimMismatch(RuntimeError):
     corrupt retrieval."""
 
 
+class ReadOnlyStoreError(RuntimeError):
+    """Raised by any mutating `ChunkStore` method when the store was opened
+    with `read_only=True`. A read-only store's connection is opened via a
+    `mode=ro` SQLite URI, so a write would eventually fail anyway — this
+    check exists to fail immediately with a message that names the actual
+    cause, rather than surfacing SQLite's generic 'attempt to write a
+    readonly database' from wherever the query happens to be."""
+
+
 class ChunkStore:
-    def __init__(self, db_path: Path | str, *, embedding_dim: int):
+    def __init__(self, db_path: Path | str, *, embedding_dim: int, read_only: bool = False):
         """Open or create the chunk store.
 
         `embedding_dim` is checked against the existing schema if the DB
         already has data — if they mismatch (e.g., user changed embedder
         model without re-ingesting), we raise rather than silently corrupt.
+
+        `read_only=True` opens the DB through a `mode=ro` SQLite URI and never
+        runs `_migrate_fts` — for a query-only caller (the MCP server, the
+        query CLI), this guarantees opening the store to search it can never
+        rewrite it. A schema migration is otherwise a side effect of opening
+        ANY store, including one you only meant to inspect: on a large store
+        it can take real time and rewrite a large fraction of the file, and
+        running it against, say, a backup you're comparing before/after would
+        destroy the very state being compared. See `_migrate_fts` for the
+        migration itself and its WARNING logging. Any method that would
+        mutate raises `ReadOnlyStoreError` on a read-only store. Requires the
+        file to already exist — read-only mode never creates a store.
 
         Threading: each thread gets its own sqlite3.Connection via thread-local
         storage. WAL mode handles concurrent readers; ingest (single-threaded)
@@ -73,6 +94,7 @@ class ChunkStore:
         """
         self._db_path = Path(db_path)
         self._embedding_dim = embedding_dim
+        self._read_only = read_only
         self._tls = threading.local()
         # All opened connections, tracked so close() can shut them all down.
         # Guarded by a lock since connections open on arbitrary worker threads.
@@ -83,18 +105,43 @@ class ChunkStore:
         # it's reused rather than orphaned.
         init_conn = self._open_connection()
         self._tls.conn = init_conn
-        self._init_schema(init_conn)
-        self._guard_embedding_dim(init_conn)
-        self._migrate_fts(init_conn)
+        if read_only:
+            self._guard_embedding_dim(init_conn)
+        else:
+            self._init_schema(init_conn)
+            self._guard_embedding_dim(init_conn)
+            self._migrate_fts(init_conn)
+
+    def _require_writable(self, action: str) -> None:
+        if self._read_only:
+            raise ReadOnlyStoreError(
+                f"{self._db_path} was opened with read_only=True; {action} is not permitted."
+            )
 
     def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        if self._read_only:
+            if not self._db_path.exists():
+                raise FileNotFoundError(
+                    f"cannot open {self._db_path} read-only: file does not exist "
+                    "(read-only mode never creates a store)"
+                )
+            # mode=ro: SQLite refuses any write against this connection at the
+            # OS/file level, as a second line of defense behind
+            # _require_writable's explicit checks.
+            conn = sqlite3.connect(
+                f"file:{self._db_path.as_posix()}?mode=ro", uri=True, check_same_thread=False
+            )
+        else:
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
+        if not self._read_only:
+            # journal_mode/synchronous govern write behavior; skip them on a
+            # read-only connection, which cannot legally change either.
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
         # The MCP server is this engine's primary consumer and can hold the
         # DB open indefinitely; without a busy_timeout, opening the store
         # from a second process (e.g. `corpus-ingest` while `corpus-mcp` is
@@ -169,6 +216,11 @@ class ChunkStore:
             "SELECT value FROM schema_meta WHERE key = 'embedding_dim'"
         ).fetchone()
         if row is None:
+            if self._read_only:
+                # Nothing recorded yet (an empty store) and a read-only
+                # connection can't record one either. Nothing to compare
+                # against, so there's nothing to guard.
+                return
             # First open — record the chosen dim.
             conn.execute(
                 "INSERT INTO schema_meta (key, value) VALUES ('embedding_dim', ?)",
@@ -191,6 +243,14 @@ class ChunkStore:
         DB whose migration must be remembered is a migration that gets skipped,
         leaving a half-normalized index with nothing surfaced. Local and free —
         content is re-read from `chunks`, so no embeddings are recomputed.
+
+        Never call this on a store you need to inspect unmodified — opening it
+        performs the migration, rewriting the file (measured: 626MB -> 679MB
+        on a ~70k-chunk store) with no separate confirmation step. Open with
+        `read_only=True` instead, which skips this method entirely. When a
+        migration DOES run against a store that already has chunks, it is
+        logged at WARNING (not INFO) with the path, before and after —
+        opening a file should never silently rewrite the user's data.
         """
         conn = conn or self._conn
         row = conn.execute(
@@ -198,6 +258,24 @@ class ChunkStore:
         ).fetchone()
         if row is not None and row["value"] == FTS_VERSION:
             return
+        from_version = row["value"] if row is not None else None
+        # A brand-new, still-empty store also has no fts_version stamp yet —
+        # that is ordinary first-time schema setup, not a migration of
+        # existing data, so it does not warrant a WARNING. Only chunks that
+        # already exist are actually at risk of the silent-rewrite failure
+        # mode this logging exists for.
+        existing_chunks = conn.execute("SELECT COUNT(*) AS c FROM chunks").fetchone()["c"]
+        if existing_chunks:
+            logger.warning(
+                "migrating FTS index for %s: fts_version %r -> %r, about to rebuild "
+                "%d existing chunk(s). This rewrites the database file on disk. Open "
+                "with ChunkStore(path, read_only=True) if you need to inspect a "
+                "store's current on-disk state unmodified.",
+                self._db_path,
+                from_version,
+                FTS_VERSION,
+                existing_chunks,
+            )
         conn.execute("DELETE FROM chunks_fts")
         # Stream the cursor rather than `.fetchall()`: materializing every row
         # up front measured 2.90s / ~146MB RSS at ~70k chunks (~8s at 205k).
@@ -224,7 +302,12 @@ class ChunkStore:
         )
         conn.commit()
         if count:
-            logger.info("rebuilt FTS index for %d chunks (fts_version=%s)", count, FTS_VERSION)
+            logger.warning(
+                "migrated FTS index for %s: rebuilt %d chunk(s), fts_version now %r",
+                self._db_path,
+                count,
+                FTS_VERSION,
+            )
 
     @contextmanager
     def _txn(self) -> Iterator[sqlite3.Connection]:
@@ -246,6 +329,7 @@ class ChunkStore:
         return {row["id"]: row["content_hash"] for row in rows}
 
     def upsert(self, chunk: Chunk, embedding: Sequence[float]) -> bool:
+        self._require_writable("upsert")
         if len(embedding) != self._embedding_dim:
             raise ValueError(
                 f"embedding dim mismatch: got {len(embedding)}, expected {self._embedding_dim}"
@@ -305,6 +389,7 @@ class ChunkStore:
         return True
 
     def upsert_batch(self, items: Iterable[tuple[Chunk, Sequence[float]]]) -> UpsertResult:
+        self._require_writable("upsert_batch")
         upserted = 0
         skipped = 0
         with self._txn():
@@ -316,6 +401,7 @@ class ChunkStore:
         return UpsertResult(upserted=upserted, skipped=skipped)
 
     def delete_by_source(self, source_type: str) -> int:
+        self._require_writable("delete_by_source")
         rowids = [
             row["rowid"]
             for row in self._conn.execute(
@@ -330,6 +416,7 @@ class ChunkStore:
         return len(rowids)
 
     def delete_orphans(self, source_type: str, seen_ids: set[str]) -> int:
+        self._require_writable("delete_orphans")
         existing = self._conn.execute(
             "SELECT id, rowid FROM chunks WHERE source_type = ?", (source_type,)
         ).fetchall()
@@ -577,6 +664,7 @@ class ChunkStore:
         model: str,
         token_count: int | None = None,
     ) -> None:
+        self._require_writable("upsert_summary")
         self._conn.execute(
             """
             INSERT INTO summaries (

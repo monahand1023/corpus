@@ -84,7 +84,11 @@ def _init() -> tuple[ChunkStore, Embedder, Retriever, CorpusConfig]:
     if _config is None:
         _config = CorpusConfig.load(_config_path_override)
     if _store is None:
-        _store = ChunkStore(_config.db_path, embedding_dim=_config.embedder.dim)
+        # read_only=True: every tool this server exposes is a read (search,
+        # get_doc, timeline, ...) -- none ingest or otherwise mutate. Opening
+        # the store any other way risks silently running a schema migration
+        # (see ChunkStore._migrate_fts) as a side effect of a search request.
+        _store = ChunkStore(_config.db_path, embedding_dim=_config.embedder.dim, read_only=True)
     if _embedder is None:
         _embedder = make_embedder(
             provider=_config.embedder.provider,

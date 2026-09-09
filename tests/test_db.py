@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 
 import pytest
 
-from corpus.db.sqlite import ChunkStore, EmbeddingDimMismatch
+from corpus.db.sqlite import ChunkStore, EmbeddingDimMismatch, ReadOnlyStoreError
 from corpus.types import Chunk, ChunkKind, ChunkMetadata
 from corpus.util.hash import chunk_id, sha256
 
@@ -350,3 +351,144 @@ def test_fts_migration_rebuilds_unnormalized_index(tmp_path: Path) -> None:
     reopened = ChunkStore(path, embedding_dim=DIM)
     assert len(reopened.fts_search("東京", top_k=5)) == 1  # migration repaired it
     reopened.close()
+
+
+def _make_unmigrated_store(path: Path) -> None:
+    """Build a store, then roll it back to a pre-migration state: raw
+    (unnormalized) FTS content and no fts_version stamp. Shared by the
+    read-only and migration-logging tests below."""
+    store = ChunkStore(path, embedding_dim=DIM)
+    store.upsert_batch([
+        (make_chunk("jp", 0, ChunkKind.BODY, "東京で会議をしました"), fake_embedding(1)),
+    ])
+    conn = store._conn
+    conn.execute("DELETE FROM chunks_fts")
+    rows = conn.execute("SELECT rowid, content FROM chunks").fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+            (row["rowid"], row["content"]),
+        )
+    conn.execute("DELETE FROM schema_meta WHERE key = 'fts_version'")
+    conn.commit()
+    store.close()
+
+
+def test_read_only_requires_an_existing_file(tmp_path: Path) -> None:
+    """Read-only mode never creates a store -- opening one that doesn't
+    exist yet is a clear, immediate error, not a silently created empty DB."""
+    with pytest.raises(FileNotFoundError):
+        ChunkStore(tmp_path / "does_not_exist.db", embedding_dim=DIM, read_only=True)
+
+
+def test_read_only_never_migrates(tmp_path: Path) -> None:
+    """Opening a store read-only must NEVER run _migrate_fts -- the whole
+    point is that inspecting a store (e.g. a backup) cannot silently rewrite
+    it. Regression for: opening a ~70k-chunk backup read-write to compare
+    its pre-migration behavior performed the migration, destroying the very
+    state being compared."""
+    path = tmp_path / "old.db"
+    _make_unmigrated_store(path)
+
+    ro = ChunkStore(path, embedding_dim=DIM, read_only=True)
+    try:
+        # Still broken, exactly as the unmigrated on-disk state was -- proves
+        # no migration ran on open.
+        assert ro.fts_search("東京", top_k=5) == []
+        row = ro._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'fts_version'"
+        ).fetchone()
+        assert row is None, "read-only open must not have written an fts_version stamp"
+    finally:
+        ro.close()
+
+    # A normal (writable) open of the SAME file afterward still migrates
+    # correctly -- read-only mode didn't corrupt anything, just deferred it.
+    rw = ChunkStore(path, embedding_dim=DIM)
+    try:
+        assert len(rw.fts_search("東京", top_k=5)) == 1
+    finally:
+        rw.close()
+
+
+def test_read_only_allows_reads(tmp_path: Path) -> None:
+    path = tmp_path / "readable.db"
+    store = ChunkStore(path, embedding_dim=DIM)
+    store.upsert_batch([
+        (make_chunk("DOC-0", 0, ChunkKind.SECTION, "readable content"), fake_embedding(0)),
+    ])
+    store.close()
+
+    ro = ChunkStore(path, embedding_dim=DIM, read_only=True)
+    try:
+        assert ro.stats()["total"] == 1
+        assert len(ro.fts_search("readable", top_k=5)) == 1
+        assert len(ro.vector_search(fake_embedding(0), top_k=5)) == 1
+        assert ro.get_by_source_key("notes", "DOC-0") != []
+    finally:
+        ro.close()
+
+
+def test_read_only_raises_on_every_mutating_method(tmp_path: Path) -> None:
+    """Anything that would mutate must raise a clear, read-only-specific
+    error -- not SQLite's generic 'attempt to write a readonly database'
+    from wherever the write happens to land."""
+    path = tmp_path / "guarded.db"
+    store = ChunkStore(path, embedding_dim=DIM)
+    store.upsert_batch([
+        (make_chunk("DOC-0", 0, ChunkKind.SECTION, "content"), fake_embedding(0)),
+    ])
+    store.close()
+
+    ro = ChunkStore(path, embedding_dim=DIM, read_only=True)
+    try:
+        chunk = make_chunk("DOC-1", 0, ChunkKind.SECTION, "new content")
+        with pytest.raises(ReadOnlyStoreError, match="read_only=True"):
+            ro.upsert(chunk, fake_embedding(1))
+        with pytest.raises(ReadOnlyStoreError, match="read_only=True"):
+            ro.upsert_batch([(chunk, fake_embedding(1))])
+        with pytest.raises(ReadOnlyStoreError, match="read_only=True"):
+            ro.delete_by_source("notes")
+        with pytest.raises(ReadOnlyStoreError, match="read_only=True"):
+            ro.delete_orphans("notes", set())
+        with pytest.raises(ReadOnlyStoreError, match="read_only=True"):
+            ro.upsert_summary("notes", "DOC-0", "summary", "hash", "model-x")
+        # None of the attempts above actually changed anything.
+        assert ro.stats()["total"] == 1
+    finally:
+        ro.close()
+
+
+def test_migration_logs_warning_with_path_and_counts(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A migration that runs against a store with existing chunks must WARN
+    (not just INFO) with the path, both before and after, including the
+    rebuilt count -- opening a file should never silently rewrite the user's
+    data. Regression for: the old code logged this at INFO and only after
+    the fact, with no distinct 'about to happen' signal."""
+    path = tmp_path / "warns.db"
+    _make_unmigrated_store(path)
+
+    with caplog.at_level(logging.WARNING, logger="corpus.db.sqlite"):
+        store = ChunkStore(path, embedding_dim=DIM)
+    store.close()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) >= 2, "expected a before-migration AND after-migration WARNING"
+    joined = "\n".join(r.getMessage() for r in warnings)
+    assert str(path) in joined
+    assert "1" in joined  # one chunk rebuilt
+
+
+def test_fresh_store_creation_does_not_log_a_migration_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A brand-new, empty store has no prior data at risk -- creating one for
+    the first time must not print a scary 'migrating' WARNING on every
+    ordinary first ingest."""
+    with caplog.at_level(logging.WARNING, logger="corpus.db.sqlite"):
+        store = ChunkStore(tmp_path / "brand_new.db", embedding_dim=DIM)
+    store.close()
+
+    assert not any(r.levelname == "WARNING" for r in caplog.records)
