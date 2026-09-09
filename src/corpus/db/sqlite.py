@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import tempfile
 import threading
+import tomllib
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,6 +29,107 @@ from corpus.util.fts_normalize import fts_terms, normalize_for_fts
 logger = logging.getLogger(__name__)
 
 FTS_VERSION = "2"
+
+# System temp root, resolved once. Symlinks matter here: on macOS
+# `tempfile.gettempdir()` returns a `/var/folders/...` path that is itself a
+# symlink into `/private/var/folders/...`, and pytest's `tmp_path` fixture
+# resolves through that link -- comparing unresolved paths would silently
+# fail to match every `tmp_path`-based test fixture and reintroduce the
+# warning-flood this exclusion exists to prevent.
+_TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
+
+# The name this project's own pyproject.toml declares -- used to confirm a
+# "src" parent above the installed package really is *this* checkout before
+# extending the in-tree-index warning to the whole repo root (see
+# `_corpus_engine_roots`), not some unrelated project that happens to use a
+# src/ layout.
+_PROJECT_NAME = "corpus-rag"
+
+
+def _corpus_engine_roots() -> list[Path]:
+    """Directories where a consumer's index must never live: the installed
+    `corpus` package's own directory, and -- only when running from a source
+    checkout -- that checkout's repo root too.
+
+    Both are derived from *this module's* `__file__`, i.e. wherever Python's
+    import machinery actually resolved the `corpus` package via `sys.path`.
+    That is deliberate: a check based on `Path.cwd()` would misbehave for
+    `uv run` (or any invocation) launched from a directory other than the
+    checkout -- cwd reveals nothing about where corpus is installed, so it
+    could both miss a real in-tree index and, separately, misfire against an
+    unrelated cwd. `__file__`-based resolution has neither failure mode: it
+    names where the package's bytes physically live, and that is invariant
+    across every invocation style -- a normal (non-editable) install, an
+    editable install, or pytest's `pythonpath` sys.path injection (which
+    resolves `__file__` the same way an editable install does).
+
+    A normal site-packages install's package directory has no meaningful
+    "repo root" above it -- just more of the venv -- so it gets no
+    escalation: only `package_root` itself is protected. An editable
+    install / dev checkout has the shape ".../<repo>/src/corpus"; only then,
+    and only after confirming `<repo>/pyproject.toml` actually declares this
+    project, is `<repo>` added too. That escalation matters: the real
+    incident this guards against put files at the *repo root*
+    (next to pyproject.toml), not inside src/corpus/ itself.
+    """
+    package_root = Path(__file__).resolve().parent.parent
+    roots = [package_root]
+    if package_root.parent.name != "src":
+        return roots
+    candidate_root = package_root.parent.parent
+    pyproject = candidate_root / "pyproject.toml"
+    if not pyproject.is_file():
+        return roots
+    try:
+        project_name = tomllib.loads(pyproject.read_text()).get("project", {}).get("name")
+    except (OSError, tomllib.TOMLDecodeError):
+        project_name = None
+    if project_name == _PROJECT_NAME:
+        roots.append(candidate_root)
+    return roots
+
+
+def _warn_if_inside_corpus_repo(db_path: Path) -> None:
+    """Emit a loud (but non-fatal) warning if `db_path` resolves inside
+    corpus's own package directory or checkout root.
+
+    That location is never correct for a consumer's index: corpus is a
+    library, and an index built from someone's personal documents belongs in
+    a *consumer* project's own directory (with its own config), not inside
+    the engine that merely builds and serves it. The danger isn't
+    hypothetical -- an untracked file living there survives only as long as
+    `.gitignore` happens to stay correct, and is exactly what `git clean
+    -fdx` deletes and a stray `git add -f` would publish.
+
+    This is deliberately a warning, not a hard error: an existing
+    installation with a database already in this location must not be
+    locked out of its own data by an upgrade. Skipped entirely for
+    `:memory:` and for anything under the system temp directory (where the
+    whole test suite's `tmp_path`-based fixtures live) so routine test runs
+    never see it.
+    """
+    if str(db_path) == ":memory:":
+        return
+    try:
+        resolved = db_path.resolve()
+    except OSError:
+        return
+    if resolved.is_relative_to(_TEMP_ROOT):
+        return
+    for root in _corpus_engine_roots():
+        if resolved.is_relative_to(root):
+            logger.warning(
+                "%s resolves inside corpus's own source tree (%s). Storing a "
+                "consumer's index there is always a mistake: corpus is a "
+                "library, and personal data belongs in a separate consumer "
+                "project's own directory, with its own config, not inside "
+                "corpus itself. This is a warning, not an error -- an "
+                "existing database here still opens -- but move it out "
+                "before it grows.",
+                resolved,
+                root,
+            )
+            return
 
 # Defaults for the orphan-pruning blast-radius guard (see OrphanPruneRefused).
 # Mirrored in corpus.config.PruningConfig, which is the normal way a caller
@@ -158,6 +261,7 @@ class ChunkStore:
         connection — no shared cursor state.
         """
         self._db_path = Path(db_path)
+        _warn_if_inside_corpus_repo(self._db_path)
         self._embedding_dim = embedding_dim
         self._read_only = read_only
         self._cache_size_mb = cache_size_mb

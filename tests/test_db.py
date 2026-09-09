@@ -597,6 +597,136 @@ def test_fresh_store_creation_does_not_log_a_migration_warning(
 
 
 # ---------------------------------------------------------------------------
+# In-tree-index guard: corpus refuses (with a loud warning, not a hard error)
+# to treat "inside corpus's own source tree" as a correct place for a
+# consumer's index. See `_corpus_engine_roots` / `_warn_if_inside_corpus_repo`
+# in corpus.db.sqlite for the full rationale.
+# ---------------------------------------------------------------------------
+
+
+def test_opening_a_store_inside_a_simulated_engine_root_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`tmp_path` stands in for "corpus's own repo root" here so the test
+    never has to construct a store inside the real checkout -- the detection
+    logic itself (resolve + is_relative_to) doesn't care what the root is,
+    only `_corpus_engine_roots` decides what counts as one.
+
+    `_TEMP_ROOT` also has to be monkeypatched to something that does NOT
+    cover `tmp_path`: real `tmp_path` fixtures live under the system temp
+    directory by construction, and that exemption is checked (correctly)
+    before engine roots are even consulted -- otherwise this test would
+    "pass" for the wrong reason, without ever exercising the engine-root
+    branch it means to test."""
+    import corpus.db.sqlite as sqlite_module
+
+    monkeypatch.setattr(sqlite_module, "_corpus_engine_roots", lambda: [tmp_path])
+    monkeypatch.setattr(sqlite_module, "_TEMP_ROOT", tmp_path / "_unrelated_decoy_temp_root")
+    db_path = tmp_path / "corpus.db"
+
+    with caplog.at_level(logging.WARNING, logger="corpus.db.sqlite"):
+        store = ChunkStore(db_path, embedding_dim=DIM)
+    store.close()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert str(db_path) in message
+    assert "mistake" in message
+
+
+def test_warning_does_not_prevent_opening_an_existing_in_tree_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check is advisory, not enforced -- an upgrade must never lock a
+    user out of data that already lives at a warned-about path."""
+    import corpus.db.sqlite as sqlite_module
+
+    monkeypatch.setattr(sqlite_module, "_corpus_engine_roots", lambda: [tmp_path])
+    monkeypatch.setattr(sqlite_module, "_TEMP_ROOT", tmp_path / "_unrelated_decoy_temp_root")
+    db_path = tmp_path / "corpus.db"
+
+    store = ChunkStore(db_path, embedding_dim=DIM)
+    try:
+        store.upsert_batch([(make_chunk("DOC-0", 0, ChunkKind.SECTION, "x"), fake_embedding(0))])
+        assert store.stats()["total"] == 1
+    finally:
+        store.close()
+
+    # Reopening the same in-tree path still works too.
+    reopened = ChunkStore(db_path, embedding_dim=DIM)
+    try:
+        assert reopened.stats()["total"] == 1
+    finally:
+        reopened.close()
+
+
+def test_ordinary_tmp_path_store_does_not_trigger_the_in_tree_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No monkeypatching here -- this exercises the real
+    `_corpus_engine_roots()` against a genuine `tmp_path`, which must never
+    match (it isn't inside corpus's package dir or checkout root, and is
+    additionally under the system temp root, which is skipped outright)."""
+    with caplog.at_level(logging.WARNING, logger="corpus.db.sqlite"):
+        store = ChunkStore(tmp_path / "ordinary.db", embedding_dim=DIM)
+    store.close()
+
+    assert not any("mistake" in r.getMessage() for r in caplog.records)
+
+
+def test_memory_path_is_exempt_from_the_in_tree_warning(caplog: pytest.LogCaptureFixture) -> None:
+    from corpus.db.sqlite import _warn_if_inside_corpus_repo
+
+    with caplog.at_level(logging.WARNING, logger="corpus.db.sqlite"):
+        _warn_if_inside_corpus_repo(Path(":memory:"))
+
+    assert not caplog.records
+
+
+def test_corpus_engine_roots_does_not_escalate_a_non_editable_install(tmp_path: Path) -> None:
+    """A normal (non-editable) install's package directory sits directly
+    under `site-packages` with no `src` parent -- there is no repo root to
+    protect, so only the package directory itself should come back."""
+    from unittest.mock import patch
+
+    from corpus.db.sqlite import _corpus_engine_roots
+
+    db_subdir = tmp_path / "site-packages" / "corpus" / "db"
+    db_subdir.mkdir(parents=True)
+    fake_module_file = db_subdir / "sqlite.py"
+    fake_module_file.write_text("# stub")
+
+    with patch("corpus.db.sqlite.__file__", str(fake_module_file)):
+        roots = _corpus_engine_roots()
+
+    assert roots == [db_subdir.parent]  # ".../site-packages/corpus" -- the package dir
+
+
+def test_corpus_engine_roots_ignores_a_src_layout_from_an_unrelated_project(
+    tmp_path: Path,
+) -> None:
+    """A `src/<pkg>` shape alone isn't enough to escalate to a repo root --
+    the pyproject.toml one level up must actually declare *this* project.
+    Otherwise a vendored copy or an unrelated project using the same layout
+    convention would wrongly gain repo-root-wide warnings."""
+    from unittest.mock import patch
+
+    from corpus.db.sqlite import _corpus_engine_roots
+
+    pkg_dir = tmp_path / "src" / "corpus" / "db"
+    pkg_dir.mkdir(parents=True)
+    fake_module_file = pkg_dir / "sqlite.py"
+    fake_module_file.write_text("# stub")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "unrelated-project"\n')
+
+    with patch("corpus.db.sqlite.__file__", str(fake_module_file)):
+        roots = _corpus_engine_roots()
+
+    assert roots == [pkg_dir.parent]
+
+
+# ---------------------------------------------------------------------------
 # Memory-tuning pragmas (cache_size / mmap_size / temp_store). See
 # corpus.config.PerformanceConfig for the benchmark behind the defaults --
 # mmap_size is the pragma that actually matters for vector search; these
