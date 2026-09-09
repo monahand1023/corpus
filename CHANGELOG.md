@@ -328,6 +328,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **An expensive FTS rebuild is no longer something a constructor does.**
+  Opening a store rebuilt a stale full-text index automatically. That is right
+  for a small store — a migration you must remember is one that gets skipped —
+  and wrong for a large one: the rebuild is a single transaction holding
+  SQLite's only writer lock from first delete to final commit, so on a
+  million-chunk store it is minutes during which any concurrent ingest fails
+  on its busy timeout, triggered by any script, test, or MCP server that
+  happens to open the store read-write. Above
+  `AUTO_FTS_MIGRATION_MAX_CHUNKS` (200,000) the store now reports the stale
+  index loudly and leaves it alone; `corpus-migrate-fts` performs it
+  deliberately. The warning names the hazard SQLite cannot catch: deploying
+  the migration before deploying the code means an older writer appends
+  unnormalized rows to a store stamped as current, reintroducing the defect
+  silently for new content.
+- **A failed `ChunkStore` construction no longer leaks its connection.** If
+  schema setup or a migration raised, the connection was never closed and its
+  open write transaction held SQLite's single writer lock until garbage
+  collection — for the life of the process, in a long-running server. Found
+  by a test that crashed an FTS rebuild mid-way and then could not reopen the
+  database at all.
 - **A contextualized chunk no longer drops out of BM25.** `set_context` wrote
   the combined context+content into `chunks_fts` RAW, while `upsert` writes
   `normalize_for_fts(content)` and the query path searches for that normalized

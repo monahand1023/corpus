@@ -8,6 +8,7 @@ break the linkage. Re-ingest from scratch is the safe recovery path.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -29,6 +30,12 @@ from corpus.util.fts_normalize import fts_terms, normalize_for_fts
 logger = logging.getLogger(__name__)
 
 FTS_VERSION = "2"
+
+# Above this many chunks, an FTS rebuild stops being something to do silently
+# while opening a store. Measured: a 70k-chunk store rebuilt in ~3s, so a store of
+# this size is a few seconds; a multi-million-chunk store is minutes of held writer lock, with
+# any concurrent ingest failing on its busy timeout meanwhile.
+AUTO_FTS_MIGRATION_MAX_CHUNKS = 200_000
 
 # System temp root, resolved once. Symlinks matter here: on macOS
 # `tempfile.gettempdir()` returns a `/var/folders/...` path that is itself a
@@ -229,6 +236,7 @@ class ChunkStore:
         *,
         embedding_dim: int,
         read_only: bool = False,
+        allow_expensive_migration: bool = False,
         cache_size_mb: int = DEFAULT_CACHE_SIZE_MB,
         mmap_size_mb: int = DEFAULT_MMAP_SIZE_MB,
         temp_store_memory: bool = DEFAULT_TEMP_STORE_MEMORY,
@@ -269,6 +277,11 @@ class ChunkStore:
         _warn_if_inside_corpus_repo(self._db_path)
         self._embedding_dim = embedding_dim
         self._read_only = read_only
+        # Set only by the explicit `corpus-migrate-fts` maintenance command.
+        # A rebuild is one long transaction holding the sole writer lock, so
+        # it must be something an operator chose, not something a constructor
+        # did on their behalf. See _migrate_fts.
+        self._allow_expensive_migration = allow_expensive_migration
         self._cache_size_mb = cache_size_mb
         self._mmap_size_mb = mmap_size_mb
         self._temp_store_memory = temp_store_memory
@@ -282,12 +295,33 @@ class ChunkStore:
         # it's reused rather than orphaned.
         init_conn = self._open_connection()
         self._tls.conn = init_conn
-        if read_only:
-            self._guard_embedding_dim(init_conn)
-        else:
-            self._init_schema(init_conn)
-            self._guard_embedding_dim(init_conn)
-            self._migrate_fts(init_conn)
+        try:
+            if read_only:
+                self._guard_embedding_dim(init_conn)
+            else:
+                self._init_schema(init_conn)
+                self._guard_embedding_dim(init_conn)
+                self._migrate_fts(init_conn)
+        except BaseException:
+            # Setup failed, so no caller holds this store and nobody will ever
+            # call close() on it. Without this the connection survives until
+            # garbage collection with an open write transaction, holding
+            # SQLite's single writer lock — every later writer then fails on
+            # its busy timeout, and in a long-running process (an MCP server)
+            # that lock is held for the life of the process. Found by a test
+            # that crashed an FTS rebuild mid-way and then could not reopen
+            # the database at all.
+            #
+            # Rollback before close so the partial transaction is discarded
+            # explicitly rather than relying on close()'s implicit behaviour.
+            with contextlib.suppress(Exception):
+                init_conn.rollback()
+            with contextlib.suppress(Exception):
+                init_conn.close()
+            with self._conns_lock, contextlib.suppress(ValueError):
+                self._all_conns.remove(init_conn)
+            self._tls.conn = None
+            raise
 
     def _require_writable(self, action: str) -> None:
         if self._read_only:
@@ -465,21 +499,48 @@ class ChunkStore:
                 f"the new dim, or revert your embedder.model in corpus.toml."
             )
 
+    def fts_version(self) -> str | None:
+        """The FTS normalization version this store is stamped with, or None.
+
+        None means the store predates the stamp entirely and its index is
+        whatever the code of the day wrote.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'fts_version'"
+        ).fetchone()
+        return row["value"] if row else None
+
     def _migrate_fts(self, conn: sqlite3.Connection | None = None) -> None:
-        """Rebuild chunks_fts when its normalization is stale.
+        """Rebuild chunks_fts when its normalization is stale — if it is cheap.
 
-        Runs automatically at open rather than as a CLI command: a single-user
-        DB whose migration must be remembered is a migration that gets skipped,
-        leaving a half-normalized index with nothing surfaced. Local and free —
-        content is re-read from `chunks`, so no embeddings are recomputed.
+        A SMALL store migrates automatically at open. That was the original
+        reasoning and it still holds at small scale: a single-user database
+        whose migration must be remembered is a migration that gets skipped,
+        leaving a half-normalized index with nothing surfaced. It is local and
+        free — content is re-read from `chunks`, nothing is re-embedded.
 
-        Never call this on a store you need to inspect unmodified — opening it
-        performs the migration, rewriting the file (measured: 626MB -> 679MB
-        on a ~70k-chunk store) with no separate confirmation step. Open with
-        `read_only=True` instead, which skips this method entirely. When a
-        migration DOES run against a store that already has chunks, it is
-        logged at WARNING (not INFO) with the path, before and after —
-        opening a file should never silently rewrite the user's data.
+        A LARGE store does not. Above `AUTO_FTS_MIGRATION_MAX_CHUNKS` the
+        method logs loudly and returns, leaving the index stale until someone
+        runs `corpus-migrate-fts` deliberately. Three reasons, all of which
+        only bite at scale:
+
+          - The whole rebuild is ONE transaction, so it holds SQLite's single
+            writer lock from first delete to final commit. On a large
+            store that is many minutes during which any other writer — an
+            ingest, a contextualization run — fails on its busy timeout.
+          - A library constructor is not a maintenance command. Any script,
+            test, admin tool, or MCP server that happens to open the store
+            read-write would trigger it.
+          - It rewrites the database file, and in WAL mode the writes
+            accumulate before checkpoint, so required free space is not
+            bounded by the file's current size.
+
+        Being one transaction is what makes an interruption safe: a killed
+        process rolls back to the old index and the old version stamp, and the
+        next attempt starts clean. There is no durable half-migrated state.
+
+        Skipped entirely on a read-only connection, which is how a store
+        should be opened for inspection.
         """
         conn = conn or self._conn
         row = conn.execute(
@@ -488,6 +549,24 @@ class ChunkStore:
         if row is not None and row["value"] == FTS_VERSION:
             return
         from_version = row["value"] if row is not None else None
+        pending = conn.execute("SELECT COUNT(*) AS c FROM chunks").fetchone()["c"]
+        if pending > AUTO_FTS_MIGRATION_MAX_CHUNKS and not self._allow_expensive_migration:
+            logger.warning(
+                "%s: full-text index is STALE (fts_version %r, expected %r) and "
+                "has %d chunks — too many to rebuild automatically while opening "
+                "the store. Search still works, but text this normalization "
+                "handles (notably CJK, which is indexed as overlapping bigrams) "
+                "will not match. Run `corpus-migrate-fts` when no other process "
+                "is writing to this database. Deploy the current code EVERYWHERE "
+                "first: an older writer appending to a freshly migrated index "
+                "writes unnormalized rows into a store stamped as current, which "
+                "reintroduces the problem silently for new content.",
+                self._db_path,
+                from_version,
+                FTS_VERSION,
+                pending,
+            )
+            return
         # A brand-new, still-empty store also has no fts_version stamp yet —
         # that is ordinary first-time schema setup, not a migration of
         # existing data, so it does not warrant a WARNING. Only chunks that

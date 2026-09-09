@@ -72,6 +72,7 @@ music = [
 corpus-init = "corpus.cli.init:main"
 corpus-ingest = "corpus.cli.ingest:main"
 corpus-contextualize = "corpus.cli.contextualize:main"
+corpus-migrate-fts = "corpus.cli.migrate_fts:main"
 corpus-query = "corpus.cli.query:main"
 corpus-eval = "corpus.cli.eval:main"
 corpus-judge = "corpus.cli.judge:main"

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import logging
 import math
+import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import corpus.db.sqlite
 from corpus.db.sqlite import (
     DEFAULT_CACHE_SIZE_MB,
     DEFAULT_MMAP_SIZE_MB,
+    FTS_VERSION,
     ChunkStore,
     EmbeddingDimMismatch,
     OrphanPruneRefused,
@@ -776,3 +780,111 @@ def test_performance_pragmas_apply_on_read_only_connections_too(tmp_path: Path) 
         assert len(ro.fts_search("x", top_k=5)) == 1
     finally:
         ro.close()
+
+
+# --- expensive FTS migrations are opt-in ------------------------------------
+#
+# A small store rebuilds on open; that is cheap and a migration you must
+# remember is one that gets skipped. A large store does not, because the
+# rebuild is ONE transaction holding SQLite's only writer lock from first
+# delete to final commit — minutes on a million-chunk store, during which any
+# concurrent writer fails on its busy timeout. A library constructor is not a
+# maintenance command.
+
+
+def _stale(path: Path) -> None:
+    """Stamp a store's FTS index as written by an older normalization."""
+    con = sqlite3.connect(path)
+    con.execute("UPDATE schema_meta SET value = '1' WHERE key = 'fts_version'")
+    con.commit()
+    con.close()
+
+
+def test_a_small_store_still_migrates_on_open(tmp_path: Path) -> None:
+    db = tmp_path / "small.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.upsert_batch([(make_chunk("jp", 0, ChunkKind.BODY, "東京で会議をしました"), fake_embedding(1))])
+    store.close()
+    _stale(db)
+
+    reopened = ChunkStore(db, embedding_dim=DIM)
+
+    assert reopened.fts_version() == FTS_VERSION
+    assert len(reopened.fts_search("東京", top_k=5)) == 1
+    reopened.close()
+
+
+def test_a_large_store_is_left_alone_and_reported(tmp_path: Path, caplog) -> None:
+    db = tmp_path / "big.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.upsert_batch([(make_chunk("jp", 0, ChunkKind.BODY, "東京で会議"), fake_embedding(1))])
+    store.close()
+    _stale(db)
+
+    with patch("corpus.db.sqlite.AUTO_FTS_MIGRATION_MAX_CHUNKS", 0), caplog.at_level("WARNING"):
+        reopened = ChunkStore(db, embedding_dim=DIM)
+
+    # Left stale rather than silently rebuilt, and said so loudly.
+    assert reopened.fts_version() == "1"
+    assert "STALE" in caplog.text
+    assert "corpus-migrate-fts" in caplog.text
+    # The mixed-version writer hazard is the one SQLite cannot catch, so the
+    # warning has to name it.
+    assert "older writer" in caplog.text
+    reopened.close()
+
+
+def test_the_explicit_flag_performs_the_large_migration(tmp_path: Path) -> None:
+    db = tmp_path / "big2.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.upsert_batch([(make_chunk("jp", 0, ChunkKind.BODY, "東京で会議"), fake_embedding(1))])
+    store.close()
+    _stale(db)
+
+    with patch("corpus.db.sqlite.AUTO_FTS_MIGRATION_MAX_CHUNKS", 0):
+        migrated = ChunkStore(db, embedding_dim=DIM, allow_expensive_migration=True)
+
+    assert migrated.fts_version() == FTS_VERSION
+    assert len(migrated.fts_search("東京", top_k=5)) == 1
+    migrated.close()
+
+
+def test_an_interrupted_migration_rolls_back_cleanly(tmp_path: Path) -> None:
+    """The rebuild is one transaction, so a crash mid-way leaves the OLD index
+    and the OLD stamp — never a durable half-migrated state — and the next
+    attempt starts clean. Simulated by raising partway through the rebuild."""
+    db = tmp_path / "crash.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.upsert_batch(
+        [
+            (make_chunk("jp", i, ChunkKind.BODY, f"東京で会議{i}"), fake_embedding(i))
+            for i in range(6)
+        ]
+    )
+    store.close()
+    _stale(db)
+
+    calls = {"n": 0}
+    real = corpus.db.sqlite.normalize_for_fts
+
+    def explode(text: str) -> str:
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise RuntimeError("simulated crash mid-rebuild")
+        return real(text)
+
+    with patch("corpus.db.sqlite.normalize_for_fts", explode), pytest.raises(RuntimeError):
+        ChunkStore(db, embedding_dim=DIM)
+
+    # Old stamp intact, index intact, integrity intact, and a clean retry works.
+    con = sqlite3.connect(db)
+    assert con.execute(
+        "SELECT value FROM schema_meta WHERE key='fts_version'"
+    ).fetchone()[0] == "1"
+    assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    con.close()
+
+    retried = ChunkStore(db, embedding_dim=DIM)
+    assert retried.fts_version() == FTS_VERSION
+    assert len(retried.fts_search("東京", top_k=10)) == 6
+    retried.close()
