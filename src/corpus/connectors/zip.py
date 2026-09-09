@@ -83,6 +83,31 @@ Safety properties (each a known archive-extraction failure mode):
     letting it silently truncate-and-overwrite the first — an overwrite here
     would delete content with no error and no count.
 
+Mojibake member names (measured live in a real index: 77.3% of one archive
+source's chunks, a few percent of another — roughly a few thousand chunks total). Many
+real-world zip tools write non-ASCII filenames as raw UTF-8 (or, for older
+Japanese-locale tools, Shift-JIS/CP932) bytes WITHOUT setting the standard
+"filename is UTF-8" flag bit (0x800) in the member header. Per the ZIP spec,
+`zipfile` decodes a member's filename as UTF-8 when that flag is set and as
+CP437 otherwise — so for one of these archives, `info.filename` as `zipfile`
+hands it to us is the CP437 misdecoding of what were really UTF-8/Shift-JIS
+bytes (e.g. `'Finances/18∩╜₧20µ£ƒPL...'` instead of the correct Japanese
+filename it was actually storing).
+Because the member name becomes both the extraction path and (via
+`_load_extracted`) the chunk `source_key` and document title, an unrepaired
+mojibake name means the document is unfindable by its real name AND
+re-ingests under a different key if the misdecoding ever changed. Every
+member's name is repaired (if needed) once, up front in `_load_one_archive`
+via `_repair_member_names`, before anything else touches `info.filename` —
+zip-slip containment, noise/dependency filtering, extraction, and
+`source_key` construction all then see the corrected name automatically,
+with no further plumbing. The repair is never a guess: it re-encodes the
+CP437 misdecoding back to its original bytes (CP437 round-trips any byte
+0-255 losslessly) and only accepts a UTF-8 or CP932 (Shift-JIS) strict
+decode of those bytes that both succeeds AND differs from the original — an
+archive whose non-flagged name genuinely IS CP437/ASCII (the common case)
+round-trips to itself and is left untouched. See `_repair_filename_encoding`.
+
 Archive/OS packaging artifacts (macOS's `__MACOSX/` AppleDouble tree and
 `.DS_Store`, Windows' `Thumbs.db`) are filtered out before any of the above —
 before type matching, before extraction, before either counter. See
@@ -152,7 +177,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from corpus.config import SourceConfig
-from corpus.connectors.discovery import discover_files
+from corpus.connectors.discovery import default_excludes_suppressed, discover_files
 from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
 from corpus.types import SourceDocument
 
@@ -263,6 +288,55 @@ def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
 # add another entry only for another artifact this specific, not "anything
 # that looks unimportant."
 _ARCHIVE_NOISE_BASENAMES = frozenset({".ds_store", "thumbs.db"})
+
+
+# Tried in order, strict decode only — see `_repair_filename_encoding` and
+# the module docstring's "Mojibake member names" section. Not `chardet`/
+# `charset-normalizer`: this fixes the two encodings actually measured in a
+# real archive (UTF-8, CP932/Shift-JIS), not every encoding that has ever
+# existed. `corpus.util.encoding` runs the same UTF-8 -> CP932 -> latin-1
+# tiering for member *content*; there's no shared helper between the two
+# because this one has a different final step (give up and keep the
+# CP437-decoded original, since a raw ZIP filename field has no
+# "impossible to fail" encoding the way bytes-to-text does) and a different
+# acceptance rule (must differ from the input, not just decode).
+_FILENAME_REPAIR_ENCODINGS: tuple[str, ...] = ("utf-8", "cp932")
+
+
+def _repair_filename_encoding(info: zipfile.ZipInfo) -> str:
+    """Return `info.filename`, repaired if it looks like UTF-8 (or
+    Shift-JIS) misdecoded as CP437 — see the module docstring's "Mojibake
+    member names" section for the full mechanism and the real numbers that
+    motivated it.
+
+    Never guesses: only returns a repaired name when re-encoding the
+    CP437-decoded name back to bytes and strict-decoding those bytes as
+    UTF-8 or CP932 both SUCCEEDS and DIFFERS from the original. A name that
+    already had the UTF-8 flag set is returned unchanged (nothing to
+    repair); a non-flagged name that genuinely is CP437/ASCII — the common
+    case, most filenames are ASCII — round-trips to itself and is returned
+    unchanged too, rather than accepted as its own "repair".
+    """
+    if info.flag_bits & 0x800:
+        return info.filename  # UTF-8 flag was set; zipfile already decoded it correctly
+
+    try:
+        raw = info.filename.encode("cp437")
+    except UnicodeEncodeError:
+        # zipfile decoded this filename as cp437 in the first place, so
+        # re-encoding it as cp437 cannot fail in practice — this guard is
+        # defense in depth against a future zipfile behavior change, not a
+        # path this module's own tests can trigger honestly.
+        return info.filename
+
+    for encoding in _FILENAME_REPAIR_ENCODINGS:
+        try:
+            repaired = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if repaired != info.filename:
+            return repaired
+    return info.filename
 
 
 def _path_components(member_name: str) -> list[str]:
@@ -535,6 +609,25 @@ class ZipConnector:
             # the module docstring's "Cleanup guarantee".
             yield from self._load_one_archive(archive_path, archive_key)
 
+    def _repair_member_names(self, infos: list[zipfile.ZipInfo], archive_key: str) -> None:
+        """Repair mojibake member names IN PLACE, once, before anything else
+        in `_load_one_archive`/`_extract_members`/`_load_extracted` reads
+        `info.filename` — every downstream use (zip-slip target, noise and
+        dependency-marker matching, disambiguation, nested-archive suffix
+        check, extracted `source_key`) then sees the corrected name for
+        free. See `_repair_filename_encoding` and the module docstring."""
+        for info in infos:
+            repaired = _repair_filename_encoding(info)
+            if repaired != info.filename:
+                logger.info(
+                    "%s: repaired mojibake member name in '%s': %r -> %r",
+                    self.source_type,
+                    archive_key,
+                    info.filename,
+                    repaired,
+                )
+                info.filename = repaired
+
     def _load_one_archive(self, archive_path: Path, archive_key: str) -> list[SourceDocument]:
         try:
             zf = zipfile.ZipFile(archive_path)
@@ -550,6 +643,7 @@ class ZipConnector:
 
         with zf:
             infos = zf.infolist()
+            self._repair_member_names(infos, archive_key)
 
             if len(infos) > self._max_members:
                 logger.warning(
@@ -780,59 +874,75 @@ class ZipConnector:
         files are renamed to their type's canonical extension inside the
         (disposable) extraction directory so each connector's existing
         discovery then finds them unmodified.
+
+        Both this method's own `discover_files` call AND each sub-connector's
+        internal one (inside `connector.load()`) run with
+        `corpus.connectors.discovery`'s default directory exclusion
+        suppressed — `extract_dir` has already been filtered by this
+        connector's OWN noise/dependency logic during extraction (governed
+        by `exclude_dependencies`), which is more nuanced than that generic
+        default and has already made the complete decision about what
+        belongs here. Without suppressing it, `exclude_dependencies=False`
+        (an explicit request to index a vendored tree) would be silently
+        defeated the moment a sub-connector re-globbed a `node_modules`-named
+        path inside `extract_dir`. See `default_excludes_suppressed`'s
+        docstring.
         """
-        extension_type = _extension_type_map(DEFAULT_GLOBS)
-        all_files = list(discover_files(extract_dir, "**/*"))
+        with default_excludes_suppressed():
+            extension_type = _extension_type_map(DEFAULT_GLOBS)
+            all_files = list(discover_files(extract_dir, "**/*"))
 
-        by_type: dict[str, list[Path]] = {}
-        for path in all_files:
-            type_name = extension_type.get(path.suffix.lower())
-            if type_name is not None:
-                by_type.setdefault(type_name, []).append(path)
+            by_type: dict[str, list[Path]] = {}
+            for path in all_files:
+                type_name = extension_type.get(path.suffix.lower())
+                if type_name is not None:
+                    by_type.setdefault(type_name, []).append(path)
 
-        docs: list[SourceDocument] = []
-        for type_name in _MEMBER_CONNECTOR_TYPES:
-            matches = by_type.get(type_name)
-            if not matches:
-                continue
-            _normalize_to_canonical_extension(matches, Path(DEFAULT_GLOBS[type_name]).suffix)
+            docs: list[SourceDocument] = []
+            for type_name in _MEMBER_CONNECTOR_TYPES:
+                matches = by_type.get(type_name)
+                if not matches:
+                    continue
+                _normalize_to_canonical_extension(matches, Path(DEFAULT_GLOBS[type_name]).suffix)
 
-            sub_cfg = SourceConfig(name=self.source_type, type=type_name, path=str(extract_dir))
-            try:
-                connector, _chunker = CONNECTOR_REGISTRY[type_name](sub_cfg)
-            except ImportError as e:
-                # The type IS supported by corpus, but this environment
-                # doesn't have the optional extra installed. Every run will
-                # skip these same files until the extra is installed, so
-                # this is a permanent-for-now skip, not a transient failure.
-                logger.warning(
-                    "%s: %d '%s' file(s) inside '%s' skipped — %s",
+                sub_cfg = SourceConfig(
+                    name=self.source_type, type=type_name, path=str(extract_dir)
+                )
+                try:
+                    connector, _chunker = CONNECTOR_REGISTRY[type_name](sub_cfg)
+                except ImportError as e:
+                    # The type IS supported by corpus, but this environment
+                    # doesn't have the optional extra installed. Every run will
+                    # skip these same files until the extra is installed, so
+                    # this is a permanent-for-now skip, not a transient failure.
+                    logger.warning(
+                        "%s: %d '%s' file(s) inside '%s' skipped — %s",
+                        self.source_type,
+                        len(matches),
+                        type_name,
+                        archive_key,
+                        e,
+                    )
+                    self.skipped_files += len(matches)
+                    continue
+
+                for doc in connector.load():
+                    docs.append(
+                        doc.model_copy(update={"source_key": f"{archive_key}::{doc.source_key}"})
+                    )
+                self.failed_files += _int_attr(connector, "failed_files")
+                self.skipped_files += _int_attr(connector, "skipped_files")
+
+            matched = {p for paths in by_type.values() for p in paths}
+            unclaimed = [p for p in all_files if p not in matched]
+            if unclaimed:
+                logger.info(
+                    "%s: %d file(s) inside '%s' have no matching connector (unsupported "
+                    "extension) — not indexed",
                     self.source_type,
-                    len(matches),
-                    type_name,
+                    len(unclaimed),
                     archive_key,
-                    e,
                 )
-                self.skipped_files += len(matches)
-                continue
+                self.skipped_files += len(unclaimed)
 
-            for doc in connector.load():
-                docs.append(
-                    doc.model_copy(update={"source_key": f"{archive_key}::{doc.source_key}"})
-                )
-            self.failed_files += _int_attr(connector, "failed_files")
-            self.skipped_files += _int_attr(connector, "skipped_files")
-
-        matched = {p for paths in by_type.values() for p in paths}
-        unclaimed = [p for p in all_files if p not in matched]
-        if unclaimed:
-            logger.info(
-                "%s: %d file(s) inside '%s' have no matching connector (unsupported "
-                "extension) — not indexed",
-                self.source_type,
-                len(unclaimed),
-                archive_key,
-            )
-            self.skipped_files += len(unclaimed)
-
-        return docs
+            return docs

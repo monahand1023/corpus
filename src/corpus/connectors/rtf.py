@@ -16,6 +16,7 @@ from pathlib import Path
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
+from corpus.util.encoding import read_text_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class RtfConnector:
         seen: dict[str, str] = {}
         for path in discover_files(self._root, self._glob):
             try:
-                raw = path.read_text(encoding="utf-8", errors="replace")
+                raw = read_text_with_fallback(path)
                 body = rtf_to_text(raw, errors="ignore").strip()  # type: ignore[no-untyped-call]
             except Exception as e:
                 logger.warning("Rtf source '%s': cannot read %s: %s", self.source_type, path, e)

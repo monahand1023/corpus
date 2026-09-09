@@ -12,8 +12,10 @@ real archives are read, per the project's public-repo constraints.
 
 from __future__ import annotations
 
+import struct
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -530,6 +532,165 @@ def test_alias_normalization_collision_does_not_clobber(tmp_path: Path) -> None:
     bodies = {d.raw["body"] for d in docs}
     assert len(docs) == 2, "both members must survive the rename, not just one"
     assert bodies == {"canonical content", "aliased-extension content"}
+
+
+# ---------------------------------------------------------------------------
+# Mojibake member names — UTF-8/Shift-JIS filename bytes stored without the
+# UTF-8 flag bit set, which zipfile then misdecodes as CP437. Fixtures are
+# hand-assembled at the byte level (bypassing zipfile's own writer, which
+# always sets the UTF-8 flag itself for a non-ASCII name and so can never
+# produce this pattern) to reproduce exactly what real-world non-Python zip
+# tools write. See `_repair_filename_encoding` in `corpus/connectors/zip.py`.
+# ---------------------------------------------------------------------------
+
+
+def _pack_local_header(name: bytes, content: bytes, flag_bits: int) -> bytes:
+    crc = zlib.crc32(content) & 0xFFFFFFFF
+    size = len(content)
+    header = struct.pack(
+        "<4sHHHHHIIIHH",
+        b"PK\x03\x04",
+        20,
+        flag_bits,
+        0,  # compression method: stored
+        0,
+        0,  # mod time, mod date
+        crc,
+        size,
+        size,
+        len(name),
+        0,  # extra field length
+    )
+    return header + name + content
+
+
+def _pack_central_header(name: bytes, content: bytes, flag_bits: int, offset: int) -> bytes:
+    crc = zlib.crc32(content) & 0xFFFFFFFF
+    size = len(content)
+    header = struct.pack(
+        "<4sHHHHHHIIIHHHHHII",
+        b"PK\x01\x02",
+        20,
+        20,  # version made by, version needed
+        flag_bits,
+        0,  # compression method: stored
+        0,
+        0,  # mod time, mod date
+        crc,
+        size,
+        size,
+        len(name),
+        0,
+        0,  # extra field length, comment length
+        0,  # disk number start
+        0,  # internal file attributes
+        0,  # external file attributes
+        offset,
+    )
+    return header + name
+
+
+def _build_raw_zip(path: Path, members: list[tuple[bytes, bytes, int]]) -> Path:
+    """Hand-assemble a minimal, valid STORED-method zip from raw
+    `(name_bytes, content_bytes, flag_bits)` tuples — bypassing
+    `zipfile.ZipFile`'s writer entirely so the general-purpose flag bit and
+    the raw filename bytes can be controlled independently. Verified
+    against `zipfile.ZipFile` reads correctly (round-tripped in Python's own
+    reader before use here)."""
+    body = bytearray()
+    central = bytearray()
+    for name, content, flag_bits in members:
+        offset = len(body)
+        body += _pack_local_header(name, content, flag_bits)
+        central += _pack_central_header(name, content, flag_bits, offset)
+    cd_offset = len(body)
+    eocd = struct.pack(
+        "<4sHHHHIIH",
+        b"PK\x05\x06",
+        0,
+        0,  # this disk, disk with central directory
+        len(members),
+        len(members),  # entries on this disk, total entries
+        len(central),
+        cd_offset,
+        0,  # comment length
+    )
+    path.write_bytes(bytes(body) + bytes(central) + eocd)
+    return path
+
+
+def test_utf8_filename_without_flag_bit_is_repaired(tmp_path: Path) -> None:
+    """The measured real-world case: a zip tool wrote UTF-8 filename bytes
+    but never set the 0x800 flag, so zipfile misdecoded it as CP437."""
+    real_name = "Finances/18-20期PLフォーマット.txt"
+    _build_raw_zip(
+        tmp_path / "archive.zip",
+        [(real_name.encode("utf-8"), b"quarterly figures", 0)],
+    )
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert len(docs) == 1
+    assert docs[0].source_key == f"archive.zip::{real_name}"
+    assert docs[0].raw["body"] == "quarterly figures"
+
+
+def test_shift_jis_filename_without_flag_bit_is_repaired(tmp_path: Path) -> None:
+    """Older Japanese-locale tools wrote Shift-JIS (CP932) filename bytes,
+    not UTF-8 — the second repair tier."""
+    real_name = "legacy/予算_FY13.txt"
+    _build_raw_zip(
+        tmp_path / "archive.zip",
+        [(real_name.encode("cp932"), b"budget figures", 0)],
+    )
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert len(docs) == 1
+    assert docs[0].source_key == f"archive.zip::{real_name}"
+
+
+def test_ascii_filename_without_flag_bit_is_left_alone(tmp_path: Path) -> None:
+    """The overwhelmingly common case — an ASCII name with the flag unset
+    (nothing to repair) — must round-trip to itself, not be treated as its
+    own 'repair'."""
+    _build_raw_zip(
+        tmp_path / "archive.zip",
+        [(b"reports/summary.txt", b"plain ascii content", 0)],
+    )
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert len(docs) == 1
+    assert docs[0].source_key == "archive.zip::reports/summary.txt"
+
+
+def test_utf8_flagged_filename_is_never_touched(tmp_path: Path) -> None:
+    """A correctly-flagged UTF-8 name (what zipfile's own writer always
+    produces) must not be run through repair at all — it's already right."""
+    name = "notes/日本語.txt"
+    _make_zip(tmp_path / "archive.zip", {name: "already correct"})
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert docs[0].source_key == f"archive.zip::{name}"
+
+
+def test_repair_filename_encoding_unit() -> None:
+    """Direct unit coverage of the pure function, independent of the
+    connector plumbing above."""
+    import zipfile as zf_module
+
+    from corpus.connectors.zip import _repair_filename_encoding
+
+    def _info(name: str, flag_bits: int) -> zipfile.ZipInfo:
+        info = zf_module.ZipInfo(filename=name)
+        info.flag_bits = flag_bits
+        return info
+
+    real_name = "Finances/18-20期PLフォーマット.txt"
+    mojibake = real_name.encode("utf-8").decode("cp437")
+    assert _repair_filename_encoding(_info(mojibake, 0)) == real_name
+
+    # Already UTF-8-flagged: never touched, even if it happens to look like
+    # something re-encodable (it shouldn't be — this asserts the flag check
+    # short-circuits before any repair attempt).
+    assert _repair_filename_encoding(_info(real_name, 0x800)) == real_name
+
+    # ASCII, unflagged: round-trips to itself, not treated as a "repair".
+    assert _repair_filename_encoding(_info("plain.txt", 0)) == "plain.txt"
 
 
 # ---------------------------------------------------------------------------

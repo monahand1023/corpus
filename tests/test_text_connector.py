@@ -55,3 +55,16 @@ def test_custom_glob(tmp_path: Path) -> None:
     )
     titles = {d.title for d in docs}
     assert titles == {"in"}
+
+
+def test_cp932_encoded_file_is_decoded_correctly_not_replaced(tmp_path: Path) -> None:
+    """Regression test: this connector used to open every file as
+    `encoding="utf-8", errors="replace"`, silently turning non-UTF-8 content
+    into U+FFFD replacement characters (measured live: ~970 chunks in a real
+    index). See `corpus.util.encoding`."""
+    text = "会議メモ: 予算は前年比で増加した。"
+    (tmp_path / "memo.txt").write_bytes(text.encode("cp932"))
+    docs = list(TextConnector(source_type="notes", path=tmp_path).load())
+    assert len(docs) == 1
+    assert docs[0].raw["body"] == text
+    assert "�" not in docs[0].raw["body"]

@@ -21,6 +21,7 @@ from corpus.chunkers.markdown import chunk_markdown_body, parse_markdown
 from corpus.connectors.discovery import discover_files
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.dedup import fingerprint
+from corpus.util.encoding import read_text_with_fallback
 from corpus.util.hash import chunk_id, sha256
 from corpus.util.scrub import scrub
 from corpus.util.tokens import estimate_tokens
@@ -59,7 +60,7 @@ class MarkdownConnector:
         seen: dict[str, str] = {}
         for md_path in discover_files(self._root, self._glob):
             try:
-                text = md_path.read_text(encoding="utf-8", errors="replace")
+                text = read_text_with_fallback(md_path)
             except OSError as e:
                 logger.debug("cannot read %s: %s", md_path, e)
                 self.failed_files += 1

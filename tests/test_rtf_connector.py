@@ -32,3 +32,20 @@ def test_dedupes_identical_rtf(tmp_path: Path) -> None:
     (tmp_path / "a.rtf").write_text(RTF_HELLO, encoding="utf-8")
     (tmp_path / "b.rtf").write_text(RTF_HELLO, encoding="utf-8")
     assert len(list(RtfConnector(source_type="rtfs", path=tmp_path).load())) == 1
+
+
+def test_cp932_encoded_rtf_is_decoded_correctly_not_replaced(tmp_path: Path) -> None:
+    """Some older Japanese-locale RTF exports embed raw CP932 bytes directly
+    (via `\\ansicpg932`) rather than escaping every non-ASCII character as
+    `\\'hh`. See the identical regression test in test_text_connector.py —
+    this connector shares the same `errors="replace"` -> fallback fix (see
+    `corpus.util.encoding`)."""
+    rtf = (
+        r"{\rtf1\ansi\ansicpg932\deff0 {\fonttbl {\f0 MS Mincho;}}"
+        r"\f0\fs24 会議メモ\par}"
+    )
+    (tmp_path / "memo.rtf").write_bytes(rtf.encode("cp932"))
+    docs = list(RtfConnector(source_type="rtfs", path=tmp_path).load())
+    assert len(docs) == 1
+    assert "会議メモ" in docs[0].raw["body"]
+    assert "�" not in docs[0].raw["body"]

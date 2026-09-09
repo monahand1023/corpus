@@ -119,3 +119,15 @@ def test_connector_respects_glob(tmp_path: Path) -> None:
     # Top-level only — sub/deep should NOT appear
     assert "include" in titles
     assert "deep" not in titles
+
+
+def test_cp932_encoded_file_is_decoded_correctly_not_replaced(tmp_path: Path) -> None:
+    """See the identical regression test in test_text_connector.py — this
+    connector shares the same `errors="replace"` -> fallback fix (see
+    `corpus.util.encoding`)."""
+    text = "# 議事録\n\n会議メモ: 予算は前年比で増加した。"
+    (tmp_path / "memo.md").write_bytes(text.encode("cp932"))
+    docs = list(MarkdownConnector(source_type="notes", path=tmp_path).load())
+    assert len(docs) == 1
+    assert "会議メモ" in docs[0].raw["body"]
+    assert "�" not in docs[0].raw["body"]

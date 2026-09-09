@@ -64,3 +64,32 @@ def test_dedupes_identical_html(tmp_path: Path) -> None:
     (tmp_path / "v2.html").write_text(_SAMPLE_HTML)
     docs = list(HtmlConnector(source_type="articles", path=tmp_path).load())
     assert len(docs) == 1
+
+
+_SAMPLE_HTML_JA = """
+<!DOCTYPE html>
+<html>
+<head><title>予算報告書</title></head>
+<body>
+    <nav>ナビゲーションメニュー</nav>
+    <article>
+        <h1>予算報告書</h1>
+        <p>今年度の予算は前年比で大幅に増加した。主な要因は新規プロジェクトへの
+        投資拡大である。各部門の詳細な内訳は次のセクションで説明する。</p>
+        <p>来年度に向けては、コスト削減と効率化を同時に進める計画である。関係者
+        との調整を継続しながら、四半期ごとの見直しを行う予定だ。</p>
+    </article>
+</body>
+</html>
+"""
+
+
+def test_cp932_encoded_file_is_decoded_correctly_not_replaced(tmp_path: Path) -> None:
+    """See the identical regression test in test_text_connector.py — this
+    connector shares the same `errors="replace"` -> fallback fix (see
+    `corpus.util.encoding`)."""
+    (tmp_path / "budget.html").write_bytes(_SAMPLE_HTML_JA.encode("cp932"))
+    docs = list(HtmlConnector(source_type="articles", path=tmp_path).load())
+    assert len(docs) == 1
+    assert "予算" in docs[0].raw["body"]
+    assert "�" not in docs[0].raw["body"]

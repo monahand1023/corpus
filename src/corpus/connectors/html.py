@@ -21,6 +21,7 @@ from pathlib import Path
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 from corpus.util.dedup import fingerprint
+from corpus.util.encoding import read_text_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class HtmlConnector:
         seen: dict[str, str] = {}
         for path in discover_files(self._root, self._glob):
             try:
-                raw_html = path.read_text(encoding="utf-8", errors="replace")
+                raw_html = read_text_with_fallback(path)
             except OSError as e:
                 logger.debug("cannot read %s: %s", path, e)
                 self.failed_files += 1

@@ -276,6 +276,43 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a future connector addition can't drift out of sync with this the same
   way. See `tests/test_zip_connector.py::test_member_connector_types_derives_from_registry_minus_denylist`
   and `::test_pptx_and_csv_and_tsv_members_become_documents`.
+- **Non-ASCII filenames inside `.zip` archives were being corrupted into
+  mojibake, live in a real index.** Measured: 77.3% of one archive source's
+  chunks (2,544 of 3,292) and a few percent of another (1,492 of 21,550) — roughly
+  a few thousand chunks total. Root cause: many real-world zip tools write non-ASCII
+  filenames as raw UTF-8 (or, for older Japanese-locale tools, Shift-JIS/
+  CP932) bytes WITHOUT setting the standard "filename is UTF-8" flag bit
+  (0x800) in the member header — `zipfile` then decodes the name as CP437
+  per the ZIP spec, producing garbage. Since the member name becomes both
+  the extraction path and (via `_load_extracted`) the chunk `source_key` and
+  document title, this meant the affected documents were unfindable by their
+  real names and would re-ingest under a different key if the misdecoding
+  ever changed. Fixed by `_repair_filename_encoding`: every member name is
+  checked once, up front — if the UTF-8 flag isn't set, the CP437-decoded
+  name is re-encoded back to its original bytes (CP437 round-trips any byte
+  0-255 losslessly) and a UTF-8 or CP932 (Shift-JIS) strict decode of those
+  bytes is accepted ONLY if it both succeeds AND differs from the original,
+  so an archive whose non-flagged name genuinely is CP437/ASCII (the common
+  case) is never touched. Every downstream use of the name (zip-slip
+  containment, noise/dependency filtering, extraction, `source_key`) sees
+  the repaired name automatically, since the repair runs once against the
+  archive's own `ZipInfo` objects before anything else reads them.
+- **The same real index had ~970 chunks of U+FFFD replacement-character
+  soup from non-UTF-8 file content** — found while chasing the mojibake bug
+  above; the same Japanese-locale archives had Shift-JIS-encoded member
+  *content*, not just corrupted names. `markdown`/`text`/`html`/`rtf` all
+  read every file as `path.read_text(encoding="utf-8", errors="replace")`,
+  silently substituting U+FFFD for any byte sequence that wasn't valid
+  UTF-8 — not a zip-specific bug, since the zip connector reuses these same
+  connectors on extracted content (any real `.txt`/`.md`/`.html`/`.rtf` file
+  with non-UTF-8 encoding on disk was affected too). New shared
+  `corpus.util.encoding.read_text_with_fallback` tries UTF-8, then CP932
+  (the same second tier as the filename repair above), then latin-1 as a
+  final backstop that cannot itself fail to decode — deliberately not
+  `chardet`/`charset-normalizer`, since this fixes the two encodings
+  actually measured in a real archive rather than adding a dependency for
+  every encoding that has ever existed. All four connectors now call it
+  instead of duplicating the old `errors="replace"` pattern.
 - **One unreadable PDF no longer aborts an entire source.** `pypdf` and
   `python-docx` parse lazily: the constructor succeeds on a file that cannot
   actually be read, and the failure surfaces later on first access to `.pages`
