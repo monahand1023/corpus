@@ -27,6 +27,17 @@ logger = logging.getLogger(__name__)
 INGEST_BATCH = 256
 
 
+def _reported_int_attr(obj: object, name: str) -> int:
+    """Shared coercion for the optional `failed_files` / `skipped_files`
+    connector counters: only a non-negative int counts as a genuine report.
+    Test doubles and mocks expose arbitrary attributes, so a bare truthiness
+    or comparison check would raise or silently mis-gate."""
+    raw = getattr(obj, name, 0)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return 0
+    return raw
+
+
 def _reported_failures(connector: object) -> int:
     """Read a connector's optional per-file failure count.
 
@@ -37,14 +48,34 @@ def _reported_failures(connector: object) -> int:
     failures" rather than "had zero failures" — such a connector is not
     protected by the pruning gate, which is the price of not breaking it.
 
-    Only a non-negative int counts as a report. Test doubles and mocks expose
-    arbitrary attributes, so a bare truthiness or comparison check would raise
-    or silently mis-gate.
+    `failed_files` means MIGHT SUCCEED NEXT TIME: a file that was momentarily
+    locked, a transient read error. It suppresses pruning for the whole source
+    (see the PER-FILE COMPLETENESS comment in `ingest()`). Contrast with the
+    separate `skipped_files` counter (`_reported_skips` below), which means a
+    file the connector has decided it will NEVER be able to read — that does
+    NOT suppress pruning, because the file's absence from the index is not a
+    surprise to investigate; it's the connector's own settled judgment.
     """
-    raw = getattr(connector, "failed_files", 0)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return 0
-    return raw
+    return _reported_int_attr(connector, "failed_files")
+
+
+def _reported_skips(connector: object) -> int:
+    """Read a connector's optional `skipped_files` counter: files the
+    connector has permanently given up on, as opposed to `failed_files`'
+    "might work next time" (see `_reported_failures`).
+
+    Concrete case this exists for: a source directory containing thousands of
+    files in a format the connector deliberately does not support (e.g. a raw
+    image format alongside the JPEGs it does handle). Every one of those files
+    is unreadable on every run, forever — counting them as `failed_files`
+    would suppress pruning for that source permanently, since the gate never
+    sees the zero it's waiting for. `skipped_files` is exactly as optional and
+    defensively read as `failed_files`: an absent attribute means "does not
+    report skips," not "skipped nothing," and it never suppresses pruning by
+    itself. It IS reported on `IngestResult` and logged, so a large skip count
+    stays visible instead of disappearing silently.
+    """
+    return _reported_int_attr(connector, "skipped_files")
 
 
 def _pruning_settings(config: object) -> tuple[float, int]:
@@ -77,6 +108,7 @@ class IngestResult:
     elapsed_seconds: float
     files_failed: int = 0
     pruning_performed: bool = True
+    files_skipped: int = 0
     # True when delete_orphans refused to prune because the orphan count
     # exceeded the blast-radius guard (OrphanPruneRefused) -- distinct from
     # pruning_performed=False due to failed_files, which is a DIFFERENT
@@ -174,8 +206,21 @@ class Ingester:
         # exactly what `delete_orphans`'s blast-radius guard below exists to
         # catch: it refuses when the fraction of a source's existing chunks
         # about to be pruned is implausibly large for a routine re-ingest,
-        # independent of what the connector reported.
+        # independent of what the connector reported. `skipped_files` (read
+        # separately, see `_reported_skips`) is a THIRD, distinct signal: files
+        # the connector has permanently given up on. It does not suppress
+        # pruning at all -- their absence from the index is expected, not
+        # evidence of a bug -- but it IS reported and logged so a large skip
+        # count stays visible.
         failed_files = _reported_failures(connector)
+        skipped_files = _reported_skips(connector)
+        if skipped_files:
+            logger.info(
+                "  %s: %d file(s) permanently unreadable by design (unsupported "
+                "format, etc.) -- not counted toward the pruning gate",
+                source_name,
+                skipped_files,
+            )
         prune = failed_files == 0 or prune_anyway
 
         orphans = 0
@@ -214,6 +259,7 @@ class Ingester:
             elapsed_seconds=time.monotonic() - start,
             files_failed=failed_files,
             pruning_performed=prune,
+            files_skipped=skipped_files,
             prune_refused=prune_refused,
             prune_refused_detail=prune_refused_detail,
         )

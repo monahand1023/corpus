@@ -27,6 +27,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reviewer does not reliably do. `corpus-ingest --source NAME --prune-anyway`
   overrides the guard (as it already did for `failed_files`) for a genuine
   bulk deletion. See [`configuration.md`](docs/configuration.md#pruning--orphan-deletion-blast-radius-guard).
+- **`skipped_files` connector counter**, alongside the existing `failed_files`.
+  Both are optional, defensively-read attributes with full backwards
+  compatibility for connectors exposing neither. `failed_files` means "might
+  succeed on a later run" and suppresses pruning for the source, as before.
+  `skipped_files` means "this connector has permanently decided it can never
+  read this input" (e.g. a directory containing thousands of files in a format
+  the connector doesn't support) — it does NOT suppress pruning, since the
+  absence isn't evidence of a bug, but it IS reported on `IngestResult` and
+  logged so a large permanent-skip count stays visible instead of disappearing.
 - **`ChunkStore(path, read_only=True)`.** Opens the store through a `mode=ro`
   SQLite URI and never runs the FTS schema migration; any mutating method call
   raises a clear `ReadOnlyStoreError` naming the cause. `corpus-mcp` and

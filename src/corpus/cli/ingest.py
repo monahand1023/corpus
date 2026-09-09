@@ -132,6 +132,8 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
+            if r.files_skipped:
+                print(f"  files skipped:    {r.files_skipped:,}  (unsupported/unreadable by design)")
             if r.prune_refused:
                 # A refusal is a failure the operator must see and act on, not
                 # just a note in the log — same reasoning as the exit_code=1

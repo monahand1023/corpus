@@ -690,3 +690,109 @@ def test_orphan_guard_uses_configured_pruning_thresholds(tmp_path: Path) -> None
             store.close()
     finally:
         CONNECTOR_REGISTRY.pop("configured", None)
+
+
+# ---------------------------------------------------------------------------
+# skipped_files: a connector's optional "permanently unreadable, don't
+# suppress pruning for it" counter, distinct from failed_files' "might
+# succeed next time, suppress pruning".
+# ---------------------------------------------------------------------------
+
+class _SkippingConnector:
+    """Connector that yields some docs and reports N permanently-unreadable
+    files via `skipped_files` (not `failed_files`)."""
+
+    def __init__(self, source_type: str, docs: list[str], skips: int = 0) -> None:
+        self.source_type = source_type
+        self._docs = docs
+        self._skips = skips
+        self.failed_files = 0
+        self.skipped_files = 0
+
+    def load(self):
+        self.failed_files = 0
+        self.skipped_files = self._skips
+        for key in self._docs:
+            yield SourceDocument(
+                source_type=self.source_type,
+                source_key=key,
+                title=key,
+                raw={"body": f"body of {key}", "path": key},
+            )
+
+
+def test_skipped_files_does_not_suppress_pruning(tmp_path: Path) -> None:
+    """Unlike failed_files, a nonzero skipped_files must NOT block pruning --
+    those files are permanently unreadable by the connector's own design, so
+    their absence from the index is not evidence of anything."""
+    try:
+        conn = _SkippingConnector("raw_photos", ["a.jpg", "b.jpg"])
+        _register("raw_photos", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "raw_photos", "type": "raw_photos", "path": str(tmp_path)}]
+        )
+        ing.ingest("raw_photos")
+        before = _chunk_count(store, "raw_photos")
+
+        # b.jpg is now reported as permanently unsupported (e.g. an
+        # unsupported raw image format) -- not a transient failure.
+        conn._docs = ["a.jpg"]
+        conn._skips = 1
+        result = ing.ingest("raw_photos")
+
+        assert result.files_failed == 0
+        assert result.files_skipped == 1
+        assert result.pruning_performed is True  # NOT suppressed, unlike failed_files
+        assert result.orphans_deleted > 0
+        assert _chunk_count(store, "raw_photos") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("raw_photos", None)
+
+
+def test_skipped_files_is_reported_even_when_zero(tmp_path: Path) -> None:
+    try:
+        conn = _SkippingConnector("plain", ["a.txt"])
+        _register("plain", conn)
+        ing, _store = make_ingester_with_config(
+            tmp_path, [{"name": "plain", "type": "plain", "path": str(tmp_path)}]
+        )
+        result = ing.ingest("plain")
+        assert result.files_skipped == 0
+    finally:
+        CONNECTOR_REGISTRY.pop("plain", None)
+
+
+def test_connector_without_skipped_files_attribute_behaves_exactly_as_before(
+    tmp_path: Path,
+) -> None:
+    """Full backwards compatibility: a connector exposing neither
+    failed_files nor skipped_files must keep today's behavior untouched."""
+
+    class _LegacyConnector:
+        source_type = "legacy2"
+
+        def __init__(self) -> None:
+            self.docs = ["a.txt", "b.txt"]
+
+        def load(self):
+            for key in self.docs:
+                yield SourceDocument(
+                    source_type="legacy2", source_key=key, title=key,
+                    raw={"body": f"body of {key}", "path": key},
+                )
+
+    try:
+        conn = _LegacyConnector()
+        _register("legacy2", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "legacy2", "type": "legacy2", "path": str(tmp_path)}]
+        )
+        ing.ingest("legacy2")
+        before = _chunk_count(store, "legacy2")
+        conn.docs = ["a.txt"]
+        result = ing.ingest("legacy2")
+        assert result.files_skipped == 0
+        assert result.pruning_performed is True
+        assert _chunk_count(store, "legacy2") < before
+    finally:
+        CONNECTOR_REGISTRY.pop("legacy2", None)
