@@ -29,50 +29,43 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-# Directory basenames that are near-universally build/cache/VCS output, never
-# personal content, and that otherwise dominate a census/traversal to the
-# point of hiding the signal (a `node_modules` tree alone can be 100k+ files).
-# Matched on the exact basename, case-insensitively — mirrors the same
-# judgment call `corpus.connectors.zip._UNAMBIGUOUS_DEPENDENCY_DIRS` makes for
-# archive members, just applied to a live filesystem tree instead of a zip's
-# member list. Kept independent of that set (rather than imported) because
-# the two lists have different false-positive tolerances: zip.py's list only
-# ever matters for content already inside an archive someone chose to keep,
-# where "vendor" almost always means the dependency-tree convention; a raw
-# filesystem walk sees far more of a user's actual folder-naming choices, so
-# this list stays deliberately narrower and skips zip.py's more aggressive
-# entries (bare "vendor", "dist"/"build"/"target") that need corroboration
-# zip.py can check (a manifest file elsewhere in the same archive) but a
-# directory-name-only prune here cannot.
-DEFAULT_EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
-    {
-        ".git",
-        ".svn",
-        ".hg",
-        "node_modules",
-        "bower_components",
-        "site-packages",
-        "__pycache__",
-        ".tox",
-        ".venv",
-        "venv",
-        ".next",
-        ".nuxt",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".cache",
-        "$recycle.bin",
-        ".trash",
-    }
+from corpus.util.exclude import (
+    CORROBORATED_BUILD_DIRS,
+    DEFAULT_EXCLUDED_DIR_NAMES,
+    DEFAULT_EXCLUDED_DIR_SUFFIXES,
+    has_corroborating_manifest,
+    is_unconditionally_excluded_dir_name,
 )
 
-# Directory basename SUFFIXES excluded regardless of exact name — a macOS
-# Photos/iPhoto library is a directory bundle, not a plain folder, and its
-# contents are Apple's internal SQLite/plist/derivative-image storage, not
-# documents; walking into one is exactly the "hundreds of thousands of files
-# hide the signal" failure mode named in this tool's design brief.
-DEFAULT_EXCLUDED_DIR_SUFFIXES: tuple[str, ...] = (".photoslibrary", ".photoslibrary/")
+__all__ = [
+    "CORROBORATED_BUILD_DIRS",
+    "DEFAULT_EXCLUDED_DIR_NAMES",
+    "DEFAULT_EXCLUDED_DIR_SUFFIXES",
+    "WalkStats",
+    "WalkedFile",
+    "walk_files",
+]
+
+# `DEFAULT_EXCLUDED_DIR_NAMES` / `DEFAULT_EXCLUDED_DIR_SUFFIXES` / the
+# dist/build/target corroboration rules below now live in
+# `corpus.util.exclude`, shared with `corpus.connectors.discovery` (the
+# actual ingest-time file discovery every connector uses) — the two used to
+# be defined independently, which was exactly how a survey could report a
+# directory as excluded while a real ingest walked straight into it anyway.
+# Re-exported here (not just imported) because `tests/test_survey_walk.py`
+# and external callers already do `from corpus.survey.walk import
+# DEFAULT_EXCLUDED_DIR_NAMES`.
+#
+# `dist`, `build`, and `target` are also ordinary English words that could
+# name a real folder of documents — previously left out of the unconditional
+# set entirely, with this module's docstring explaining that "a
+# directory-name-only prune here cannot" corroborate them the way
+# `corpus.connectors.zip` does for archive members. That reasoning doesn't
+# actually hold for a *live* filesystem walk (unlike a zip's member list, a
+# real directory can just be asked "does `pyproject.toml` exist here?"), so
+# `has_corroborating_manifest` below now does the same corroboration check
+# zip.py does, and this walk is no longer stuck with a narrower default than
+# discover_files needs to stay in sync with it.
 
 
 @dataclass
@@ -140,8 +133,8 @@ def walk_files(
                 continue
             lower = d.lower()
             if use_default_excludes and (
-                lower in DEFAULT_EXCLUDED_DIR_NAMES
-                or any(lower.endswith(suf) for suf in DEFAULT_EXCLUDED_DIR_SUFFIXES)
+                is_unconditionally_excluded_dir_name(lower)
+                or has_corroborating_manifest(lower, dirpath_p, root)
             ):
                 stats.dirs_pruned += 1
                 continue

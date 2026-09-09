@@ -28,9 +28,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an existing database first, to catch "this is mostly already indexed"
   before paying to re-embed it. Reuses `corpus.ingester.Ingester` for the
   actual ingest — no parallel ingestion path. See the "corpus-index: point
-  it at a folder" section of the README for the full worked example and its
-  one documented limitation (connectors don't yet enforce directory
-  excludes at ingest time, only the plan's counts do).
+  it at a folder" section of the README for the full worked example.
 - **`corpus-survey` CLI.** Read-only reconnaissance for deciding what to
   index, replacing the ad-hoc shell pipelines that work was previously done
   with. Four subcommands: `census` (file-extension counts/sizes split into
@@ -258,6 +256,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **`corpus-index` claimed noise directories were "not ingested" — they
+  were.** The plan (`corpus.survey.census`, via `corpus.survey.walk`)
+  already excluded `node_modules`, `.git`, build caches, `.photoslibrary`
+  bundles, etc. from its counts, but `corpus.connectors.discovery.discover_files`
+  — which every file connector uses to find its files — had no directory-exclude
+  mechanism at all, so the actual ingest walked straight into those same
+  directories anyway. On real trees this wasn't cosmetic: measured noise
+  ratios as high as ~80% dependency/build output, and one archive's entire
+  document yield was third-party library READMEs. `discover_files` now
+  applies the identical default exclusion (shared with `corpus.survey.walk`
+  via the new `corpus.util.exclude` module, so the two can't drift back out
+  of sync), including the same `dist`/`build`/`target`
+  corroborated-by-manifest judgment call `corpus.connectors.zip` already
+  made for archive members — `dist`/`build`/`target` are ordinary English
+  words too, so they're excluded only when a `package.json`/`pyproject.toml`/
+  `setup.py`/`Cargo.toml`/`pom.xml` confirms it's really build output, not a
+  personal folder that happens to share the name. On by default for every
+  connector, overridable per call via `discover_files(..., use_default_excludes=False)`
+  (not yet exposed per-source in `corpus.toml` — see `corpus/cli/index.py`'s
+  module docstring). **Upgrade note:** if an existing source previously
+  picked up files inside what's now an excluded directory, the next
+  `corpus-index`/`corpus-ingest` run against it will prune those chunks as
+  orphans — expected, and caught by the existing orphan-pruning
+  blast-radius guard (refuses a drop over `[pruning].max_orphan_ratio`,
+  default 20%, rather than deleting it silently) if it's a large fraction
+  of the source.
 - **The `zip` connector was silently missing `pptx`/`csv`/`tsv` members.**
   `_MEMBER_CONNECTOR_TYPES` (which file types get extracted from inside an
   archive) was a hand-maintained tuple that hadn't been updated since the

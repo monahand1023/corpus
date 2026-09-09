@@ -692,6 +692,60 @@ def test_orphan_guard_uses_configured_pruning_thresholds(tmp_path: Path) -> None
         CONNECTOR_REGISTRY.pop("configured", None)
 
 
+def test_default_directory_exclusion_triggers_the_orphan_guard(tmp_path: Path) -> None:
+    """`discover_files`'s default noise-directory exclusion (see
+    `corpus.util.exclude`) can legitimately make previously-indexed
+    dependency-tree content vanish from `seen_ids` on the next real ingest —
+    the "may prune previously-indexed dependency content" case called out in
+    the CHANGELOG. It must go through the same blast-radius guard as any
+    other large drop, not delete silently.
+
+    Uses the REAL markdown connector (not `_CountingConnector`), so this
+    exercises `discover_files`'s actual exclusion end to end, not just the
+    guard in isolation. The "before" state is seeded directly rather than
+    produced by an actual pre-fix ingest, since the fix under test is always
+    active in this codebase -- there's no way to ingest node_modules content
+    through the real connector to set the scene.
+    """
+    root = tmp_path / "project"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "real.md").write_text("# Real\n\nActual content.")
+
+    config = CorpusConfig.model_validate(
+        {
+            "db_path": tmp_path / "config_test.db",
+            "sources": [{"name": "mixed", "type": "markdown", "path": str(root)}],
+            "pruning": {"max_orphan_ratio": 0.2, "min_chunks_for_guard": 5},
+        }
+    )
+    store = ChunkStore(tmp_path / "test.db", embedding_dim=DIM)
+    try:
+        # Seed only the node_modules chunks as "pre-existing" -- docs/real.md
+        # is left for the real ingest below to discover and chunk itself
+        # (so its chunk id/kind come from the real MarkdownChunker, not a
+        # hand-guessed match for it).
+        seeded = [
+            make_chunk("mixed", f"node_modules/pkg{i}/readme.md", 0, f"vendored readme {i}")
+            for i in range(20)
+        ]
+        store.upsert_batch([(c, [0.0] * DIM) for c in seeded])
+        assert _chunk_count(store, "mixed") == 20
+
+        ing = Ingester(config=config, store=store, embedder=fake_embedder())
+        result = ing.ingest("mixed")
+
+        # The real connector only finds docs/real.md now -- node_modules is
+        # excluded by discover_files's default. Its chunk gets upserted
+        # normally (21 chunks now exist), but 20 of those 21 (95%) would be
+        # pruned as orphans, well over the 20% guard.
+        assert result.prune_refused is True
+        assert result.pruning_performed is False
+        assert result.orphans_deleted == 0
+        assert _chunk_count(store, "mixed") == 21, "guard must not have deleted the 20 orphans"
+    finally:
+        store.close()
+
+
 # ---------------------------------------------------------------------------
 # skipped_files: a connector's optional "permanently unreadable, don't
 # suppress pruning for it" counter, distinct from failed_files' "might

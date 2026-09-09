@@ -142,3 +142,50 @@ def test_missing_root_yields_nothing_without_raising(tmp_path: Path) -> None:
     stats = WalkStats()
     found = list(walk_files(tmp_path / "nope", stats=stats))
     assert found == []
+
+
+# ---------------------------------------------------------------------------
+# dist/build/target corroboration — shared with `corpus.connectors.discovery`
+# via `corpus.util.exclude`, so the plan (this module) and the real ingest
+# can't drift apart on this judgment call. See `tests/test_discovery.py` for
+# the identical scenarios exercised against `discover_files` directly.
+# ---------------------------------------------------------------------------
+
+
+def test_dist_without_manifest_is_not_pruned(tmp_path: Path) -> None:
+    _touch(tmp_path, "dist/mailing-list-notes.txt")
+
+    found = {wf.rel_path for wf in walk_files(tmp_path)}
+
+    assert found == {"dist/mailing-list-notes.txt"}
+
+
+def test_dist_with_corroborating_manifest_is_pruned(tmp_path: Path) -> None:
+    _touch(tmp_path, "package.json", "{}")
+    _touch(tmp_path, "dist/bundle.txt")
+    _touch(tmp_path, "src/real.txt")
+
+    found = {wf.rel_path for wf in walk_files(tmp_path)}
+
+    assert found == {"src/real.txt", "package.json"}
+
+
+def test_dist_with_ancestor_manifest_is_pruned(tmp_path: Path) -> None:
+    _touch(tmp_path, "package.json", "{}")
+    _touch(tmp_path, "packages/app/dist/bundle.txt")
+
+    found = {wf.rel_path for wf in walk_files(tmp_path)}
+
+    assert found == {"package.json"}
+
+
+def test_bare_vendor_and_dist_dirlike_names_are_not_false_positives(tmp_path: Path) -> None:
+    # A directory that merely CONTAINS a noise basename is not the same
+    # directory — "distribution" isn't "dist", "my-node_modules-notes" isn't
+    # "node_modules".
+    _touch(tmp_path, "distribution/notes.txt")
+    _touch(tmp_path, "my-node_modules-notes/plan.txt")
+
+    found = {wf.rel_path for wf in walk_files(tmp_path)}
+
+    assert found == {"distribution/notes.txt", "my-node_modules-notes/plan.txt"}

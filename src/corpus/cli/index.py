@@ -27,24 +27,38 @@ files later is to re-run the same command, and that only works if it's
 reproducible from config. Nothing is written on `--dry-run`, and nothing is
 written before the user confirms (or passes `--yes`).
 
-**Known limitation**, worth reading before pointing this at a large real
-tree: `corpus-index` (via `corpus.survey.census`) excludes well-known noise
+**Noise directories are excluded from BOTH the plan and the real ingest.**
+`corpus-index` (via `corpus.survey.census`) excludes well-known noise
 directories — `node_modules`, `.git`, build caches, `.photoslibrary`
-bundles, etc. — from the PLAN's counts, the same way `corpus-survey`
-already does. But the underlying file connectors (`corpus.connectors.*`,
-via `corpus.connectors.discovery.discover_files`) glob a source's whole
-`path` with no directory-exclude mechanism of their own — that gap predates
-this command and isn't fixed here (fixing it means threading an excludes
-concept through every connector + `SourceConfig`, a separate piece of work).
-Concretely: if a connector type has files BOTH outside and inside a noise
-directory under the same root, the plan's counts reflect only the files
-outside it, but the real `corpus-ingest` run afterward will still walk into
-the noise directory and pick up what's there too. `build_plan` mitigates the
-worst case — a type that exists ONLY inside noise directories is left out of
-the plan entirely, so at least a pure-noise connector type is never proposed
-as a source — but a type with a genuine mix is not currently filtered file by
-file. If a census run shows a lot of pruned noise directories, point `path`
-at a narrower subdirectory rather than trusting the exclusion silently.
+bundles, `dist`/`build`/`target` when a corroborating ecosystem manifest
+confirms it, etc. — from the PLAN's counts, the same way `corpus-survey`
+already does. The underlying file connectors (`corpus.connectors.*`, via
+`corpus.connectors.discovery.discover_files`) apply the identical exclusion
+by default when they actually read a source's files, so "excluded from the
+plan, not ingested" is a real guarantee, not just a claim about the preview.
+(It used to not be: every connector globbed a source's whole `path` with no
+directory-exclude mechanism of its own, so the plan's counts and the real
+ingest disagreed. Fixed at `discover_files` itself — see its module
+docstring — rather than by threading an excludes concept through every
+connector + `SourceConfig`, since every connector already funnels through
+that one function.)
+
+**Remaining gap**: `--no-default-excludes` / `--exclude PATTERN` change only
+what THIS PLAN shows you. There is currently no per-source way to turn off
+default exclusion at ingest time from `corpus.toml` — the connectors always
+apply it. If you genuinely need a vendored/build tree indexed, point a
+source's `path` directly at that subdirectory (exclusion only ever prunes a
+directory encountered *during* a walk, never the configured root itself).
+
+**Upgrading an existing index**: if a source previously picked up files
+inside what's now an excluded directory, re-running `corpus-index` (or
+`corpus-ingest`) against it will prune those chunks as orphans on this
+first post-upgrade run — expected, since that content was never supposed to
+be searchable. A large drop is caught by the orphan-pruning blast-radius
+guard (`[pruning]` in corpus.toml, default: refuse above 20% of a source's
+existing chunks) rather than silently deleted; rerun with `--prune-anyway`
+once you've confirmed the drop is exactly this dependency-tree content and
+not a connector regression.
 """
 
 from __future__ import annotations
@@ -93,9 +107,10 @@ def _print_noise(plan: IndexPlan) -> None:
     if ws.dirs_pruned:
         print(
             f"  {human_count(ws.dirs_pruned)} director{'y' if ws.dirs_pruned == 1 else 'ies'} "
-            "excluded by default (node_modules, .git, caches, .photoslibrary, ...) "
-            "— pass --no-default-excludes to include them, or --exclude PATTERN to "
-            "add your own."
+            "excluded by default (node_modules, .git, caches, .photoslibrary, "
+            "dist/build/target when a manifest confirms it, ...) — the connectors "
+            "that actually ingest each source apply this same default exclusion, "
+            "so this reflects what will really happen."
         )
     if plan.noise:
         print(f"  {'pattern':<24} {'count':>10} {'size':>12}  reason")
@@ -106,6 +121,20 @@ def _print_noise(plan: IndexPlan) -> None:
             )
     if not ws.dirs_pruned and not plan.noise:
         print("  (none found)")
+    if not plan.use_default_excludes:
+        print(
+            "  NOTE: --no-default-excludes changes only the preview above — the "
+            "connectors that actually ingest each source always apply their own "
+            "default directory exclusion regardless, and there is currently no "
+            "per-source override in corpus.toml. Point a source's `path` directly "
+            "at a subdirectory to index it despite the default (e.g. a vendored "
+            "tree)."
+        )
+    elif plan.excludes:
+        print(
+            "  NOTE: --exclude patterns affect only the preview above — they are "
+            "not applied at ingest time."
+        )
 
 
 def _print_overlap(plan: IndexPlan) -> None:
@@ -218,13 +247,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         dest="excludes",
         metavar="PATTERN",
-        help="fnmatch pattern to exclude from the plan (repeatable), e.g. --exclude '*.log'",
+        help="fnmatch pattern to exclude from the plan's preview (repeatable), e.g. "
+        "--exclude '*.log' — does not affect what actually gets ingested",
     )
     parser.add_argument(
         "--no-default-excludes",
         action="store_true",
         help="Don't prune common noise dirs (node_modules, .git, __pycache__, "
-        "*.photoslibrary, ...) from the plan — see corpus.survey.walk.DEFAULT_EXCLUDED_DIR_NAMES",
+        "*.photoslibrary, ...) from the plan's preview — see "
+        "corpus.util.exclude.DEFAULT_EXCLUDED_DIR_NAMES. The connectors that "
+        "actually ingest each source apply this same exclusion regardless; there "
+        "is currently no per-source override",
     )
     parser.add_argument(
         "--name-prefix",

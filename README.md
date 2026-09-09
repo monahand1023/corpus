@@ -336,13 +336,22 @@ folder should win — deleting the wrong folder's chunks via `source_type`-scope
 orphan pruning is a real data-loss footgun — and tells you to pass
 `--name-prefix` or edit corpus.toml by hand.
 
-**Known limitation:** the noise directories excluded from the plan's counts
-above are excluded only from what's *reported* — corpus's file connectors
-don't yet have a directory-exclude mechanism of their own, so if a connector
-type has real files both inside and outside a noise directory under the
-same root, the actual ingest can still pick up what's inside it. Point
-`--path`/`corpus-index`'s target at a narrower directory if a census shows
-heavy noise-directory pruning.
+The noise directories excluded from the plan's counts above are excluded
+from the real ingest too — every file connector applies the identical
+default exclusion when it actually reads a source's files, so "excluded
+from the plan, not ingested" is a real guarantee. **Known limitation:**
+`--no-default-excludes`/`--exclude PATTERN` change only this preview — there
+is currently no per-source way to turn off default exclusion at ingest time
+from `corpus.toml`. If you genuinely need a vendored/build tree indexed,
+point a source's `path` directly at that subdirectory (exclusion only ever
+prunes a directory encountered *during* a walk, never the configured root
+itself). If you're upgrading from a version where this wasn't yet enforced
+and a source previously picked up files inside what's now an excluded
+directory, expect those chunks to be pruned as orphans on the next
+`corpus-index`/`corpus-ingest` run — the existing blast-radius guard
+(`[pruning]` in corpus.toml) refuses a drop over 20% of a source rather than
+silently deleting it, so a large prune will ask you to confirm with
+`--prune-anyway` instead of happening invisibly.
 
 ## Ingesting a folder
 
