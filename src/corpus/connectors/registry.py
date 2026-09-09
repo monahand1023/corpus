@@ -27,6 +27,7 @@ DEFAULT_GLOBS: dict[str, str] = {
     "docx": "**/*.docx",
     "xlsx": "**/*.xlsx",
     "rtf": "**/*.rtf",
+    "zip": "**/*.zip",
 }
 
 
@@ -145,6 +146,23 @@ def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # No import guard here, unlike the factories above: zip.py depends only on
+    # the stdlib `zipfile`. It composes the OTHER factories in this dict at
+    # `load()` time (per file type actually found inside an archive), so a
+    # missing optional extra for e.g. pdf surfaces there instead — the same
+    # actionable ImportError, just discovered lazily since which extras are
+    # needed depends on archive contents, not on configuring this source.
+    from corpus.connectors.zip import ZipConnector
+
+    connector = ZipConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["zip"],
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "markdown": _build_markdown,
     "text": _build_text,
@@ -153,6 +171,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "docx": _build_docx,
     "xlsx": _build_xlsx,
     "rtf": _build_rtf,
+    "zip": _build_zip,
 }
 
 

@@ -117,6 +117,11 @@ temp_store_memory = true
 #   docx     — Word documents via python-docx; install: `pip install corpus-rag[docx]`
 #   xlsx     — Excel workbooks via openpyxl; install: `pip install corpus-rag[xlsx]`
 #   rtf      — Rich Text Format via striprtf; install: `pip install corpus-rag[rtf]`
+#   zip      — `.zip` archives (default glob: **/*.zip); extracts to a temp dir,
+#              re-runs the connectors above by file type found inside, then
+#              deletes the extracted copies. The archive itself is never
+#              modified. No extra needed (stdlib zipfile) unless the archive
+#              contents need one (e.g. a zip full of PDFs still needs [pdf]).
 #
 # Adding a new source type? See docs/adding_a_source.md.
 
@@ -156,6 +161,11 @@ path = "~/Documents/notes"
 # name = "rtf_notes"
 # type = "rtf"
 # path = "~/Documents"
+
+# [[sources]]
+# name = "archives"
+# type = "zip"
+# path = "~/Documents/zipped-reports"
 
 # Reference patterns that `expand_context` will look for inside a chunk's
 # content, plus that auto-tune BM25 weight when the user's query contains them.

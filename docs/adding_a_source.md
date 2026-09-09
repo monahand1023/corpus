@@ -1,6 +1,6 @@
 # Adding a new source type
 
-`corpus` ships seven built-in connectors — `markdown`, `text`, `pdf`, `html`, `docx`, `xlsx`, and `rtf`. For anything else — Slack exports, Jira API dumps, EPUB books, your custom JSON format — you write the connector. `markdown` is the reference implementation to copy from.
+`corpus` ships eight built-in connectors — `markdown`, `text`, `pdf`, `html`, `docx`, `xlsx`, `rtf`, and `zip` (which composes the other seven rather than parsing anything itself — see `src/corpus/connectors/zip.py`). For anything else — Slack exports, Jira API dumps, EPUB books, your custom JSON format — you write the connector. `markdown` is the reference implementation to copy from.
 
 This doc walks through it with a worked example: **a JSON-files connector** that reads a directory of `.json` files, each one containing one document.
 

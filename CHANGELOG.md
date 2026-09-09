@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`zip` connector.** Makes documents inside `.zip` archives searchable by
+  extracting each archive to a temp directory, re-running the existing
+  per-file-type connectors (`pdf`, `docx`, `xlsx`, `html`, `markdown`, `text`,
+  `rtf`) against the extracted tree, and deleting the extracted copies —
+  composition, not reimplemented parsing. The archive on disk is only ever
+  opened for reading. Chunk `source_key`s encode both the archive and the
+  inner path (`reports.zip::q3/summary.pdf`) so two archives containing a
+  same-named file can't collide and a search hit stays traceable to its
+  archive. Guards against the standard archive-extraction failure modes:
+  zip-slip (path containment checked via `Path.resolve()` +
+  `is_relative_to`, not string prefixes), zip bombs (declared AND actual
+  uncompressed bytes capped, plus a member-count cap), encrypted archives
+  (detected via the standard flag bit and skipped — never prompts for a
+  password), and nested archives (refused at depth 1, not recursed into).
+  Extraction happens synchronously per archive inside a `try/finally`, so a
+  crash mid-extraction or mid-read cannot leave extracted content on disk.
 - **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
   built-in connectors apply and ingests each matching file type as its own
   source, with no `[[sources]]` block to write. `corpus.toml` still supplies the
