@@ -108,3 +108,44 @@ def test_archives_nonexistent_path_errors_cleanly(
 
     assert rc == 1
     assert "not a directory" in capsys.readouterr().err
+
+
+def test_media_json_output_without_ffprobe(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import corpus.survey.media as media_mod
+
+    monkeypatch.setattr(media_mod.shutil, "which", lambda _: None)
+    _touch(tmp_path, "call.mp3")
+
+    rc = main_argv(["media", str(tmp_path), "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ffprobe_available"] is False
+    assert payload["total_files"] == 1
+    assert payload["estimated_total_hours"] is None
+
+
+def test_media_human_output_notes_ffprobe_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import corpus.survey.media as media_mod
+
+    monkeypatch.setattr(media_mod.shutil, "which", lambda _: None)
+    _touch(tmp_path, "call.mp3")
+
+    rc = main_argv(["media", str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ffprobe not found" in out
+
+
+def test_media_nonexistent_path_errors_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = main_argv(["media", str(tmp_path / "nope")])
+
+    assert rc == 1
+    assert "not a directory" in capsys.readouterr().err

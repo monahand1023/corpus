@@ -21,6 +21,12 @@ from typing import Any
 from corpus.survey.archives import ArchiveInfo, ArchiveSurveyResult, run_archive_survey
 from corpus.survey.census import BucketStat, CensusResult, run_census
 from corpus.survey.format import human_count, human_size
+from corpus.survey.media import (
+    DEFAULT_SAMPLE_SIZE_PER_TYPE,
+    MediaSurveyResult,
+    TypeSurvey,
+    run_media_survey,
+)
 
 _DESCRIPTION_BY_CATEGORY = {
     "indexable": "Indexable (corpus has a connector)",
@@ -220,6 +226,100 @@ def _run_archives(args: argparse.Namespace) -> int:
     return 0
 
 
+def _type_survey_to_dict(t: TypeSurvey) -> dict[str, Any]:
+    return {
+        "extension": t.extension,
+        "count": t.count,
+        "total_bytes": t.total_bytes,
+        "sample_size": t.sample_size,
+        "probed_ok": t.probed_ok,
+        "probe_failed": t.probe_failed,
+        "mean_duration_seconds": t.mean_duration_seconds,
+        "stdev_duration_seconds": t.stdev_duration_seconds,
+        "estimated_total_seconds": t.estimated_total_seconds,
+    }
+
+
+def _media_result_to_dict(result: MediaSurveyResult) -> dict[str, Any]:
+    return {
+        "root": result.root,
+        "excludes": list(result.excludes),
+        "default_excludes_applied": result.use_default_excludes,
+        "follows_symlinks": False,
+        "ffprobe_available": result.ffprobe_available,
+        "rate": result.rate,
+        "total_files": result.total_files,
+        "total_bytes": result.total_bytes,
+        "total_sampled": result.total_sampled,
+        "total_probed_ok": result.total_probed_ok,
+        "estimated_total_hours": result.estimated_total_hours,
+        "estimated_processing_hours": result.estimated_processing_hours,
+        "types": [_type_survey_to_dict(t) for t in result.types],
+        "method": (
+            "Reservoir-sampled up to N files per extension (stratified, not pooled "
+            "across types — durations vary too much by type to pool honestly), probed "
+            "each sampled file with ffprobe, and extrapolated that type's mean "
+            "duration across its full file count. This is a linear extrapolation, "
+            "not a census: true duration may differ, especially if a type's file "
+            "lengths are skewed (many short clips plus a few long recordings). "
+            "Increase --sample-size for a tighter estimate."
+        ),
+    }
+
+
+def _run_media(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 1
+
+    result = run_media_survey(
+        root,
+        excludes=tuple(args.excludes),
+        use_default_excludes=not args.no_default_excludes,
+        sample_size_per_type=args.sample_size,
+        rate=args.rate,
+    )
+
+    if args.as_json:
+        print(json.dumps(_media_result_to_dict(result), indent=2))
+        return 0
+
+    print(f"corpus-survey media: {result.root}")
+    print(f"{human_count(result.total_files)} audio/video file(s), {human_size(result.total_bytes)}.")
+    if not result.ffprobe_available:
+        print(
+            "  ffprobe not found on PATH — duration unavailable. Install ffmpeg "
+            "(e.g. `brew install ffmpeg`) to enable duration sampling."
+        )
+    else:
+        print(
+            f"  sampled {human_count(result.total_sampled)} file(s) "
+            f"({human_count(result.total_probed_ok)} probed successfully) — "
+            "this is an extrapolation, not a census."
+        )
+
+    print(f"\n  {'ext':<10} {'files':>8} {'size':>10} {'sampled':>8} {'mean dur':>12} {'est. hours':>11}")
+    for t in result.types:
+        mean = f"{t.mean_duration_seconds:.0f}s" if t.mean_duration_seconds is not None else "—"
+        est_hours = f"{t.estimated_total_seconds / 3600.0:.1f}" if t.estimated_total_seconds else "—"
+        print(
+            f"  {t.extension:<10} {human_count(t.count):>8} {human_size(t.total_bytes):>10} "
+            f"{human_count(t.sample_size):>8} {mean:>12} {est_hours:>11}"
+        )
+
+    if result.estimated_total_hours is not None:
+        print(f"\nEstimated total: {result.estimated_total_hours:.1f} hours (sample-based extrapolation).")
+        if result.estimated_processing_hours is not None:
+            print(
+                f"At {result.rate:g}x realtime: ~{result.estimated_processing_hours:.1f} hours "
+                f"({result.estimated_processing_hours / 24:.1f} days) to process."
+            )
+    elif result.total_files:
+        print("\nNo total estimate: at least one media type has files but zero successfully-probed samples.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="corpus-survey", description="Read-only reconnaissance for deciding what to index"
@@ -237,6 +337,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_tree_args(p_archives)
     p_archives.set_defaults(func=_run_archives)
+
+    p_media = sub.add_parser(
+        "media", help="Audio/video duration survey: hours, not file count"
+    )
+    _add_common_tree_args(p_media)
+    p_media.add_argument(
+        "--sample-size",
+        type=int,
+        default=DEFAULT_SAMPLE_SIZE_PER_TYPE,
+        help=f"Files to probe per extension (default {DEFAULT_SAMPLE_SIZE_PER_TYPE})",
+    )
+    p_media.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        metavar="X",
+        help="Processing rate as a multiple of realtime (e.g. 15 for 15x) — "
+        "projects processing time from the estimated total hours",
+    )
+    p_media.set_defaults(func=_run_media)
 
     return parser
 
