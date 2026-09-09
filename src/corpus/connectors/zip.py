@@ -60,26 +60,49 @@ Safety properties (each a known archive-extraction failure mode):
     extracting anything; actual-size trip refuses mid-stream and the partial
     output is discarded with the rest of the temp directory).
   - **Encrypted archives.** Detected via `ZipInfo.flag_bits & 0x1` (the
-    standard ZIP "file is encrypted" flag) on every member before any
-    extraction is attempted for that archive — never by attempting to read a
-    member and catching the resulting `RuntimeError`, and never by prompting
-    for a password, since this runs unattended. (A member encrypted with a
-    scheme that doesn't set the standard bit would still surface as a
-    `RuntimeError` from `zipfile` when opened; that path is also handled,
-    per-member, the same way — skip, don't prompt.)
+    standard ZIP "file is encrypted" flag), checked PER MEMBER, before any
+    extraction is attempted for that member — never by attempting to read it
+    and catching the resulting `RuntimeError`, and never by prompting for a
+    password, since this runs unattended. An encrypted member is skipped on
+    its own, the same way a zip-slip member is: an archive with 619 plain
+    files and one encrypted one still yields the 619, rather than discarding
+    the whole archive over one file. (A member encrypted with a scheme that
+    doesn't set the standard bit would still surface as a `RuntimeError` from
+    `zipfile` when opened; that path is handled the same way — skip, don't
+    prompt.)
   - **Nested archives.** A member whose name ends in `.zip` is refused, not
     extracted and not recursed into — see `MAX_DEPTH` below for why depth is
     fixed at 1 rather than configurable.
+  - **Same-path collisions during extraction.** Two zip members can land on
+    the identical extraction-directory path without either being a security
+    attack: a case-insensitive host filesystem (the macOS/Windows default)
+    folds `notes.md` and `notes.MD` onto one inode even though the archive's
+    own central directory treats them as distinct entries, and a malformed
+    archive can simply declare a name twice. `_disambiguate` checks before
+    every write and renames the second arrival (`name__1.ext`) rather than
+    letting it silently truncate-and-overwrite the first — an overwrite here
+    would delete content with no error and no count.
+
+Extension matching, once safely extracted: a member is recognized by any
+accepted spelling of its type, matched case-insensitively — `.htm` alongside
+`.html`, `.markdown` alongside `.md`, and `.PDF`/`.DOCX`-style uppercase from
+non-Unix tooling for every type. See `_extension_type_map` and
+`_normalize_to_canonical_extension` — a non-canonical spelling is renamed
+(within the disposable extraction directory only) to its type's canonical
+extension so the existing per-type connector's own single-glob discovery
+finds it unmodified. `.doc`/`.xls` are deliberately NOT treated as spelling
+variants of `.docx`/`.xlsx` — they're different container formats that
+python-docx/openpyxl cannot read.
 
 Failure-counter policy for this connector specifically:
 
-  - `skipped_files` (permanent, does not block orphan pruning): a zip-slip
-    refusal or a nested archive (counted per member); a file with no
-    matching connector, or one whose type IS supported but the optional
-    extra for it isn't installed here (counted per file); and a whole-archive
-    refusal — encrypted, too many members, or over either uncompressed-size
-    cap — counted as **1** (the archive, not its member count, since none of
-    it was processed).
+  - `skipped_files` (permanent, does not block orphan pruning): an encrypted
+    member, a zip-slip refusal, or a nested archive (each counted per
+    member); a file with no matching connector, or one whose type IS
+    supported but the optional extra for it isn't installed here (counted
+    per file); and a whole-archive refusal — too many members, or over
+    either uncompressed-size cap — counted as **1** (the archive, not its
+    member count, since none of it was processed).
   - `failed_files` (possibly transient, suppresses pruning for the source):
     an archive that fails to open (`BadZipFile`/`OSError` — could be mid-write
     or momentarily locked), counted as 1; and a member that raises while
@@ -133,6 +156,91 @@ MAX_DEPTH = 1
 # DEFAULT_GLOBS" so this list can't accidentally pick up a future `zip` (or
 # other non-file-type) entry and recurse.
 _MEMBER_CONNECTOR_TYPES = ("markdown", "text", "pdf", "html", "docx", "xlsx", "rtf")
+
+# Secondary spellings a real archive can contain that its type's connector
+# already documents accepting via an explicit `corpus.toml` `glob` override
+# (markdown.py: ".md / .markdown"; html.py + README: ".html / .htm") but
+# which DEFAULT_GLOBS -- one glob per type -- doesn't reach on its own, and a
+# zip's contents can't be reconfigured per file the way a `[[sources]]` block
+# can. Extension lookup is case-insensitive (see `_extension_type_map`), so
+# this also covers `.HTM`, `.MARKDOWN`, etc. Legacy formats that are NOT
+# spelling variants are deliberately absent -- `.doc` and `.xls` are
+# different container formats entirely (see docx.py's and xlsx.py's own
+# docstrings) that python-docx/openpyxl cannot read, so aliasing them would
+# silently produce "cannot open" failures instead of an honest unsupported-
+# extension skip.
+_EXTENSION_ALIASES: dict[str, str] = {
+    ".htm": "html",
+    ".markdown": "markdown",
+}
+
+
+def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
+    """Extension (lowercase, with leading dot) -> connector type name,
+    covering each type's canonical `DEFAULT_GLOBS` extension plus the
+    aliases above. Derived from `DEFAULT_GLOBS` rather than hand-duplicated
+    so the canonical spellings can't drift out of sync with the registry."""
+    mapping = {
+        Path(default_globs[type_name]).suffix: type_name for type_name in _MEMBER_CONNECTOR_TYPES
+    }
+    mapping.update(_EXTENSION_ALIASES)
+    return mapping
+
+
+def _disambiguate(target: Path, *, moving: Path | None = None) -> Path:
+    """Return `target` unchanged if nothing occupies that path yet, otherwise
+    a numbered variant (`name__1.ext`, `name__2.ext`, ...) that doesn't
+    collide. Used everywhere two distinct sources could otherwise land on
+    the same extraction-directory path and silently overwrite one another:
+    two zip members whose names differ only by case, folded together by a
+    case-insensitive host filesystem; a malformed archive declaring the same
+    name twice; or two accepted spellings of one type (`readme.md` and
+    `readme.markdown`) that only collide once BOTH are normalized to the
+    same canonical extension. A silent overwrite here would mean whichever
+    write happened second wins with no error and no count — the first
+    member's content simply vanishes.
+
+    `moving`, when given, is the file about to be placed at `target` (e.g.
+    via `Path.rename`). If `target` already exists but IS `moving` itself —
+    the same inode, reached when a case-insensitive filesystem folds two
+    differently-cased spellings of one path together, such as renaming
+    `REPORT.TXT` to `REPORT.txt` — that is not a collision at all, just the
+    rename correcting the casing in place; without this check, `.exists()`
+    alone would treat every case-only rename as colliding with itself.
+    """
+    if not target.exists():
+        return target
+    if moving is not None and target.samefile(moving):
+        return target
+    n = 0
+    candidate = target
+    while candidate.exists():
+        n += 1
+        candidate = target.with_name(f"{target.stem}__{n}{target.suffix}")
+    return candidate
+
+
+def _normalize_to_canonical_extension(paths: list[Path], canonical_ext: str) -> None:
+    """Rename any path (in place, within the disposable extraction
+    directory) whose suffix isn't exactly `canonical_ext` -- an alias
+    (`.htm`), a non-canonical casing (`.PDF`, `.Markdown`), or both -- so the
+    type's connector, which only globs its own single `DEFAULT_GLOBS`
+    pattern, finds every accepted spelling. The archive itself is never
+    touched; only the temp copy is renamed. Collisions from normalizing two
+    different original names onto the same canonical spelling are resolved
+    via `_disambiguate` rather than one silently overwriting the other.
+
+    The reported chunk `source_key` reflects the canonical spelling after
+    this, not necessarily the archive member's exact original spelling — an
+    accepted, purely cosmetic tradeoff for reusing each connector's existing
+    discovery unmodified.
+    """
+    for path in paths:
+        if path.suffix == canonical_ext:
+            continue
+        target = _disambiguate(path.with_suffix(canonical_ext), moving=path)
+        path.rename(target)
+
 
 _COPY_CHUNK_BYTES = 1024 * 1024
 
@@ -210,16 +318,6 @@ class ZipConnector:
         with zf:
             infos = zf.infolist()
 
-            if any(info.flag_bits & 0x1 for info in infos):
-                logger.info(
-                    "%s: skipping encrypted archive '%s' — this runs unattended and "
-                    "never prompts for a password",
-                    self.source_type,
-                    archive_key,
-                )
-                self.skipped_files += 1
-                return []
-
             if len(infos) > self._max_members:
                 logger.warning(
                     "%s: refusing '%s' — %d members exceeds the cap of %d",
@@ -277,6 +375,24 @@ class ZipConnector:
                 # name would otherwise fail the containment check.
                 continue
 
+            if info.flag_bits & 0x1:
+                # Standard ZIP "file is encrypted" flag, checked per member
+                # (not per archive): an archive with 619 plain files and one
+                # encrypted one should still yield the 619, the same way a
+                # zip-slip member is refused individually below rather than
+                # discarding the rest of the archive. Never attempted: a
+                # read-then-catch-password-error approach, or a password
+                # prompt — this runs unattended.
+                logger.info(
+                    "%s: skipping encrypted member '%s' in '%s' — this runs "
+                    "unattended and never prompts for a password",
+                    self.source_type,
+                    info.filename,
+                    archive_key,
+                )
+                self.skipped_files += 1
+                continue
+
             target = (extract_dir / info.filename).resolve()
             if not target.is_relative_to(extract_dir):
                 logger.warning(
@@ -299,6 +415,27 @@ class ZipConnector:
                 )
                 self.skipped_files += 1
                 continue
+
+            # Two DIFFERENT member names can still land on the same real
+            # file: a case-insensitive host filesystem (macOS/Windows
+            # defaults) folds "notes.md" and "notes.MD" onto one inode even
+            # though the zip's own central directory treats them as distinct
+            # entries, and a malformed/adversarial archive can simply
+            # declare the same name twice. Without this check, the second
+            # member's `.open("wb")` would silently truncate and overwrite
+            # the first's content -- no error, no count, content just gone.
+            resolved_target = _disambiguate(target)
+            if resolved_target != target:
+                logger.info(
+                    "%s: member '%s' in '%s' collided on-disk with an "
+                    "earlier member (case-insensitive filesystem or a "
+                    "duplicate name in the archive) — extracted as '%s' instead",
+                    self.source_type,
+                    info.filename,
+                    archive_key,
+                    resolved_target.name,
+                )
+            target = resolved_target
 
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -323,8 +460,8 @@ class ZipConnector:
             except RuntimeError as e:
                 # zipfile raises RuntimeError for a per-member password
                 # requirement not caught by the flag_bits check above (e.g. a
-                # non-standard encryption scheme). Same policy as archive-level
-                # encryption: skip, don't prompt.
+                # non-standard encryption scheme). Same policy as that check:
+                # skip this member, don't prompt.
                 logger.info(
                     "%s: skipping encrypted member '%s' in '%s': %s",
                     self.source_type,
@@ -351,16 +488,35 @@ class ZipConnector:
         extracted tree and remap every yielded document's `source_key` to
         `<archive_key>::<inner_key>` — so two archives that each contain,
         say, `report.pdf` can never collide, and a search hit stays traceable
-        back to exactly which archive it came from."""
+        back to exactly which archive it came from.
+
+        Classification is a single walk of `extract_dir`, matching each
+        file's extension case-insensitively against every accepted type
+        (canonical spelling or alias — see `_extension_type_map`), rather
+        than calling each connector's own single-glob discovery directly:
+        a connector only knows its one `DEFAULT_GLOBS` pattern, which can't
+        express "`.htm` or `.html`, any case" as one glob string. Matched
+        files are renamed to their type's canonical extension inside the
+        (disposable) extraction directory so each connector's existing
+        discovery then finds them unmodified.
+        """
         from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
 
-        claimed: set[Path] = set()
+        extension_type = _extension_type_map(DEFAULT_GLOBS)
+        all_files = list(discover_files(extract_dir, "**/*"))
+
+        by_type: dict[str, list[Path]] = {}
+        for path in all_files:
+            type_name = extension_type.get(path.suffix.lower())
+            if type_name is not None:
+                by_type.setdefault(type_name, []).append(path)
+
         docs: list[SourceDocument] = []
         for type_name in _MEMBER_CONNECTOR_TYPES:
-            matches = list(discover_files(extract_dir, DEFAULT_GLOBS[type_name]))
+            matches = by_type.get(type_name)
             if not matches:
                 continue
-            claimed.update(matches)
+            _normalize_to_canonical_extension(matches, Path(DEFAULT_GLOBS[type_name]).suffix)
 
             sub_cfg = SourceConfig(name=self.source_type, type=type_name, path=str(extract_dir))
             try:
@@ -388,7 +544,8 @@ class ZipConnector:
             self.failed_files += _int_attr(connector, "failed_files")
             self.skipped_files += _int_attr(connector, "skipped_files")
 
-        unclaimed = [p for p in extract_dir.rglob("*") if p.is_file() and p not in claimed]
+        matched = {p for paths in by_type.values() for p in paths}
+        unclaimed = [p for p in all_files if p not in matched]
         if unclaimed:
             logger.info(
                 "%s: %d file(s) inside '%s' have no matching connector (unsupported "

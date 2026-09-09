@@ -18,11 +18,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   archive. Guards against the standard archive-extraction failure modes:
   zip-slip (path containment checked via `Path.resolve()` +
   `is_relative_to`, not string prefixes), zip bombs (declared AND actual
-  uncompressed bytes capped, plus a member-count cap), encrypted archives
-  (detected via the standard flag bit and skipped — never prompts for a
-  password), and nested archives (refused at depth 1, not recursed into).
-  Extraction happens synchronously per archive inside a `try/finally`, so a
-  crash mid-extraction or mid-read cannot leave extracted content on disk.
+  uncompressed bytes capped, plus a member-count cap), encrypted members
+  (detected via the standard flag bit and skipped individually — never
+  prompts for a password, and one encrypted file doesn't take the rest of
+  the archive down with it), nested archives (refused at depth 1, not
+  recursed into), and same-path collisions during extraction (two members
+  differing only by case, folded onto one file by a case-insensitive host
+  filesystem, are disambiguated rather than one silently overwriting the
+  other). Extraction happens synchronously per archive inside a
+  `try/finally`, so a crash mid-extraction or mid-read cannot leave
+  extracted content on disk. A member is recognized under any accepted
+  spelling of its type, matched case-insensitively (`.htm` alongside
+  `.html`, `.markdown` alongside `.md`, `.PDF`/`.DOCX`-style uppercase from
+  non-Unix tooling) — `.doc`/`.xls` are deliberately not treated as
+  spelling variants, since they're different container formats
+  python-docx/openpyxl cannot read.
 - **`corpus-ingest --path DIR`** — ingest whatever is in a folder. Detects which
   built-in connectors apply and ingests each matching file type as its own
   source, with no `[[sources]]` block to write. `corpus.toml` still supplies the

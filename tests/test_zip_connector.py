@@ -102,6 +102,125 @@ def test_unsupported_extension_is_skipped_not_ingested(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Extension aliases and case-insensitivity
+# ---------------------------------------------------------------------------
+
+# A reasonably "real" HTML page so trafilatura has structure to chew on —
+# matches the fixture in test_html_connector.py; a bare `<html><body>Hi</body>`
+# snippet is too thin for trafilatura to reliably decide there's main content.
+_SAMPLE_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>The Article Title</title></head>
+<body>
+    <nav>Navigation menu — boilerplate</nav>
+    <article>
+        <h1>The Article Title</h1>
+        <p>This is the main content paragraph. It contains substantive text
+        that trafilatura should extract as the document body.</p>
+        <p>A second paragraph with additional content for good measure.</p>
+    </article>
+</body>
+</html>
+"""
+
+
+def test_htm_alias_is_recognized_as_html(tmp_path: Path) -> None:
+    """The reported source_key uses the canonical extension (`.html`), not
+    the archive member's exact original spelling (`.htm`) — a documented,
+    purely cosmetic tradeoff (see `_normalize_to_canonical_extension`) for
+    reusing each connector's existing single-glob discovery unmodified."""
+    _make_zip(tmp_path / "pages.zip", {"index.htm": _SAMPLE_HTML})
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert {d.source_key for d in docs} == {"pages.zip::index.html"}
+
+
+def test_markdown_alias_is_recognized(tmp_path: Path) -> None:
+    _make_zip(tmp_path / "notes.zip", {"readme.markdown": "# Title\n\nBody text."})
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert {d.source_key for d in docs} == {"notes.zip::readme.md"}
+
+
+def test_uppercase_extensions_are_recognized(tmp_path: Path) -> None:
+    """Plain-text formats (no binary parsing to fake) stand in for the
+    general uppercase-extension case; test_mixed_case_htm_alias_is_recognized
+    below covers the alias+case combination together. Canonical extensions
+    are always lowercase, so REPORT.TXT/NOTES.MD are found but reported with
+    lowercased extensions, same rationale as the htm/markdown alias tests."""
+    _make_zip(
+        tmp_path / "windows_export.zip",
+        {"REPORT.TXT": "uppercase text extension", "NOTES.MD": "# uppercase markdown"},
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {
+        "windows_export.zip::REPORT.txt",
+        "windows_export.zip::NOTES.md",
+    }
+    assert conn.skipped_files == 0
+
+
+def test_mixed_case_htm_alias_is_recognized(tmp_path: Path) -> None:
+    _make_zip(tmp_path / "pages.zip", {"index.HTM": _SAMPLE_HTML})
+    docs = list(ZipConnector(source_type="archives", path=tmp_path).load())
+    assert {d.source_key for d in docs} == {"pages.zip::index.html"}
+
+
+def test_legacy_doc_and_xls_are_not_aliased(tmp_path: Path) -> None:
+    """.doc and .xls are different container formats python-docx/openpyxl
+    cannot read -- they must fall into the unsupported-extension bucket, not
+    be silently routed to the docx/xlsx connectors."""
+    _make_zip(
+        tmp_path / "legacy.zip",
+        {"old.doc": "not really OLE2", "old.xls": "not really BIFF", "fine.txt": "ok"},
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    assert {d.source_key for d in docs} == {"legacy.zip::fine.txt"}
+    assert conn.skipped_files == 2
+    assert conn.failed_files == 0
+
+
+def test_case_insensitive_filesystem_collision_does_not_clobber(tmp_path: Path) -> None:
+    """`notes.md` and `notes.MD` are distinct entries in the archive's own
+    central directory but fold onto the same inode on a case-insensitive
+    host filesystem (the macOS/Windows default) the moment both are
+    extracted — a plain `target.open("wb")` would let the second write
+    silently truncate-and-overwrite the first's content. `_disambiguate` in
+    `_extract_members` must catch this at extraction time, before
+    `_load_extracted` ever runs."""
+    _make_zip(
+        tmp_path / "dupes.zip",
+        {"notes.md": "canonical content", "notes.MD": "aliased-casing content"},
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    bodies = {d.raw["body"] for d in docs}
+    assert len(docs) == 2, "both members must survive extraction, not just the second write"
+    assert bodies == {"canonical content", "aliased-casing content"}
+
+
+def test_alias_normalization_collision_does_not_clobber(tmp_path: Path) -> None:
+    """`readme.md` (canonical) and `readme.markdown` (alias) are distinct,
+    non-colliding files on disk right after extraction — they only collide
+    once `_normalize_to_canonical_extension` renames the alias to `.md`.
+    That rename must disambiguate rather than silently overwrite."""
+    _make_zip(
+        tmp_path / "dupes.zip",
+        {"readme.md": "canonical content", "readme.markdown": "aliased-extension content"},
+    )
+    conn = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(conn.load())
+
+    bodies = {d.raw["body"] for d in docs}
+    assert len(docs) == 2, "both members must survive the rename, not just one"
+    assert bodies == {"canonical content", "aliased-extension content"}
+
+
+# ---------------------------------------------------------------------------
 # Zip-slip: member paths that resolve outside the extraction root
 # ---------------------------------------------------------------------------
 
@@ -242,19 +361,21 @@ def test_encrypted_archive_is_skipped_not_raised(
     assert conn.failed_files == 0
 
 
-def test_one_encrypted_member_skips_the_whole_archive(
+def test_one_encrypted_member_is_skipped_others_still_ingested(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Conservative choice: an archive with a mix of encrypted and plain
-    members is refused entirely rather than partially unpacked."""
+    """Per-member policy, matching zip-slip: an archive with a mix of
+    encrypted and plain members yields the plain ones rather than being
+    refused wholesale over one encrypted file."""
     _make_zip(tmp_path / "mixed_secret.zip", {"secret.txt": "shh", "plain.txt": "not secret"})
     _mark_encrypted(monkeypatch, {"secret.txt"})
 
     conn = ZipConnector(source_type="archives", path=tmp_path)
     docs = list(conn.load())
 
-    assert docs == []
+    assert {d.source_key for d in docs} == {"mixed_secret.zip::plain.txt"}
     assert conn.skipped_files == 1
+    assert conn.failed_files == 0
 
 
 # ---------------------------------------------------------------------------
