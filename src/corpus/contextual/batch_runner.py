@@ -195,8 +195,24 @@ class BatchContextualizer:
                 for cid, ctx in parse_batch_result(tool_input, ids).items():
                     c = chunk_by_id.get(cid)
                     if c is None:
-                        continue  # already applied / no longer missing
+                        # Either already applied (a harmless re-apply) or the
+                        # chunk no longer exists — its document was re-ingested
+                        # between submit and apply, so its id changed. The
+                        # second case wastes what was paid for this result and
+                        # is worth seeing, but it is indistinguishable from the
+                        # first without tracking ids across the gap, and both
+                        # are correct to skip.
+                        continue
                     if not is_useful_context(ctx):
+                        # ACCEPTED COST: leaving this NULL means a later run
+                        # re-submits and re-pays for the same chunk. Measured
+                        # at 0.037% of one archive — a few hundred chunks, a
+                        # few cents — and a chunk that is empty or redacted
+                        # today may have content the next time its document is
+                        # ingested, so retrying is not purely waste. Marking
+                        # it done would need either a schema column or a
+                        # sentinel that retrieval must then learn to ignore.
+                        # Not worth either for the amount involved.
                         # The model correctly declining to situate an empty or
                         # fully-redacted chunk. Storing that answer would
                         # prepend a meaningless token to the embedding and

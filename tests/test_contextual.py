@@ -507,3 +507,52 @@ def test_clear_context_restores_a_searchable_cjk_row(tmp_path: Path) -> None:
 
     assert len(store.fts_search("東京", top_k=5)) == 1
     store.close()
+
+
+# --- refusing to guess a mapping --------------------------------------------
+#
+# Results map onto chunk ids BY POSITION. If the model omits its indices and
+# also returns a different number of entries than were sent, position is not
+# trustworthy — and guessing attaches one document's context to another
+# document's chunks, silently, at scale, with no error. A refused window costs
+# one re-run; a misaligned one corrupts the index invisibly.
+
+
+def test_a_short_unindexed_response_is_discarded_rather_than_guessed() -> None:
+    from corpus.contextual.batch_builder import parse_batch_result
+
+    result = parse_batch_result({"contexts": ["only one", "only two"]}, ["a", "b", "c", "d"])
+
+    assert result == {}
+
+
+def test_a_matching_unindexed_response_is_still_used() -> None:
+    # Same count as sent: position is exactly the ordering that was requested.
+    from corpus.contextual.batch_builder import parse_batch_result
+
+    result = parse_batch_result({"contexts": ["one", "two"]}, ["a", "b"])
+
+    assert result == {"a": "one", "b": "two"}
+
+
+def test_indexed_entries_survive_a_count_mismatch() -> None:
+    # With explicit indices, a short response is unambiguous — it just means
+    # some chunks got no context, which is fine.
+    from corpus.contextual.batch_builder import parse_batch_result
+
+    result = parse_batch_result(
+        {"contexts": [{"index": 2, "context": "third"}]}, ["a", "b", "c"]
+    )
+
+    assert result == {"c": "third"}
+
+
+def test_an_out_of_range_index_is_dropped_not_wrapped() -> None:
+    from corpus.contextual.batch_builder import parse_batch_result
+
+    result = parse_batch_result(
+        {"contexts": [{"index": 99, "context": "nowhere"}, {"index": 0, "context": "here"}]},
+        ["a", "b"],
+    )
+
+    assert result == {"a": "here"}

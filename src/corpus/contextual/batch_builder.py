@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections import defaultdict
 from collections.abc import Iterator
@@ -22,6 +23,8 @@ from corpus.contextual.contextualizer import (
     SYSTEM_PROMPT,
 )
 from corpus.db.sqlite import StoredChunk
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_SIZE = 40
 
@@ -197,6 +200,21 @@ def parse_batch_result(tool_input: dict[str, Any], window_chunk_ids: list[str]) 
     if not isinstance(contexts, list):
         return {}
     mapping: dict[str, str] = {}
+    # Refuse to guess when the model omitted its indices AND returned a
+    # different number of entries than were sent. Falling back to position
+    # then attaches one chunk's context to another — silently, at scale, with
+    # no error, which is the single worst outcome this module has. A refused
+    # window costs one re-run; a misaligned one corrupts the index invisibly.
+    indexed = [e for e in contexts if isinstance(e, dict) and "index" in e]
+    if not indexed and len(contexts) != len(window_chunk_ids):
+        logger.warning(
+            "discarding a window: model returned %d context(s) for %d chunk(s) "
+            "with no indices, so position cannot be trusted",
+            len(contexts),
+            len(window_chunk_ids),
+        )
+        return {}
+
     for pos, entry in enumerate(contexts):
         if isinstance(entry, dict):
             idx = entry.get("index", pos)
