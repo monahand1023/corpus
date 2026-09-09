@@ -121,6 +121,14 @@ temp_store_memory = true
 #              Slide text AND speaker notes, one section per slide. Legacy binary
 #              `.ppt` is a different container format entirely and is skipped, not
 #              retried, if one is ever found under a `.pptx` glob.
+#   csv      — CSV files (default glob: **/*.csv); no extra needed (stdlib csv).
+#              Deliberately does NOT index every row — see src/corpus/connectors/csv_.py's
+#              module docstring for the full reasoning. Small files (<=100 rows, <=50k
+#              chars) are indexed in full; larger files get filename + inferred
+#              column names/types + a fixed 20-row head/tail sample, so a 50,000-row
+#              export doesn't drown the rest of the index in near-duplicate row chunks.
+#   tsv      — Same connector as csv, tab-delimited default (default glob: **/*.tsv);
+#              the delimiter is actually auto-detected per file either way.
 #   zip      — `.zip` archives (default glob: **/*.zip); extracts to a temp dir,
 #              re-runs the connectors above by file type found inside, then
 #              deletes the extracted copies. The archive itself is never
@@ -177,6 +185,16 @@ path = "~/Documents/notes"
 # name = "presentations"
 # type = "pptx"
 # path = "~/Documents"
+
+# [[sources]]
+# name = "spreadsheet_exports"
+# type = "csv"
+# path = "~/Documents/exports"
+
+# [[sources]]
+# name = "tab_separated_exports"
+# type = "tsv"
+# path = "~/Documents/exports"
 
 # [[sources]]
 # name = "archives"

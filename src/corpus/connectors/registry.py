@@ -29,6 +29,8 @@ DEFAULT_GLOBS: dict[str, str] = {
     "rtf": "**/*.rtf",
     "zip": "**/*.zip",
     "pptx": "**/*.pptx",
+    "csv": "**/*.csv",
+    "tsv": "**/*.tsv",
 }
 
 
@@ -165,6 +167,36 @@ def _build_pptx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
+def _build_csv(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # No import guard, unlike the factories above: this connector uses only
+    # the stdlib `csv` module — see csv_.py's module docstring for why
+    # pandas was deliberately not added.
+    from corpus.connectors.csv_ import CsvConnector
+
+    connector = CsvConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["csv"],
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
+def _build_tsv(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+    # Same connector class as `csv`, just a tab default (still auto-detected
+    # per file via csv.Sniffer — see csv_.py) and its own default glob so a
+    # folder of `.tsv` exports is discovered without hand-writing a
+    # `[[sources]]` glob override.
+    from corpus.connectors.csv_ import CsvConnector
+
+    connector = CsvConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        glob=cfg.glob or DEFAULT_GLOBS["tsv"],
+        default_delimiter="\t",
+    )
+    return connector, MarkdownChunker(source_type=cfg.name)
+
+
 def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     # No import guard here, unlike the factories above: zip.py depends only on
     # the stdlib `zipfile`. It composes the OTHER factories in this dict at
@@ -193,6 +225,8 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "rtf": _build_rtf,
     "zip": _build_zip,
     "pptx": _build_pptx,
+    "csv": _build_csv,
+    "tsv": _build_tsv,
 }
 
 

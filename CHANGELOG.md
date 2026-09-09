@@ -7,6 +7,39 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`csv` / `tsv` connectors.** Stdlib `csv` only — no pandas. Deliberately
+  does NOT index every row: a naive dump of a 50,000-row export would produce
+  thousands of near-identical row chunks that crowd out real prose in every
+  subsequent search across the whole corpus, not just within that file. A
+  file with at most 100 data rows AND at most 50,000 characters of rendered
+  row text is indexed in full (still chunked normally afterward); above
+  either cap, the document becomes filename + inferred column names/types +
+  row/column counts + a fixed 20-row sample (10 from the head, 10 from the
+  tail), regardless of how large the file actually is. The sample is
+  deterministic head/tail, not random, specifically because this engine
+  content-hashes chunks and skips re-embedding unchanged ones — a random
+  sample would change the rendered body (and its hash) on every ingest run
+  even when the file itself hasn't changed. Handles: no header row (detected
+  via `csv.Sniffer`, with a fallback heuristic — biased toward NOT assuming a
+  header on an ambiguous single-column file, since wrongly assuming one
+  discards a real value, while wrongly assuming the reverse just leaves one
+  value oddly placed in the sample); a single-column file (no special-casing
+  needed — it's just the N=1 case of the same column-inference/sampling
+  logic); inconsistent row lengths (flagged in the body, never dropped —
+  short rows are missing trailing columns, long rows' extra cells still
+  appear in the data/sample); embedded newlines in quoted fields (correct by
+  construction, since `csv.reader` gets the whole decoded file at once, not
+  split into lines first — flattened to a space only when a row is rendered
+  into the body, so one row is always one line of text); non-UTF-8 encodings
+  (latin-1 fallback, which cannot itself fail to decode); a NUL byte
+  anywhere (binary content under a `.csv` extension can never become valid
+  CSV, so — like pptx's legacy `.ppt` case below — this is `skipped_files`,
+  not `failed_files`); and an empty file (skipped like an empty docx/xlsx,
+  not counted as a failure — though a file with a header row and zero data
+  rows is indexed, not skipped, since the schema alone is still real
+  content). `tsv` registers the same connector class under its own default
+  glob and a tab fallback delimiter; either way the actual delimiter is
+  auto-detected per file via `csv.Sniffer`.
 - **`pptx` connector.** Uses `python-pptx`. One deck becomes one
   SourceDocument with one markdown `##` section per slide, so a retrieval
   hit can identify which slide it came from; small adjacent slides still get

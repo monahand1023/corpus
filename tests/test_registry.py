@@ -17,6 +17,8 @@ def test_all_builtin_types_registered() -> None:
     assert "xlsx" in CONNECTOR_REGISTRY
     assert "rtf" in CONNECTOR_REGISTRY
     assert "pptx" in CONNECTOR_REGISTRY
+    assert "csv" in CONNECTOR_REGISTRY
+    assert "tsv" in CONNECTOR_REGISTRY
 
 
 def test_build_markdown(tmp_path) -> None:
@@ -121,3 +123,20 @@ def test_build_pptx(tmp_path) -> None:
     connector, chunker = build_pipeline(cfg)
     assert connector.source_type == "decks"
     assert chunker.source_type == "decks"
+
+
+def test_build_csv(tmp_path) -> None:
+    # No import guard expected — csv_.py uses only the stdlib `csv` module.
+    cfg = SourceConfig(name="sheets", type="csv", path=str(tmp_path))
+    connector, chunker = build_pipeline(cfg)
+    assert connector.source_type == "sheets"
+    assert chunker.source_type == "sheets"
+
+
+def test_build_tsv_uses_tab_default_and_own_glob(tmp_path) -> None:
+    cfg = SourceConfig(name="sheets", type="tsv", path=str(tmp_path))
+    connector, chunker = build_pipeline(cfg)
+    assert connector.source_type == "sheets"
+    assert chunker.source_type == "sheets"
+    assert connector._glob == "**/*.tsv"
+    assert connector._default_delimiter == "\t"
