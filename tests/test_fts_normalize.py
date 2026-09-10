@@ -161,3 +161,37 @@ def test_yi_and_vai_pass_through_unchanged() -> None:
     vai = unicodedata.lookup("VAI SYLLABLE EE")
     assert normalize_for_fts(yi) == yi
     assert normalize_for_fts(vai) == vai
+
+
+# --- Accented Latin. The engine has a consumer indexing accented text, and the
+# defect this guards against lived in a fork's query path for months:
+# `re.findall(r"[A-Za-z0-9_-]+", query)` split on every accent, so `año`
+# became `"a" OR "o"` and matched orders of magnitude more chunks than contained the term. It never
+# errored and never returned empty -- BM25 simply ranked on single-letter
+# tokens, which is worse than returning nothing because it looks like an
+# answer. Tested here so no consumer has to rediscover it.
+def test_accented_words_survive_whole() -> None:
+    assert fts_terms("año") == ['"año"']
+    assert fts_terms("diseño") == ['"diseño"']
+    assert fts_terms("gestión de archivos") == ['"gestión"', '"de"', '"archivos"']
+
+
+def test_accents_never_degrade_into_single_letter_terms() -> None:
+    for query in ["año", "días", "número", "señal", "reunión"]:
+        for term in fts_terms(query):
+            assert len(term.strip('"')) > 1, f"{query} produced fragment {term}"
+
+
+def test_hyphenated_identifiers_stay_one_term() -> None:
+    # Ticket keys and code identifiers are exactly what BM25 is carrying in a
+    # hybrid retriever; splitting them defeats the point of having it.
+    assert fts_terms("PROJ-1234") == ['"PROJ-1234"']
+    assert fts_terms("see TICKET-1234 please") == [
+        '"see"',
+        '"TICKET-1234"',
+        '"please"',
+    ]
+
+
+def test_inverted_punctuation_does_not_break_match_syntax() -> None:
+    assert fts_terms("¿qué pasó?") == ['"qué"', '"pasó"']
