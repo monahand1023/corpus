@@ -40,3 +40,13 @@ def test_key_extraction_dedupes_by_id() -> None:
 def test_mismatched_weights_raises() -> None:
     with pytest.raises(ValueError):
         reciprocal_rank_fusion([["a"], ["b"]], weights=[1.0])
+
+
+def test_disjoint_lists_interleave_by_rank() -> None:
+    # No overlap between the rankers, so nothing gets the multi-list boost and
+    # ordering falls back to rank alone: both rank-0 items outrank both
+    # rank-1 items. Adopted from a consumer repo during consolidation.
+    out = reciprocal_rank_fusion([["a", "b"], ["c", "d"]])
+
+    assert set(out[:2]) == {"a", "c"}
+    assert set(out[2:]) == {"b", "d"}
