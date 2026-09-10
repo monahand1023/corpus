@@ -145,14 +145,20 @@ def test_fts_search_filter_sources_is_a_postfilter_by_design(store: ChunkStore) 
     assert keys == {"n-0", "n-1", "n-2"}, f"a genuinely-matching small source was starved; got {keys}"
 
 
-def test_fts_search_postfilter_accepted_limitation_when_both_sources_match(store: ChunkStore) -> None:
-    """Documents the ACCEPTED tradeoff of the post-filter (see the ruling in
-    fts_search's comment): if a large source ALSO genuinely matches the
-    query's terms, it can still fill the fixed-size over-fetch window ahead
-    of a smaller matching source, starving it. This is the accepted cost of
-    avoiding the ~1561x pre-filter regression -- pinned here so a future
-    change to this tradeoff is a deliberate, visible test update, not a
-    silent regression."""
+def test_fts_search_widens_rather_than_starving_a_filtered_source(store: ChunkStore) -> None:
+    """A large source that ALSO matches the query used to fill the fixed
+    over-fetch window ahead of a smaller matching source, and the filtered
+    query returned NOTHING — silently, with matching content in the store.
+
+    That was pinned here as an accepted cost of avoiding a measured ~1561x
+    pre-filter regression, on the reasoning that a genuinely-matching source
+    would usually survive the window. Measured, it does not: it takes only a
+    few times more rows in the other source to crowd it out completely.
+
+    The window now widens when a filter is starving it. The uncrowded path
+    still costs one query; only a filter that actually got crowded out pays
+    for another, so the regression this trade-off existed to avoid is still
+    avoided."""
     items = [
         (make_chunk_typed("photos", f"img-{i}", 0, ChunkKind.SECTION, f"needle {i}"), fake_embedding(i))
         for i in range(200)
@@ -162,12 +168,41 @@ def test_fts_search_postfilter_accepted_limitation_when_both_sources_match(store
         for i in range(3)
     ]
     store.upsert_batch(items)
-    # All 203 chunks contain "needle" -- the top_k*3=60 over-fetch window is
-    # filled entirely by "photos" (ranked first by rowid/insertion order)
-    # before the post-filter ever sees a "notes" row.
+
     results = store.fts_search("needle", top_k=20, filter_sources=["notes"])
+
     keys = {c.source_key for c in results}
-    assert keys == set(), f"expected the accepted starvation limitation, got {keys}"
+    assert keys == {"n-0", "n-1", "n-2"}, f"filtered source starved; got {keys}"
+
+
+def test_fts_filter_finds_a_source_that_sorts_last(store: ChunkStore) -> None:
+    """The case that killed the widening approach before this one: when every
+    chunk matches equally, BM25 ties and rows order by rowid, so a source
+    inserted LAST sits below any bounded window. Widening bought latency and
+    still returned nothing; the pre-filtered fallback returns the rows."""
+    items = [
+        (make_chunk_typed("photos", f"img-{i}", 0, ChunkKind.SECTION, "needle"), fake_embedding(i))
+        for i in range(300)
+    ]
+    items += [
+        (make_chunk_typed("notes", f"n-{i}", 0, ChunkKind.SECTION, "needle"), fake_embedding(i + 9000))
+        for i in range(5)
+    ]
+    store.upsert_batch(items)
+
+    results = store.fts_search("needle", top_k=5, filter_sources=["notes"])
+
+    assert {c.source_key for c in results} == {f"n-{i}" for i in range(5)}
+
+
+def test_fts_filter_on_a_source_with_no_matches_returns_empty(store: ChunkStore) -> None:
+    items = [
+        (make_chunk_typed("photos", f"img-{i}", 0, ChunkKind.SECTION, f"needle {i}"), fake_embedding(i))
+        for i in range(300)
+    ]
+    store.upsert_batch(items)
+
+    assert store.fts_search("needle", top_k=20, filter_sources=["notes"]) == []
 
 
 def test_delete_orphans(store: ChunkStore) -> None:

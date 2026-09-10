@@ -46,6 +46,12 @@ FTS_VERSION = "2"
 # any concurrent ingest failing on its busy timeout meanwhile.
 AUTO_FTS_MIGRATION_MAX_CHUNKS = 200_000
 
+# Ceiling on how far `fts_search` will widen its window trying to satisfy a
+# source filter. Bounds the worst case — a filter matching a source that has
+# no rows for the query at all would otherwise widen until it had scanned
+# every matching row.
+_FTS_MAX_OVER_FETCH = 5_000
+
 # System temp root, resolved once. Symlinks matter here: on macOS
 # `tempfile.gettempdir()` returns a `/var/folders/...` path that is itself a
 # symlink into `/private/var/folders/...`, and pytest's `tmp_path` fixture
@@ -848,13 +854,80 @@ class ChunkStore:
         # source type in the retriever's per-source loop. Measured ~1561x
         # slower than this global-query form at 40k chunks / 4 source types
         # (mean 7.3s/query, p99 17.5s) -- fatal for sub-300ms search. This is
-        # safe unlike vector_search's starvation risk: BM25 only matches
-        # chunks that actually contain the query's terms, so a small source
-        # that genuinely matches is far likelier to survive a fixed-size
-        # over-fetch window than to be crowded out by sheer volume the way
-        # every chunk (via distance) competes in vector search. See
-        # Retriever.query for the per-source vector / global-FTS split.
-        over_fetch = top_k * 3 if filter_sources else top_k
+        # That reasoning stands, and the fast path below is still the one
+        # that runs for virtually every query. The claim that once sat here
+        # about the STARVATION risk did not stand: it said a source that
+        # genuinely matches is "far likelier to survive a fixed-size
+        # over-fetch window" than to be crowded out. Measured, it is not —
+        # 100 chunks of one source and 20 of another, all containing the
+        # query term, filtered to the smaller source returned ZERO results,
+        # because the first 15 by rank were all the larger source.
+        #
+        # So: fast path first, and fall back to the correct-but-slower
+        # pre-filter ONLY when the fast path came up short. An uncrowded
+        # filter never pays for the fallback; a crowded one gets a right
+        # answer slowly instead of an empty one quickly. Widening the window
+        # instead was tried and rejected — it cannot fix a source whose rows
+        # all sort below any bounded window (a source inserted last ties on
+        # rank and sorts by rowid), so it bought latency and still returned
+        # nothing.
+        if not filter_sources:
+            return self._fts_rows(match_expr, top_k, None, top_k)
+
+        filter_set = set(filter_sources)
+        fast = self._fts_rows(match_expr, top_k * 3, filter_set, top_k)
+        if len(fast) >= top_k:
+            return fast
+        return self._fts_rows_prefiltered(match_expr, top_k, filter_sources)
+
+    def _fts_rows_prefiltered(
+        self, match_expr: str, top_k: int, filter_sources: Sequence[str]
+    ) -> list[StoredChunk]:
+        """Restrict to the named sources IN SQL, so a crowded filter still
+        returns rows. Slower — this is the form measured ~1561x slower than
+        the global query at 40k chunks, because it defeats FTS5's rank-ordered
+        LIMIT short-circuit and falls back to sorting every matching row — so
+        it runs only after the fast path has already come up short."""
+        placeholders = ",".join("?" for _ in filter_sources)
+        try:
+            rows = self._conn.execute(
+                f"""
+                SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
+                       c.title, c.url, c.context, f.rank
+                FROM chunks_fts f
+                JOIN chunks c ON c.rowid = f.rowid
+                WHERE f.content MATCH ?
+                  AND c.source_type IN ({placeholders})
+                ORDER BY f.rank
+                LIMIT ?
+                """,
+                (match_expr, *filter_sources, top_k),
+            ).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning("FTS pre-filtered query failed for %r: %s", match_expr, e)
+            return []
+        return [
+            StoredChunk(
+                id=row["id"],
+                source_type=row["source_type"],
+                source_key=row["source_key"],
+                content=row["content"],
+                metadata=json.loads(row["metadata"]),
+                title=row["title"],
+                url=row["url"],
+                context=row["context"],
+                distance=row["rank"],
+            )
+            for row in rows
+        ]
+
+    def _fts_rows(
+        self,
+        match_expr: str,
+        over_fetch: int,
+        filter_set: set[str] | None,
+        top_k: int,
+    ) -> list[StoredChunk]:
         try:
             rows = self._conn.execute(
                 """
@@ -873,7 +946,6 @@ class ChunkStore:
             return []
 
         results: list[StoredChunk] = []
-        filter_set = set(filter_sources) if filter_sources else None
         for row in rows:
             if filter_set and row["source_type"] not in filter_set:
                 continue

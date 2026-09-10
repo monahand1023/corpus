@@ -344,6 +344,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **A source-filtered full-text search no longer returns nothing when the
+  filter is crowded out.** `fts_search` applied its source filter in Python
+  AFTER SQLite's `LIMIT`, so if the top-ranked rows all belonged to other
+  sources the filter removed everything and the caller got an empty list with
+  matching content sitting in the store. Measured: 100 chunks of one source
+  and 20 of another, all containing the query term, filtered to the smaller
+  source returned ZERO of its 20. The fast path is unchanged and still runs
+  for virtually every query; when it comes up short, a pre-filtered query
+  runs instead. Benchmarked at 40k chunks across 4 source types: unfiltered
+  51 ms, uncrowded filter 55 ms, crowded filter 110 ms and correct — against
+  0 results before.
 - **Using a `ChunkStore` after `close()` now says so.** `close()` shuts down
   every connection but cannot reach into another thread's `threading.local()`
   to clear its reference, so a thread that already had a connection failed
