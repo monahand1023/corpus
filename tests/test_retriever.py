@@ -551,3 +551,27 @@ def test_fts_search_called_once_not_per_source_type(tmp_path: Path) -> None:
     r.query("testing", top_k=5, filter_sources=["notes", "papers"], hybrid=True)
     assert len(calls) == 1, f"fts_search called {len(calls)} times, expected exactly 1: {calls}"
     store.close()
+
+
+def test_single_source_filter_is_not_capped(retriever: Retriever) -> None:
+    """The cap spreads results ACROSS source types. A query already filtered
+    to one type has nothing to spread across, so the cap could only subtract:
+    top_k=10 filtered to one source returned 3 results with far more matching
+    chunks available."""
+    result = retriever.query(
+        "anything", top_k=6, filter_sources=["notes"], max_per_source_type=2, hybrid=False
+    )
+
+    assert len(result.chunks) > 2
+    assert {c.source_type for c in result.chunks} == {"notes"}
+
+
+def test_the_cap_still_binds_across_multiple_types(retriever: Retriever) -> None:
+    # Where diversity is actually possible the cap means what it says, even
+    # when honouring it leaves the caller short of top_k.
+    result = retriever.query("anything", top_k=10, max_per_source_type=2, hybrid=False)
+
+    counts: dict[str, int] = {}
+    for c in result.chunks:
+        counts[c.source_type] = counts.get(c.source_type, 0) + 1
+    assert all(n <= 2 for n in counts.values()), counts

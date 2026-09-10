@@ -174,6 +174,14 @@ class Retriever:
 
         seen_sources: set[tuple[str, str]] = set()
         per_type_count: dict[str, int] = {}
+        # The cap spreads results ACROSS source types. A query already
+        # filtered to one type has nothing to spread across, so the cap can
+        # only subtract: `top_k=10, filter_sources=['notes']` returned 3
+        # results with 40 matching chunks in the store. Disabled for that
+        # case only — where more than one type is in play the cap still
+        # means what it says, including when it leaves the caller short.
+        if filter_sources is not None and len(set(filter_sources)) == 1:
+            max_per_source_type = None
         result: list[StoredChunk] = []
         for c in fused:
             if dedupe_by_source:
@@ -189,6 +197,7 @@ class Retriever:
             result.append(c)
             if len(result) >= top_k:
                 break
+
         return RetrievalResult(query=question, chunks=result)
 
     def timeline(
