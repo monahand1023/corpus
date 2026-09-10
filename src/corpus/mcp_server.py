@@ -160,7 +160,21 @@ async def search_knowledge(
         filter_sources = [source_types]
     else:
         filter_sources = [str(s) for s in source_types]
-    _, _, retriever, _ = _init()
+    store, _, retriever, _ = _init()
+    if filter_sources:
+        # A source type that does not exist returns nothing and is
+        # indistinguishable from a genuine miss, so a typo or a guessed name
+        # reads as "the corpus has nothing on this" — the caller then stops
+        # looking. Naming the real ones costs one cheap query and turns a
+        # dead end into a correction.
+        stats = await asyncio.to_thread(store.stats)
+        known = set(stats["by_source"])
+        unknown = [s for s in filter_sources if s not in known]
+        if unknown:
+            return (
+                f"Unknown source type(s): {', '.join(sorted(unknown))}. "
+                f"This corpus has: {', '.join(sorted(known))}."
+            )
     result = await asyncio.to_thread(
         retriever.query, query, top_k, filter_sources
     )
@@ -279,7 +293,16 @@ async def get_summary(
     summary = await asyncio.to_thread(store.get_summary, source_type, source_key)
     if not summary:
         return f"No summary cached for {source_type}:{source_key}. Run `corpus-summarize --source {source_type}` to generate one."
-    return f"{source_type}:{source_key} (model={summary['model']}, generated={summary['generated_at']}):\n\n{summary['summary']}"
+    # Marked untrusted like every other tool that returns corpus-derived
+    # text. A summary is not raw corpus content, which is why it was missed —
+    # but it is GENERATED FROM corpus content, so a document carrying
+    # adversarial instructions can steer what the summary says, and the
+    # summary is then handed to a model as if it were trustworthy.
+    return (
+        _UNTRUSTED_PREFIX
+        + f"{source_type}:{source_key} (model={summary['model']}, "
+        + f"generated={summary['generated_at']}):\n\n{summary['summary']}"
+    )
 
 
 @mcp.tool(description="Total chunks and per-source counts. Health check.")
