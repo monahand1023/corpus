@@ -888,3 +888,38 @@ def test_an_interrupted_migration_rolls_back_cleanly(tmp_path: Path) -> None:
     assert retried.fts_version() == FTS_VERSION
     assert len(retried.fts_search("東京", top_k=10)) == 6
     retried.close()
+
+
+def test_using_a_closed_store_says_so(tmp_path: Path) -> None:
+    """close() cannot reach into another thread's threading.local() to clear
+    its connection reference, so a thread that already had one would other-
+    wise fail with sqlite3's "Cannot operate on a closed database" from a
+    call site unrelated to closing. Use-after-close is a caller bug and the
+    error should name it."""
+    store = ChunkStore(tmp_path / "closed.db", embedding_dim=DIM)
+    store.upsert_batch([(make_chunk("a", 0, ChunkKind.BODY, "text"), fake_embedding(1))])
+    store.close()
+
+    with pytest.raises(ReadOnlyStoreError, match="closed"):
+        store.fts_search("text", top_k=1)
+
+
+def test_close_is_idempotent(tmp_path: Path) -> None:
+    store = ChunkStore(tmp_path / "twice.db", embedding_dim=DIM)
+    store.close()
+    store.close()  # must not raise
+
+
+def test_a_closed_store_is_not_silently_reopened(tmp_path: Path) -> None:
+    # Quietly resurrecting one would hide the caller's mistake.
+    db = tmp_path / "noreopen.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.close()
+
+    with pytest.raises(ReadOnlyStoreError):
+        store.stats()
+
+    # A fresh store on the same file is the correct way back.
+    reopened = ChunkStore(db, embedding_dim=DIM)
+    assert reopened.stats()["total"] == 0
+    reopened.close()

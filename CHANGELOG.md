@@ -328,6 +328,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **Using a `ChunkStore` after `close()` now says so.** `close()` shuts down
+  every connection but cannot reach into another thread's `threading.local()`
+  to clear its reference, so a thread that already had a connection failed
+  with sqlite3's "Cannot operate on a closed database" from a call site
+  unrelated to closing. It now raises a message naming the actual mistake,
+  and deliberately does not reopen silently — use-after-close is a caller bug
+  and resurrecting the store would hide it.
 - **A bad ingest no longer becomes the new normal.** The yield baseline was
   recorded after every run, so one collapsed run reset the bar: the next
   equally bad run compared favourably and said nothing, and repeated losses

@@ -4,6 +4,15 @@ SCHEMA HAZARD — do not `VACUUM` this DB without rebuilding the vec/fts
 indices. The `chunks` table's auto-rowid is the foreign key into both
 `chunks_vec` and `chunks_fts`; VACUUM can re-pack rowids and silently
 break the linkage. Re-ingest from scratch is the safe recovery path.
+
+KNOWN DEBT: that warning is the whole defence, and a warning cannot stop a
+database browser, a backup tool, or a future maintenance script from running
+VACUUM. The structural fix is an explicit `INTEGER PRIMARY KEY` column on
+`chunks` — SQLite guarantees such a column is a stable alias for the rowid
+and never renumbers it, VACUUM included. Not done here because it changes
+the schema of every existing store and needs a migration that rewrites
+`chunks_vec` and `chunks_fts` alongside it; worth doing before this engine
+is used anywhere the database might be touched by tooling nobody controls.
 """
 
 from __future__ import annotations
@@ -277,6 +286,7 @@ class ChunkStore:
         _warn_if_inside_corpus_repo(self._db_path)
         self._embedding_dim = embedding_dim
         self._read_only = read_only
+        self._closed = False
         # Set only by the explicit `corpus-migrate-fts` maintenance command.
         # A rebuild is one long transaction holding the sole writer lock, so
         # it must be something an operator chose, not something a constructor
@@ -376,7 +386,24 @@ class ChunkStore:
 
     @property
     def _conn(self) -> sqlite3.Connection:
-        """Per-thread connection. Lazy-created on first access from each thread."""
+        """Per-thread connection. Lazy-created on first access from each thread.
+
+        Raises after `close()`. Without this check, a thread that had already
+        opened a connection keeps a thread-local reference to the closed
+        object — `close()` can shut every connection down but cannot reach
+        into another thread's `threading.local()` to clear it — so the next
+        query there fails with sqlite3's "Cannot operate on a closed
+        database", from a call site that has nothing to do with closing.
+
+        Deliberately NOT reopened silently: using a store after closing it is
+        a caller bug, and quietly resurrecting one hides it. The error says
+        which mistake was made.
+        """
+        if self._closed:
+            raise ReadOnlyStoreError(
+                "this ChunkStore has been closed; open a new one rather than "
+                "reusing it (close() shuts down every thread's connection)"
+            )
         existing = getattr(self._tls, "conn", None)
         if existing is None:
             existing = self._open_connection()
@@ -1252,6 +1279,7 @@ class ChunkStore:
         import contextlib
 
         with self._conns_lock:
+            self._closed = True
             for conn in self._all_conns:
                 with contextlib.suppress(Exception):
                     conn.close()
