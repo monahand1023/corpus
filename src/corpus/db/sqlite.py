@@ -38,7 +38,13 @@ from corpus.util.fts_normalize import fts_terms, normalize_for_fts
 
 logger = logging.getLogger(__name__)
 
-FTS_VERSION = "2"
+# Bump whenever `normalize_for_fts` changes: a stored index built by an older
+# normalization no longer agrees with the query path, and only a rebuild
+# reconciles them.
+#   "2" -> CJK runs rewritten as overlapping bigrams.
+#   "3" -> those runs separated from adjacent Latin/digits, which `unicode61`
+#          would otherwise fuse into one token (`Public会議室`).
+FTS_VERSION = "3"
 
 # Above this many chunks, an FTS rebuild stops being something to do silently
 # while opening a store. Measured: a 70k-chunk store rebuilt in ~3s, so a store of

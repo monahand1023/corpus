@@ -31,6 +31,34 @@ def test_mixed_script_keeps_latin_intact() -> None:
     assert normalize_for_fts("Tokyo 東京 office") == "Tokyo 東京 office"
 
 
+# --- CJK runs glued to Latin or digits, with no space between. ---
+# `unicode61` counts Han and kana as letters, so an unseparated `Public会議室`
+# is ONE token, `Public会議`, and the run's leading bigram is unreachable. Real
+# text is full of these: `BLDG10/11会議室`, `4階Meeting M会議室`. Measured on a
+# large archive, a small share of the chunks containing 会議 were invisible to
+# BM25 for exactly this reason, and the loss is silent -- the index reports a
+# successful build either way.
+def test_cjk_run_is_separated_from_a_preceding_latin_word() -> None:
+    assert normalize_for_fts("Public会議室") == "Public 会議 議室"
+
+
+def test_cjk_run_is_separated_from_a_following_latin_word() -> None:
+    assert normalize_for_fts("会議室Public") == "会議 議室 Public"
+
+
+def test_cjk_run_is_separated_from_adjacent_digits() -> None:
+    assert normalize_for_fts("BLDG10/11会議室にて") == "BLDG10/11 会議 議室 室に にて"
+
+
+def test_glued_cjk_is_reachable_by_a_bare_cjk_query() -> None:
+    # The end-to-end statement of the bug: index and query both normalized,
+    # and the term still has to match.
+    indexed = normalize_for_fts("Public会議室エリアはCLOSE")
+
+    assert '"会議"' in fts_terms("会議")
+    assert "会議" in indexed.split()
+
+
 # --- The regression guard for the kana-corruption defect. ---
 # NFKD + combining-mark stripping maps がっこう (school) onto かっこう (cuckoo).
 # These MUST normalize differently.

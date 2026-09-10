@@ -54,7 +54,23 @@ def normalize_for_fts(text: str) -> str:
     Must be applied symmetrically to indexed content and to queries.
     """
     text = text.replace("ß", "ss").replace("ẞ", "SS")
-    return _CJK_RUN.sub(lambda m: _bigrams(m.group(0)), text)
+
+    def _expand(m: re.Match[str]) -> str:
+        run = _bigrams(m.group(0))
+        start, end = m.span()
+        # Separate the run from any adjacent Latin or digits. `unicode61`
+        # classifies Han and kana as letters, so `Public会議室` would tokenize
+        # as the single token `Public会議` -- the run's first bigram is
+        # swallowed and no query for 会議 can ever reach it. Symmetrically,
+        # `会議室Public` loses its last. Measured on a real archive: 21 of 591
+        # chunks containing 会議 were unreachable for exactly this reason.
+        if start > 0 and not text[start - 1].isspace():
+            run = " " + run
+        if end < len(text) and not text[end].isspace():
+            run = run + " "
+        return run
+
+    return _CJK_RUN.sub(_expand, text)
 
 
 MAX_FTS_TERMS = 64
