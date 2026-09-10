@@ -725,6 +725,15 @@ class ChunkStore:
               chunk_index = excluded.chunk_index,
               content = excluded.content,
               content_hash = excluded.content_hash,
+              -- This branch is only reached when the content hash CHANGED
+              -- (an unchanged hash returns early above), so any stored
+              -- context describes text that no longer exists. Dropping it
+              -- puts the chunk back on `chunks_missing_context` to be
+              -- regenerated. Leaving it set stranded the chunk: the vector
+              -- and FTS row below revert to content-only, losing the
+              -- contextual-retrieval benefit, while a non-NULL context kept
+              -- the chunk off the re-contextualization queue forever.
+              context = NULL,
               metadata = excluded.metadata,
               title = excluded.title,
               url = excluded.url,

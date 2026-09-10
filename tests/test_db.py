@@ -884,6 +884,52 @@ def test_the_explicit_flag_performs_the_large_migration(tmp_path: Path) -> None:
     migrated.close()
 
 
+def test_reingesting_changed_content_requeues_the_chunk_for_context(
+    tmp_path: Path,
+) -> None:
+    """Re-ingest drops a stale context so the chunk is contextualized again.
+
+    `upsert` overwrites the vector and the FTS row with content-only
+    versions, which is correct -- the old ones described text that no longer
+    exists. But it used to leave `context` set, and that combination stranded
+    the chunk permanently: the contextual-retrieval benefit was gone from both
+    retrieval arms, the stored blurb described the previous content, and a
+    non-NULL context kept it off `chunks_missing_context` so no later run
+    could repair it. Paid for once, silently reverted by the next ingest.
+    """
+    store = ChunkStore(tmp_path / "reingest.db", embedding_dim=DIM)
+    chunk = make_chunk("doc", 0, ChunkKind.BODY, "approved, option B")
+    store.upsert_batch([(chunk, fake_embedding(1))])
+    store.set_context(chunk.id, "From the Zanzibar rollout thread.", fake_embedding(2))
+    assert store.chunks_missing_context("notes") == []
+
+    changed = make_chunk("doc", 0, ChunkKind.BODY, "approved, option C instead")
+    store.upsert_batch([(changed, fake_embedding(3))])
+
+    # Back on the queue, with no stale blurb left behind.
+    assert len(store.chunks_missing_context("notes")) == 1
+    row = store._conn.execute(
+        "SELECT context FROM chunks WHERE id = ?", (chunk.id,)
+    ).fetchone()
+    assert row["context"] is None
+    store.close()
+
+
+def test_reingesting_unchanged_content_keeps_its_context(tmp_path: Path) -> None:
+    """The other half: an unchanged chunk must NOT lose its context, or every
+    routine re-ingest would bill a full re-contextualization of the archive."""
+    store = ChunkStore(tmp_path / "unchanged.db", embedding_dim=DIM)
+    chunk = make_chunk("doc", 0, ChunkKind.BODY, "approved, option B")
+    store.upsert_batch([(chunk, fake_embedding(1))])
+    store.set_context(chunk.id, "From the Zanzibar rollout thread.", fake_embedding(2))
+
+    store.upsert_batch([(make_chunk("doc", 0, ChunkKind.BODY, "approved, option B"), fake_embedding(1))])
+
+    assert store.chunks_missing_context("notes") == []
+    assert len(store.fts_search("Zanzibar", top_k=5)) == 1
+    store.close()
+
+
 def test_the_rebuild_preserves_generated_context(tmp_path: Path) -> None:
     """A contextualized chunk's FTS row covers context + content, because
     `set_context` writes it that way. A rebuild that re-reads only `content`
