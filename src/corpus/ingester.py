@@ -143,6 +143,11 @@ class IngestResult:
     # the same source name (destructive: chunk ids collide and the second
     # ingest overwrites the first, with nothing pruned for any guard to see).
     path_change_detail: str | None = None
+    # Set when this run permanently skipped more inputs than the last one AND
+    # pruning deleted chunks. A skip does not suppress pruning — it means
+    # "never readable" — so files reclassified as unreadable have their
+    # indexed content deleted as if they had been removed from disk.
+    skip_rise_detail: str | None = None
 
 
 class Ingester:
@@ -166,6 +171,39 @@ class Ingester:
             dim=config.embedder.dim,
         )
         self._owned_store = store is None
+
+    def _check_skip_rise(self, source_name: str, skipped: int, orphans: int) -> str | None:
+        """Warn when MORE inputs became permanently unreadable and chunks died.
+
+        `skipped_files` means "this connector will never read these", which is
+        why — unlike `failed_files` — it does not suppress pruning. That is
+        right for a format the connector has never supported. It is wrong for
+        a file it read successfully last week.
+
+        A rise in the skip count is exactly that second case: a parser
+        regression, a permission change, a dependency that stopped loading, or
+        a new "unsupported" rule shipped in the engine itself. Those files then
+        yield no document, their chunks become orphans, and pruning deletes
+        content that is still sitting on disk and was readable a run ago.
+
+        Only reported when chunks were actually deleted, because a rise with
+        nothing pruned has cost nothing yet. This does not block the prune —
+        the blast-radius guard already covers the catastrophic version, and
+        this is for the handful-of-files case that slips under it.
+        """
+        if not orphans or not skipped:
+            return None
+        previous = self._store.last_skipped(source_name)
+        if previous is None or skipped <= previous:
+            return None
+        return (
+            f"permanently skipped {skipped:,} input(s), up from {previous:,} "
+            f"last run, and pruned {orphans:,} chunk(s). Files the connector "
+            f"used to read may have been reclassified as unreadable and had "
+            f"their indexed content deleted while still present on disk. "
+            f"Check what changed: a parser, a permission, an optional "
+            f"dependency, or a new skip rule in the engine."
+        )
 
     def _check_source_path(self, source_name: str, source_cfg: Any) -> str | None:
         """Warn when a source name is reused for a different path.
@@ -372,6 +410,8 @@ class Ingester:
                 failed_files,
             )
 
+        skip_rise_detail = self._check_skip_rise(source_name, skipped_files, orphans)
+
         # THE BASELINE ONLY ADVANCES ON A TRUSTED RUN.
         #
         # Recording unconditionally turns a single bad run into a ratchet: the
@@ -387,7 +427,11 @@ class Ingester:
         # acknowledgement gesture: it means the operator looked, so it
         # advances the baseline even when the run was anomalous.
         anomalous = bool(
-            failed_files or prune_refused or yield_drop_detail or path_change_detail
+            failed_files
+            or prune_refused
+            or yield_drop_detail
+            or path_change_detail
+            or skip_rise_detail
         )
         if prune_anyway or not anomalous:
             self._store.record_yield(
@@ -395,6 +439,7 @@ class Ingester:
                 documents,
                 chunks_seen,
                 source_path=_resolved_path_or_none(source_cfg),
+                skipped=skipped_files,
             )
 
         return IngestResult(
@@ -410,6 +455,7 @@ class Ingester:
             pruning_performed=prune,
             yield_drop_detail=yield_drop_detail,
             path_change_detail=path_change_detail,
+            skip_rise_detail=skip_rise_detail,
             files_skipped=skipped_files,
             prune_refused=prune_refused,
             prune_refused_detail=prune_refused_detail,

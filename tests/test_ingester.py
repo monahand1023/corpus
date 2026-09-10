@@ -1139,3 +1139,70 @@ def test_a_collapse_in_chunks_is_caught_even_when_documents_hold(tmp_path: Path)
         assert "chunks" in result.yield_drop_detail
     finally:
         CONNECTOR_REGISTRY.pop("thin", None)
+
+
+# --- a rise in permanent skips ----------------------------------------------
+#
+# `skipped_files` means "this connector will never read these", which is why
+# it does not suppress pruning. That is right for a format never supported.
+# It is wrong for a file read successfully last week — a parser regression, a
+# permission change, or a new skip rule shipped in the engine reclassifies it,
+# and pruning then deletes content still sitting on disk.
+
+
+def test_a_rise_in_skips_alongside_a_prune_is_reported(tmp_path: Path) -> None:
+    try:
+        conn = _SkippingConnector("skiprise", [f"f{i}.txt" for i in range(60)], skips=2)
+        _register("skiprise", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "skiprise", "type": "skiprise", "path": str(tmp_path)}]
+        )
+        ing.ingest("skiprise")
+
+        # A reclassification: files that used to read are now "unreadable",
+        # so they yield nothing and their chunks are pruned.
+        conn._docs = [f"f{i}.txt" for i in range(55)]
+        conn._skips = 7
+        result = ing.ingest("skiprise")
+
+        assert result.orphans_deleted > 0
+        assert result.skip_rise_detail is not None
+        assert "7" in result.skip_rise_detail and "2" in result.skip_rise_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("skiprise", None)
+
+
+def test_a_steady_skip_count_is_not_reported(tmp_path: Path) -> None:
+    # An unsupported format sitting in the source forever is the case
+    # skipped_files exists for. It must not warn every run.
+    try:
+        conn = _SkippingConnector("skipsteady", [f"f{i}.txt" for i in range(60)], skips=9)
+        _register("skipsteady", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "skipsteady", "type": "skipsteady", "path": str(tmp_path)}]
+        )
+        ing.ingest("skipsteady")
+        conn._docs = [f"f{i}.txt" for i in range(55)]
+        result = ing.ingest("skipsteady")
+
+        assert result.skip_rise_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("skipsteady", None)
+
+
+def test_a_skip_rise_with_nothing_pruned_is_not_reported(tmp_path: Path) -> None:
+    # A rise that cost nothing yet is not worth interrupting anyone for.
+    try:
+        conn = _SkippingConnector("skipfree", [f"f{i}.txt" for i in range(60)], skips=1)
+        _register("skipfree", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "skipfree", "type": "skipfree", "path": str(tmp_path)}]
+        )
+        ing.ingest("skipfree")
+        conn._skips = 20  # same documents, so nothing becomes an orphan
+        result = ing.ingest("skipfree")
+
+        assert result.orphans_deleted == 0
+        assert result.skip_rise_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("skipfree", None)

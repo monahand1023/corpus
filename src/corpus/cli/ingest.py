@@ -17,6 +17,11 @@ from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester
 from corpus.util.autodetect import detect_sources
 
+# Completed, but a guard reported something a human should look at: a yield
+# collapse, a source name reused for a different path, or files newly
+# reclassified as permanently unreadable while their chunks were pruned.
+EXIT_ANOMALY = 3
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest a configured source")
@@ -108,6 +113,12 @@ def main() -> int:
         return 1
 
     ingester = Ingester(config)
+    # 0 clean, 1 a source failed outright, EXIT_ANOMALY completed but
+    # something needs a human. A warning nobody reads is theatre for an
+    # unattended run: cron and CI see an exit code, not stderr. Kept distinct
+    # from 1 so a caller can tell "this did not work" from "this worked and
+    # you should look at it", and so an existing script checking `!= 0` still
+    # notices either.
     exit_code = 0
     try:
         for name in names:
@@ -129,6 +140,19 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
+            anomalies = [
+                d
+                for d in (r.yield_drop_detail, r.path_change_detail, r.skip_rise_detail)
+                if d
+            ]
+            # --prune-anyway IS the acknowledgement: the operator looked at
+            # the warnings and re-ran to accept them. Exiting anomalous after
+            # that would leave no way to clear the signal, which trains people
+            # to ignore it.
+            if anomalies and exit_code == 0 and not args.prune_anyway:
+                exit_code = EXIT_ANOMALY
+            if r.skip_rise_detail:
+                print(f"  WARNING: {r.skip_rise_detail}")
             if r.path_change_detail:
                 print(f"  WARNING: {r.path_change_detail}")
             if r.yield_drop_detail:
@@ -152,6 +176,12 @@ def main() -> int:
             print(f"  tokens billed:    {r.tokens_used:,}")
             print(f"  elapsed:          {r.elapsed_seconds:.1f}s")
             print()
+        if exit_code == EXIT_ANOMALY:
+            print(
+                "Completed with warnings above. Re-run the affected source with "
+                "--prune-anyway once you have checked them, which accepts the "
+                f"new state and clears this (exit {EXIT_ANOMALY})."
+            )
         return exit_code
     finally:
         ingester.close()

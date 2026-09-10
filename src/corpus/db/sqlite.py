@@ -443,6 +443,12 @@ class ChunkStore:
               documents INTEGER NOT NULL,
               chunks INTEGER NOT NULL,
               recorded_at TEXT NOT NULL,
+              -- How many inputs the connector permanently gave up on. A RISE
+              -- means files it used to read are now classified unreadable —
+              -- a parser regression, a permission change, a new "unsupported"
+              -- rule — and since a skip does not suppress pruning, those
+              -- files' indexed chunks are deleted as if they had vanished.
+              skipped INTEGER NOT NULL DEFAULT 0,
               -- The resolved path this source last read from. Two different
               -- folders can normalize to the same source name, and when they
               -- do the second ingest OVERWRITES the first's chunks rather
@@ -498,6 +504,8 @@ class ChunkStore:
         yield_cols = {r["name"] for r in conn.execute("PRAGMA table_info(source_yield)")}
         if yield_cols and "source_path" not in yield_cols:
             conn.execute("ALTER TABLE source_yield ADD COLUMN source_path TEXT")
+        if yield_cols and "skipped" not in yield_cols:
+            conn.execute("ALTER TABLE source_yield ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
 
     def _guard_embedding_dim(self, conn: sqlite3.Connection | None = None) -> None:
         """If the DB has previous data, the embedding dim must match."""
@@ -1115,6 +1123,16 @@ class ChunkStore:
         ).fetchone()
         return (row["documents"], row["chunks"]) if row else None
 
+    def last_skipped(self, source_type: str) -> int | None:
+        """How many inputs this source permanently skipped last run, if known."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(source_yield)")}
+        if "skipped" not in cols:
+            return None
+        row = self._conn.execute(
+            "SELECT skipped FROM source_yield WHERE source_type = ?", (source_type,)
+        ).fetchone()
+        return row["skipped"] if row else None
+
     def last_source_path(self, source_type: str) -> str | None:
         """The resolved path this source last read from, if recorded."""
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(source_yield)")}
@@ -1126,7 +1144,12 @@ class ChunkStore:
         return row["source_path"] if row else None
 
     def record_yield(
-        self, source_type: str, documents: int, chunks: int, source_path: str | None = None
+        self,
+        source_type: str,
+        documents: int,
+        chunks: int,
+        source_path: str | None = None,
+        skipped: int = 0,
     ) -> None:
         """Record what this source yielded, for the next run to compare against.
 
@@ -1137,12 +1160,20 @@ class ChunkStore:
         with self._txn() as conn:
             conn.execute(
                 "INSERT INTO source_yield "
-                "(source_type, documents, chunks, recorded_at, source_path) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "(source_type, documents, chunks, recorded_at, source_path, skipped) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(source_type) DO UPDATE SET "
                 "documents = excluded.documents, chunks = excluded.chunks, "
-                "recorded_at = excluded.recorded_at, source_path = excluded.source_path",
-                (source_type, documents, chunks, datetime.now(UTC).isoformat(), source_path),
+                "recorded_at = excluded.recorded_at, source_path = excluded.source_path, "
+                "skipped = excluded.skipped",
+                (
+                    source_type,
+                    documents,
+                    chunks,
+                    datetime.now(UTC).isoformat(),
+                    source_path,
+                    skipped,
+                ),
             )
 
     def get_by_source_key(self, source_type: str, source_key: str) -> list[StoredChunk]:

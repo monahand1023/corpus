@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Ingest reports a rise in permanently-skipped inputs.** `skipped_files`
+  means "this connector will never read these", which is why — unlike
+  `failed_files` — it does not suppress pruning. That is right for a format
+  never supported and wrong for a file read successfully last week: a parser
+  regression, a permission change, a dropped optional dependency, or a new
+  skip rule shipped in the engine reclassifies it, and pruning then deletes
+  content still sitting on disk. A rise in the count alongside an actual
+  prune is now reported. Not blocking — the blast-radius guard covers the
+  catastrophic version; this is for the handful-of-files case that slips
+  under it.
+- **`corpus-ingest` exits 3 when a guard reported something.** A warning
+  nobody reads is theatre for an unattended run: cron and CI see an exit
+  code, not stderr. Kept distinct from 1 so a caller can tell "this did not
+  work" from "this worked and you should look at it". `--prune-anyway`
+  acknowledges the warnings and clears it, so there is a way to make the
+  signal go away other than ignoring it.
 - **`music` connector** (`[music]` extra, uses `mutagen`). One document per
   album, built from tags only — no transcription, no audio analysis. A song's
   audio is not searchable text, and a per-TRACK document would be a title,
