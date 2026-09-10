@@ -1062,3 +1062,35 @@ def test_a_large_top_k_with_a_source_filter_also_survives(store: ChunkStore) -> 
     results = store.vector_search(fake_embedding(1), top_k=99_999, filter_sources=["notes"])
 
     assert len(results) == 20
+
+
+def test_every_fts_write_goes_through_the_single_text_builder() -> None:
+    """No writer may compute its own FTS text.
+
+    Three defects in one day came from four write paths independently
+    deciding what text belongs in `chunks_fts` and disagreeing. The
+    invariant is now `_fts_text`, and this asserts it structurally rather
+    than by hoping the next person reads the docstring -- the failures in
+    this class are all silent, so a review is unlikely to catch a fourth.
+    """
+    source = Path(corpus.db.sqlite.__file__).read_text().splitlines()
+
+    inserts = [i for i, line in enumerate(source) if "INSERT INTO chunks_fts(" in line]
+    assert inserts, "expected at least one chunks_fts writer"
+    for i in inserts:
+        window = "\n".join(source[i : i + 4])
+        assert "_fts_text(" in window, (
+            f"chunks_fts write at line {i + 1} does not use _fts_text:\n{window}"
+        )
+
+    # And the normalizer itself is reachable from exactly one place, so the
+    # "raw write is unreachable by CJK queries" failure cannot reappear either.
+    calls = [
+        i for i, line in enumerate(source)
+        if "normalize_for_fts(" in line and not line.lstrip().startswith("#")
+        and "import" not in line
+    ]
+    assert len(calls) == 1, (
+        "normalize_for_fts should be called only inside _fts_text; found at lines "
+        f"{[i + 1 for i in calls]}"
+    )

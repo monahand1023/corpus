@@ -656,11 +656,10 @@ class ChunkStore:
             # back out of BM25 -- silently, and for exactly the chunks the
             # contextualization run was paid for. `clear_context` is the one
             # place that deliberately writes content alone.
-            text = f"{r['context']}\n\n{r['content']}" if r["context"] else r["content"]
             # Explicit rowid: the chunks_fts <-> chunks join depends on it.
             conn.execute(
                 "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                (r["rowid"], normalize_for_fts(text)),
+                (r["rowid"], self._fts_text(r["content"], r["context"])),
             )
             count += 1
         # The fts_version stamp is written only AFTER every insert above,
@@ -699,6 +698,29 @@ class ChunkStore:
             tuple(ids),
         ).fetchall()
         return {row["id"]: row["content_hash"] for row in rows}
+
+    @staticmethod
+    def _fts_text(content: str, context: str | None) -> str:
+        """The exact text that belongs in `chunks_fts` for one chunk.
+
+        Every writer to that table must come through here. Three separate
+        defects in a single day came from write paths independently deciding
+        this and disagreeing:
+
+          * `set_context` indexed context + content while `_migrate_fts`
+            rebuilt from content alone, so a rebuild stripped every generated
+            context back out of BM25.
+          * `upsert` left a stale context attached while writing a
+            content-only row, stranding the chunk with no way back onto the
+            contextualization queue.
+          * a raw (un-normalized) write makes a chunk unreachable by any CJK
+            query, because the query path searches the normalized form.
+
+        None of the three failed loudly: the index builds either way and
+        reports success. A single function is the only thing that makes the
+        invariant checkable in one place.
+        """
+        return normalize_for_fts(f"{context}\n\n{content}" if context else content)
 
     def upsert(self, chunk: Chunk, embedding: Sequence[float]) -> bool:
         self._require_writable("upsert")
@@ -765,7 +787,8 @@ class ChunkStore:
         self._conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
         self._conn.execute(
             "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-            (rowid, normalize_for_fts(chunk.content)),
+            # Content-only: the UPDATE above cleared any stale context.
+            (rowid, self._fts_text(chunk.content, None)),
         )
         return True
 
@@ -1107,7 +1130,6 @@ class ChunkStore:
         if row is None:
             return False
         rowid = row["rowid"]
-        combined = f"{context}\n\n{row['content']}"
         with self._txn() as conn:
             conn.execute(
                 "UPDATE chunks SET context = ? WHERE id = ?", (context, chunk_id)
@@ -1120,12 +1142,7 @@ class ChunkStore:
             conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
             conn.execute(
                 "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                # normalize_for_fts, exactly as `upsert` does. The query path
-                # searches for the normalized form (CJK runs become overlapping
-                # bigrams via `fts_terms`), so a row written raw here is
-                # unreachable by any CJK query — the chunk would be silently
-                # dropped out of BM25 the moment it gained a context.
-                (rowid, normalize_for_fts(combined)),
+                (rowid, self._fts_text(row["content"], context)),
             )
         return True
 
@@ -1147,10 +1164,9 @@ class ChunkStore:
                 conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (r["rowid"],))
                 conn.execute(
                     "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                    # Same normalization as `upsert` and `set_context`: this
-                    # restores the pre-context row, and a raw one would be
-                    # just as unreachable as the bug this mirrors.
-                    (r["rowid"], normalize_for_fts(r["content"])),
+                    # Content-only is the point here: dropping the context is
+                    # what this method is for.
+                    (r["rowid"], self._fts_text(r["content"], None)),
                 )
             conn.execute(
                 "UPDATE chunks SET context = NULL WHERE source_type = ?", (source_type,)
