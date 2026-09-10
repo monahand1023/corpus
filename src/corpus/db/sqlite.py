@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 #   "2" -> CJK runs rewritten as overlapping bigrams.
 #   "3" -> those runs separated from adjacent Latin/digits, which `unicode61`
 #          would otherwise fuse into one token (`Public会議室`).
-FTS_VERSION = "3"
+#   "4" -> the rebuild covers context + content, matching `set_context`.
+#          Version 3 rebuilt from `content` alone and stripped every
+#          generated context back out of the index.
+FTS_VERSION = "4"
 
 # Above this many chunks, an FTS rebuild stops being something to do silently
 # while opening a store. Measured: a 70k-chunk store rebuilt in ~3s, so a store of
@@ -646,11 +649,18 @@ class ChunkStore:
         # schema_meta (different tables) while this SELECT cursor on `chunks`
         # is still open is safe on a single connection.
         count = 0
-        for r in conn.execute("SELECT rowid, content FROM chunks"):
+        for r in conn.execute("SELECT rowid, context, content FROM chunks"):
+            # Index what `set_context` indexes, not just `content`. A
+            # contextualized chunk's FTS row covers context + content, so
+            # rebuilding from `content` alone strips every generated context
+            # back out of BM25 -- silently, and for exactly the chunks the
+            # contextualization run was paid for. `clear_context` is the one
+            # place that deliberately writes content alone.
+            text = f"{r['context']}\n\n{r['content']}" if r["context"] else r["content"]
             # Explicit rowid: the chunks_fts <-> chunks join depends on it.
             conn.execute(
                 "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                (r["rowid"], normalize_for_fts(r["content"])),
+                (r["rowid"], normalize_for_fts(text)),
             )
             count += 1
         # The fts_version stamp is written only AFTER every insert above,

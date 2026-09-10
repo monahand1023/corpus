@@ -884,6 +884,35 @@ def test_the_explicit_flag_performs_the_large_migration(tmp_path: Path) -> None:
     migrated.close()
 
 
+def test_the_rebuild_preserves_generated_context(tmp_path: Path) -> None:
+    """A contextualized chunk's FTS row covers context + content, because
+    `set_context` writes it that way. A rebuild that re-reads only `content`
+    strips every generated context back out of BM25 -- silently, and for
+    precisely the chunks a contextualization run was paid for.
+
+    Measured on a real archive before the fix: every contextualized chunk lost their
+    context from the index, and nothing reported a problem -- the rebuild
+    counted every row and stamped itself successful.
+    """
+    db = tmp_path / "ctx.db"
+    store = ChunkStore(db, embedding_dim=DIM)
+    chunk = make_chunk("doc", 0, ChunkKind.BODY, "approved, option B")
+    store.upsert_batch([(chunk, fake_embedding(1))])
+    store.set_context(chunk.id, "From the Zanzibar rollout thread.", fake_embedding(2))
+    # The context is reachable before the rebuild ...
+    assert len(store.fts_search("Zanzibar", top_k=5)) == 1
+    store.close()
+
+    _stale(db)
+    migrated = ChunkStore(db, embedding_dim=DIM)
+
+    # ... and must still be after it.
+    assert migrated.fts_version() == FTS_VERSION
+    assert len(migrated.fts_search("Zanzibar", top_k=5)) == 1
+    assert len(migrated.fts_search("option", top_k=5)) == 1
+    migrated.close()
+
+
 def test_an_interrupted_migration_rolls_back_cleanly(tmp_path: Path) -> None:
     """The rebuild is one transaction, so a crash mid-way leaves the OLD index
     and the OLD stamp — never a durable half-migrated state — and the next
