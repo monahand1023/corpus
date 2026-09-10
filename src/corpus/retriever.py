@@ -48,6 +48,12 @@ def _has_generic_id_hint(query: str) -> bool:
     return any(p.search(query) for p in _GENERIC_ID_HINTS)
 
 
+# Ceiling on how far `timeline` will widen its candidate pool chasing a date
+# range. Bounds the worst case: a range that matches nothing would otherwise
+# widen until it had scanned every chunk in the store.
+_TIMELINE_MAX_POOL = 2_000
+
+
 class Retriever:
     def __init__(
         self,
@@ -208,14 +214,43 @@ class Retriever:
         until: str | None = None,
         filter_sources: Sequence[str] | None = None,
     ) -> list[StoredChunk]:
-        result = self.query(
-            topic, top_k=top_k * 3, filter_sources=filter_sources
-        )
-        candidates = result.chunks
-        if since:
-            candidates = [c for c in candidates if (_chunk_updated_at(c) or "") >= since]
-        if until:
-            candidates = [c for c in candidates if (_chunk_updated_at(c) or "") <= until]
+        # The date filter runs in Python AFTER retrieval, so a topic whose
+        # semantically-nearest chunks all fall outside the range leaves
+        # nothing: measured with 200 near-but-old chunks and 10 further-but-
+        # recent ones, `since` returned ZERO of the 10. That is the ordinary
+        # shape of a timeline query — "what happened lately about X" asks for
+        # recent material, which is rarely the most semantically central.
+        #
+        # So the candidate pool widens while the filter is starving it. The
+        # unfiltered case and the uncrowded case still cost one query; only a
+        # date range that actually excluded the pool pays for more, and
+        # widening stops as soon as the pool comes back short, which means
+        # there is nothing further to find.
+        pool = top_k * 3
+        candidates: list[StoredChunk] = []
+        while True:
+            result = self.query(
+                topic,
+                top_k=pool,
+                filter_sources=filter_sources,
+                # No diversity cap. A timeline is one topic ordered by DATE,
+                # so spreading across source types is not what is being asked
+                # for — and the default cap of 3 per type silently limited
+                # every timeline to 3 x (number of types) candidates no matter
+                # what top_k said, which also defeats the widening below.
+                max_per_source_type=None,
+            )
+            candidates = result.chunks
+            if since:
+                candidates = [c for c in candidates if (_chunk_updated_at(c) or "") >= since]
+            if until:
+                candidates = [c for c in candidates if (_chunk_updated_at(c) or "") <= until]
+            enough = len(candidates) >= top_k
+            exhausted = len(result.chunks) < pool
+            if enough or exhausted or pool >= _TIMELINE_MAX_POOL:
+                break
+            pool = min(pool * 8, _TIMELINE_MAX_POOL)
+
         candidates.sort(key=lambda c: _chunk_updated_at(c) or "")
         return candidates[:top_k]
 

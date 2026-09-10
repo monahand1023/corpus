@@ -344,6 +344,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   additionally blocks committing those, plus `.env`, even via `git add -f`.
 
 ### Fixed
+- **`timeline` returned nothing when recent material was not the most
+  semantically central.** The date filter ran in Python after retrieval, so a
+  topic whose nearest chunks all fell outside the range was filtered to empty.
+  Measured: 200 near-but-old chunks and 10 further-but-recent ones,
+  `since=` returned 0 of the 10. "What happened lately about X" asks for
+  recent material, which is rarely the most central — this was the ordinary
+  case for the method, not a corner one. The candidate pool now widens while
+  the filter is starving it, and stops when the pool comes back short.
+- **`timeline` was silently capped at 3 results per source type.** It went
+  through `query()`, which applies the diversity cap by default, so a
+  20-item timeline could never return more than 3 x (number of source types)
+  candidates regardless of `top_k`. A timeline is one topic ordered by date;
+  spreading across source types is not what it is asked for.
+- **A large `top_k` no longer crashes vector search.** sqlite-vec's `vec0`
+  refuses a KNN query with `k` above 4096 (`OperationalError: k value in knn
+  query too large`) and nothing bounded it, so a sufficiently large request
+  killed the whole retrieval instead of returning the most it could. Found by
+  a widening candidate pool reaching 7,680.
 - **A source-filtered full-text search no longer returns nothing when the
   filter is crowded out.** `fts_search` applied its source filter in Python
   AFTER SQLite's `LIMIT`, so if the top-ranked rows all belonged to other

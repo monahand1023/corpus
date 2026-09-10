@@ -958,3 +958,32 @@ def test_a_closed_store_is_not_silently_reopened(tmp_path: Path) -> None:
     reopened = ChunkStore(db, embedding_dim=DIM)
     assert reopened.stats()["total"] == 0
     reopened.close()
+
+
+def test_a_large_top_k_does_not_crash_the_vector_search(store: ChunkStore) -> None:
+    """sqlite-vec's vec0 refuses a KNN query with k above 4096, raising
+    `OperationalError: k value in knn query too large`. Nothing bounded it, so
+    a caller asking for a large enough top_k crashed the whole retrieval
+    instead of getting the most it could give — reachable from any code path
+    that widens a candidate pool."""
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"text {i}"), fake_embedding(i))
+        for i in range(20)
+    ]
+    store.upsert_batch(items)
+
+    results = store.vector_search(fake_embedding(1), top_k=99_999)
+
+    assert len(results) == 20
+
+
+def test_a_large_top_k_with_a_source_filter_also_survives(store: ChunkStore) -> None:
+    items = [
+        (make_chunk(f"DOC-{i}", 0, ChunkKind.SECTION, f"text {i}"), fake_embedding(i))
+        for i in range(20)
+    ]
+    store.upsert_batch(items)
+
+    results = store.vector_search(fake_embedding(1), top_k=99_999, filter_sources=["notes"])
+
+    assert len(results) == 20

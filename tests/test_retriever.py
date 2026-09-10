@@ -575,3 +575,86 @@ def test_the_cap_still_binds_across_multiple_types(retriever: Retriever) -> None
     for c in result.chunks:
         counts[c.source_type] = counts.get(c.source_type, 0) + 1
     assert all(n <= 2 for n in counts.values()), counts
+
+
+# --- timeline ---------------------------------------------------------------
+#
+# "What happened lately about X" asks for RECENT material, which is rarely the
+# most semantically central. The date filter ran in Python after retrieval, so
+# a topic whose nearest chunks all fell outside the range returned nothing.
+
+
+def _dated_store(tmp_path):
+    from corpus.db.sqlite import ChunkStore
+    from corpus.types import Chunk, ChunkKind, ChunkMetadata
+    from corpus.util.hash import chunk_id
+
+    store = ChunkStore(tmp_path / "dated.db", embedding_dim=DIM)
+
+    def mk(key, text, updated, emb):
+        return (
+            Chunk(
+                id=chunk_id("notes", key, ChunkKind.BODY, 0),
+                content=text,
+                content_hash=f"h{key}",
+                metadata=ChunkMetadata(
+                    source_type="notes", source_key=key, chunk_kind=ChunkKind.BODY,
+                    chunk_index=0, title=key, updated_at=updated,
+                ),
+            ),
+            emb,
+        )
+
+    items = [mk(f"old{i}", f"migration status {i}", "2020-01-01", [0.10] * DIM) for i in range(200)]
+    items += [mk(f"new{i}", f"migration status {i}", "2026-09-01", [0.40] * DIM) for i in range(10)]
+    store.upsert_batch(items)
+    return store
+
+
+class _NearOld:
+    total_tokens_used = 0
+
+    def embed_query(self, q):  # nearest the OLD chunks
+        return [0.10] * DIM
+
+    def embed_documents(self, ds):
+        return [[0.10] * DIM for _ in ds]
+
+
+def test_timeline_finds_recent_items_buried_below_nearer_old_ones(tmp_path: Path) -> None:
+    store = _dated_store(tmp_path)
+    try:
+        r = Retriever(store=store, embedder=_NearOld())
+
+        results = r.timeline("migration status", top_k=5, since="2026-01-01")
+
+        assert len(results) == 5
+        assert all(c.source_key.startswith("new") for c in results)
+    finally:
+        store.close()
+
+
+def test_timeline_is_not_limited_by_the_diversity_cap(tmp_path: Path) -> None:
+    """A timeline is one topic ordered by DATE. The default cap of 3 per
+    source type silently limited every timeline to 3 x (number of types)
+    candidates no matter what top_k asked for."""
+    store = _dated_store(tmp_path)
+    try:
+        r = Retriever(store=store, embedder=_NearOld())
+
+        results = r.timeline("migration status", top_k=10)
+
+        assert len(results) == 10
+    finally:
+        store.close()
+
+
+def test_timeline_with_a_range_that_matches_nothing_returns_empty(tmp_path: Path) -> None:
+    # The widening must terminate rather than chase an empty range forever.
+    store = _dated_store(tmp_path)
+    try:
+        r = Retriever(store=store, embedder=_NearOld())
+
+        assert r.timeline("migration status", top_k=5, since="2030-01-01") == []
+    finally:
+        store.close()

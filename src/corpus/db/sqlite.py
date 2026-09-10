@@ -46,6 +46,13 @@ FTS_VERSION = "2"
 # any concurrent ingest failing on its busy timeout meanwhile.
 AUTO_FTS_MIGRATION_MAX_CHUNKS = 200_000
 
+# sqlite-vec's vec0 refuses a KNN query with k above this, raising
+# `OperationalError: k value in knn query too large`. Nothing in this engine
+# bounded it, so a caller asking for a large enough top_k crashed the whole
+# retrieval instead of getting the most it could give — reachable from any
+# code path that widens a candidate pool.
+VEC0_MAX_K = 4096
+
 # Ceiling on how far `fts_search` will widen its window trying to satisfy a
 # source filter. Bounds the worst case — a filter matching a source that has
 # no rows for the query at all would otherwise widen until it had scanned
@@ -993,7 +1000,7 @@ class ChunkStore:
                   AND v.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))
                 ORDER BY v.distance
                 """,
-                (blob, top_k, *filter_sources),
+                (blob, min(top_k, VEC0_MAX_K), *filter_sources),
             ).fetchall()
         else:
             rows = self._conn.execute(
@@ -1005,7 +1012,7 @@ class ChunkStore:
                 WHERE v.embedding MATCH ? AND k = ?
                 ORDER BY v.distance
                 """,
-                (blob, top_k),
+                (blob, min(top_k, VEC0_MAX_K)),
             ).fetchall()
 
         results: list[StoredChunk] = []
