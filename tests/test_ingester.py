@@ -1232,8 +1232,9 @@ def test_a_yield_drop_names_the_documents_that_vanished(tmp_path: Path) -> None:
 
 
 def test_a_healthy_run_names_nothing_and_pays_no_scan(tmp_path: Path) -> None:
-    """The naming costs a second scan of the source's chunks; a run with no
-    warning must not pay it."""
+    """Reporting rides on the sweep's own scan, so the standalone scan exists
+    only for the one path with no sweep to ride on (a suppressed prune). A
+    healthy run must never reach it."""
     try:
         conn = _CountingConnector("vclean", [f"f{i}.txt" for i in range(60)])
         _register("vclean", conn)
@@ -1293,3 +1294,82 @@ def test_vanished_means_every_chunk_gone_not_merely_re_chunked(tmp_path: Path) -
     assert total == 1
     assert sample == ["gone.txt"], "a re-chunked document must not read as vanished"
     store.close()
+
+
+# --- the two holes the threshold guards cannot see ---------------------------
+#
+# Every other guard fires on a RATIO. That leaves two shapes invisible by
+# construction, and both are ordinary ways for an archive to rot quietly.
+
+
+def test_a_drop_under_the_threshold_still_names_what_went_missing(
+    tmp_path: Path,
+) -> None:
+    """A 10% loss is under the 20% yield-drop ratio, so nothing warned at all.
+
+    On a 2,000-file source that is 200 documents gone in silence.
+    """
+    try:
+        result = _yield_run(tmp_path, "vsub", 100, 90)
+
+        assert result.yield_drop_detail is None, "10% must stay under the ratio"
+        assert result.vanished_detail is not None
+        assert "10 document(s)" in result.vanished_detail
+        assert "f90.txt" in result.vanished_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("vsub", None)
+
+
+def test_substitution_is_caught_even_though_every_count_is_identical(
+    tmp_path: Path,
+) -> None:
+    """Documents replaced one-for-one by different ones.
+
+    The turnover is deliberately PARTIAL. A wholesale swap trips the
+    blast-radius guard (every old chunk becomes an orphan at once) and so was
+    already visible -- a first cut of this test used 100% and passed without
+    the fix, which is the version of this bug that matters: a test that proves
+    the gap is closed while exercising a case that was never open.
+
+    Six of sixty is 10%: under the 20% prune guard, so the sweep proceeds
+    quietly, and the document count is identical, so the yield-drop check has
+    nothing to compare. Every existing guard is silent while a tenth of the
+    source turns over.
+    """
+    try:
+        conn = _CountingConnector("vswap", [f"doc{i}.txt" for i in range(60)])
+        _register("vswap", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "vswap", "type": "vswap", "path": str(tmp_path)}]
+        )
+        ing.ingest("vswap")
+
+        # Same count, six of them different.
+        conn._docs = [f"doc{i}.txt" for i in range(54)] + [f"new{i}.txt" for i in range(6)]
+        result = ing.ingest("vswap")
+
+        assert result.documents == 60
+        assert result.yield_drop_detail is None, "counts are flat -- nothing to drop"
+        assert result.prune_refused is False, "10% is under the blast-radius guard"
+        assert result.vanished_detail is not None
+        assert "6 document(s)" in result.vanished_detail
+        assert "doc54.txt" in result.vanished_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("vswap", None)
+
+
+def test_a_re_chunked_document_is_not_reported_as_vanished(tmp_path: Path) -> None:
+    """Unconditional reporting only works if it is quiet when nothing is wrong.
+    A document that merely changed shape must not read as data loss."""
+    try:
+        conn = _CountingConnector("vrechunk", [f"f{i}.txt" for i in range(60)])
+        _register("vrechunk", conn)
+        ing, _ = make_ingester_with_config(
+            tmp_path, [{"name": "vrechunk", "type": "vrechunk", "path": str(tmp_path)}]
+        )
+        ing.ingest("vrechunk")
+        result = ing.ingest("vrechunk")
+
+        assert result.vanished_detail is None
+    finally:
+        CONNECTOR_REGISTRY.pop("vrechunk", None)

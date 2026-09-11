@@ -142,7 +142,17 @@ def main() -> int:
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
             anomalies = [
                 d
-                for d in (r.yield_drop_detail, r.path_change_detail, r.skip_rise_detail)
+                for d in (
+                    r.yield_drop_detail,
+                    r.path_change_detail,
+                    r.skip_rise_detail,
+                    # Documents disappearing is an anomaly in its own right,
+                    # not merely colour on another warning: the two shapes it
+                    # exists to catch -- a drop under the yield ratio, and
+                    # one-for-one substitution -- fire NO other check, so
+                    # leaving it out here would report them and still exit 0.
+                    r.vanished_detail,
+                )
                 if d
             ]
             # --prune-anyway IS the acknowledgement: the operator looked at

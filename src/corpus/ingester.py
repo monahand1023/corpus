@@ -391,18 +391,23 @@ class Ingester:
         prune = failed_files == 0 or prune_anyway
 
         orphans = 0
+        vanished_sample: list[str] = []
+        vanished_total = 0
         prune_refused = False
         prune_refused_detail: str | None = None
         if prune:
             max_orphan_ratio, min_chunks_for_guard = _pruning_settings(self._config)
             try:
-                orphans = self._store.delete_orphans(
+                sweep = self._store.sweep_orphans(
                     source_name,
                     seen_ids,
                     max_orphan_ratio=max_orphan_ratio,
                     min_chunks_for_guard=min_chunks_for_guard,
                     force=prune_anyway,
                 )
+                orphans = sweep.deleted
+                vanished_sample = list(sweep.vanished)
+                vanished_total = sweep.vanished_total
             except OrphanPruneRefused as e:
                 prune = False
                 prune_refused = True
@@ -415,27 +420,42 @@ class Ingester:
                 failed_files,
             )
 
-        # Name the documents behind whichever warning fired. Every other guard
-        # reports a magnitude ("19% fewer documents", "412 orphans"), which
-        # says something moved but not what -- leaving the operator to diff
-        # directory listings by hand to act on it.
+        # Name the documents that stopped being found -- ALWAYS, not only when
+        # a threshold tripped.
         #
-        # Deliberately lazy: this is a second scan of the source's chunks, and
-        # `delete_orphans` has already made one. A healthy run pays neither.
-        # Safe at this point in both cases that reach it -- a yield drop is
-        # computed before pruning, and a refused prune deleted nothing -- so
-        # the chunks being named are still present either way.
+        # This is free: the accounting rides along on the scan `sweep_orphans`
+        # already performs (measured on a very large source, adding
+        # `source_key` to that SELECT cost nothing). Being free is what makes
+        # it unconditional, and unconditional is what closes the two holes the
+        # threshold guards structurally cannot see:
+        #
+        #   * a drop UNDER the yield-drop ratio -- 19% of a source vanishing
+        #     said nothing at all
+        #   * substitution -- N documents replaced by N others, every count
+        #     identical while the content silently turns over
+        #
+        # The one path with no sweep to ride on is a suppressed prune (a
+        # connector reported unreadable files), so that case pays for its own
+        # scan. It has already gone wrong by then, which is exactly when the
+        # extra ~900 ms is worth spending.
+        if vanished_total == 0 and (prune_refused or not prune):
+            vanished_sample, vanished_total = self._store.vanished_documents(
+                source_name, seen_ids
+            )
+
         vanished_detail: str | None = None
-        if yield_drop_detail or prune_refused:
-            sample, total = self._store.vanished_documents(source_name, seen_ids)
-            if total:
-                shown = ", ".join(sample)
-                more = f" (+{total - len(sample):,} more)" if total > len(sample) else ""
-                vanished_detail = (
-                    f"{total:,} document(s) indexed previously were not found this "
-                    f"run: {shown}{more}"
-                )
-                logger.warning("  %s: %s", source_name, vanished_detail)
+        if vanished_total:
+            shown = ", ".join(vanished_sample)
+            more = (
+                f" (+{vanished_total - len(vanished_sample):,} more)"
+                if vanished_total > len(vanished_sample)
+                else ""
+            )
+            vanished_detail = (
+                f"{vanished_total:,} document(s) indexed previously were not found "
+                f"this run: {shown}{more}"
+            )
+            logger.warning("  %s: %s", source_name, vanished_detail)
 
         skip_rise_detail = self._check_skip_rise(source_name, skipped_files, orphans)
 

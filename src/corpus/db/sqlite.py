@@ -212,6 +212,20 @@ class StoredChunk:
     context: str | None = None
 
 
+@dataclass(frozen=True)
+class OrphanSweep:
+    """What an orphan sweep deleted, and which documents stopped being found.
+
+    `vanished` is a bounded sample -- this ends up in a log line and a source
+    can lose thousands of documents at once -- with `vanished_total` carrying
+    the real figure.
+    """
+
+    deleted: int
+    vanished: tuple[str, ...]
+    vanished_total: int
+
+
 class EmbeddingDimMismatch(RuntimeError):
     """Raised when the requested embedding dim doesn't match the existing
     schema. Switching dims after data has been ingested would silently
@@ -849,7 +863,7 @@ class ChunkStore:
         vanished = sorted(k for k, n in missing.items() if n == totals.get(k))
         return vanished[:limit], len(vanished)
 
-    def delete_orphans(
+    def sweep_orphans(
         self,
         source_type: str,
         seen_ids: set[str],
@@ -857,9 +871,10 @@ class ChunkStore:
         max_orphan_ratio: float = DEFAULT_MAX_ORPHAN_RATIO,
         min_chunks_for_guard: int = DEFAULT_MIN_CHUNKS_FOR_GUARD,
         force: bool = False,
-    ) -> int:
-        """Delete every chunk of `source_type` whose id is absent from
-        `seen_ids`.
+        vanished_limit: int = 8,
+    ) -> OrphanSweep:
+        """Delete every chunk of `source_type` absent from `seen_ids`, and
+        report which DOCUMENTS stopped being found.
 
         Blast-radius guard: refuses (raising `OrphanPruneRefused`, deleting
         nothing) when the chunks about to be pruned exceed `max_orphan_ratio`
@@ -868,14 +883,43 @@ class ChunkStore:
         radius to matter -- see `OrphanPruneRefused` and
         `corpus.config.PruningConfig` for the full rationale). Pass
         `force=True` to delete anyway, e.g. for a deliberate bulk deletion.
+
+        The vanished-document accounting rides along on the scan this method
+        already performs. That is the whole reason it lives here rather than
+        in a separate pass: measured on a very large source, adding
+        `source_key` to the existing SELECT cost nothing (887 ms vs 929 ms,
+        i.e. noise), whereas a second scan to learn the same thing would cost
+        a further ~900 ms on every ingest.
+
+        Being free is what makes it unconditional, and unconditional is what
+        closes the two holes the threshold-based guards cannot see: a drop
+        UNDER the yield-drop ratio (a 19% loss said nothing at all), and
+        substitution -- N documents replaced by N others, leaving every count
+        identical while the content silently turns over.
         """
         self._require_writable("delete_orphans")
         existing = self._conn.execute(
-            "SELECT id, rowid FROM chunks WHERE source_type = ?", (source_type,)
+            "SELECT id, rowid, source_key FROM chunks WHERE source_type = ?",
+            (source_type,),
         ).fetchall()
-        orphans = [(row["id"], row["rowid"]) for row in existing if row["id"] not in seen_ids]
+
+        # A document counts as vanished only when EVERY one of its chunks is
+        # an orphan. One that merely lost some chunks was re-chunked (a parser
+        # change, an edit), which is ordinary -- reporting that as data loss
+        # would bury the real signal in noise and train people to ignore it.
+        totals: dict[str, int] = {}
+        missing: dict[str, int] = {}
+        orphans: list[tuple[str, int]] = []
+        for row in existing:
+            key = row["source_key"]
+            totals[key] = totals.get(key, 0) + 1
+            if row["id"] not in seen_ids:
+                missing[key] = missing.get(key, 0) + 1
+                orphans.append((row["id"], row["rowid"]))
+        vanished = sorted(k for k, n in missing.items() if n == totals.get(k))
+
         if not orphans:
-            return 0
+            return OrphanSweep(deleted=0, vanished=(), vanished_total=0)
 
         if not force and len(existing) > min_chunks_for_guard:
             ratio = len(orphans) / len(existing)
@@ -911,7 +955,34 @@ class ChunkStore:
                 self._conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
                 self._conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
                 self._conn.execute("DELETE FROM chunks WHERE rowid = ?", (rowid,))
-        return len(orphans)
+        return OrphanSweep(
+            deleted=len(orphans),
+            vanished=tuple(vanished[:vanished_limit]),
+            vanished_total=len(vanished),
+        )
+
+    def delete_orphans(
+        self,
+        source_type: str,
+        seen_ids: set[str],
+        *,
+        max_orphan_ratio: float = DEFAULT_MAX_ORPHAN_RATIO,
+        min_chunks_for_guard: int = DEFAULT_MIN_CHUNKS_FOR_GUARD,
+        force: bool = False,
+    ) -> int:
+        """Prune orphans and return how many chunks were deleted.
+
+        Thin wrapper over `sweep_orphans` for callers that only want the
+        count. The ingester uses `sweep_orphans` directly so it can report
+        which documents disappeared.
+        """
+        return self.sweep_orphans(
+            source_type,
+            seen_ids,
+            max_orphan_ratio=max_orphan_ratio,
+            min_chunks_for_guard=min_chunks_for_guard,
+            force=force,
+        ).deleted
 
     def source_types(self) -> list[str]:
         """Distinct source types present in the store. Backed by idx_chunks_source_type."""
