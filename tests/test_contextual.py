@@ -64,6 +64,43 @@ def test_short_chunks_are_not_contextualized() -> None:
     assert should_contextualize(500) is True
 
 
+def test_the_default_floor_matches_the_measured_derivation() -> None:
+    """The floor is a measured quantity, not a preference.
+
+    What decides whether a context sentence helps is its SHARE of the embedded
+    text, not the chunk's absolute size. The blurb is a near-constant ~141
+    characters, so the share is set by chunk length. Measured 2026-09-10 on a
+    matched-pair experiment (360 balanced queries):
+
+        ctx share  7-8%  ->  neutral to slightly positive
+        ctx share   28%  ->  clearly negative (recall 0.683 vs 0.750
+                             vector-only, Wilcoxon p=0.0002)
+
+    Holding the share at 12% needs 141/0.12 - 141 = 1,034 characters of
+    content, which is ~258 tokens in the chars/4 units `token_count` uses.
+
+    This pins the arithmetic so a future edit has to confront it rather than
+    quietly restore a number that was measured as harmful — the previous
+    default of 50 admitted 200-character chunks, whose context would be 41%
+    of their embedding.
+    """
+    ctx_chars, max_share = 141, 0.12
+    assert round((ctx_chars / max_share - ctx_chars) / 4) == 258
+    assert DEFAULT_MIN_TOKENS == 260
+
+
+def test_chunks_context_would_dominate_are_excluded_by_default() -> None:
+    # ~200 chars -> ~50 tokens: exactly what the old default let through.
+    assert should_contextualize(50) is False
+    assert should_contextualize(120) is False
+
+
+def test_a_source_may_still_lower_the_floor_deliberately() -> None:
+    # The per-source override stays an escape hatch: this is a default, not a
+    # prohibition, and an archive with different economics can say so.
+    assert should_contextualize(60, min_tokens=50) is True
+
+
 def test_unknown_token_count_declines_to_spend() -> None:
     # The safe direction: skip rather than pay blind on a chunk of unknown size.
     assert should_contextualize(None) is False

@@ -30,9 +30,11 @@ two real archives:
     names, imports, and identifiers, and those are exactly what people search
     for. On one archive `code` was 65% of all chunks and would have consumed
     most of the budget for the least gain.
-  - Chunks shorter than a few dozen tokens are actively made worse: the
-    context sentence rivals the content in length, so the embedding ends up
-    describing the context rather than the chunk.
+  - Short chunks are actively made WORSE, and the threshold is higher than it
+    looks. The deciding quantity is the context's share of the embedded text,
+    not the chunk's absolute length: measured on a real archive, 7-8% was
+    neutral-to-positive and 28% was clearly negative (recall 0.683 vs 0.750
+    on vector-only retrieval, Wilcoxon p=0.0002). See `DEFAULT_MIN_TOKENS`.
 
 Hence `should_contextualize`, and hence `min_tokens` being configurable per
 source in `corpus.toml` rather than a constant here.
@@ -46,9 +48,30 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
-# Below this, the generated context rivals the chunk in length and the
-# embedding describes the blurb rather than the content.
-DEFAULT_MIN_TOKENS = 50
+# MEASURED, not guessed. A matched-pair experiment on 2026-09-10 (
+# chunks, 360 balanced gold queries, arm A contextualized vs arm B identical
+# chunks embedded from content alone) found that what decides whether context
+# helps is not the chunk's absolute size but the context's SHARE of the
+# embedded text:
+#
+#     ctx share  7%  ->  recall 0.833 vs 0.833   (neutral)
+#     ctx share  8%  ->  recall 0.600 vs 0.583   (slightly positive)
+#     ctx share 28%  ->  recall 0.733 vs 0.775   (clearly NEGATIVE;
+#                        0.683 vs 0.750 vector-only, Wilcoxon p=0.0002)
+#
+# The generated context is a near-constant ~141 characters whatever the chunk
+# size, and every one is written by the same model from the same prompt, so
+# they are formulaic. At a small share that is harmless; at a quarter of the
+# text it injects a large SHARED component into every vector and compresses
+# the distinctions between them. Short-chunk sources lose.
+#
+# Holding the share at or under 12% needs content of at least
+# 141/0.12 - 141 = 1,034 characters, which is ~258 tokens in the chars/4 units
+# `token_count` is recorded in. Rounded to 260.
+#
+# The old default was 50, which passes a 200-character chunk whose context
+# would be 41% of its embedding -- deep into the range measured as harmful.
+DEFAULT_MIN_TOKENS = 260
 
 # How much of a parent document is sent as the cached prefix. A pathological
 # input — a generated file, a giant export — would otherwise dominate the
