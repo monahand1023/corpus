@@ -159,6 +159,11 @@ def main() -> int:
                 # Printed, not just logged: the whole point is that this run
                 # otherwise looks completely normal.
                 print(f"  WARNING: {r.yield_drop_detail}")
+            if r.vanished_detail:
+                # The names behind whichever warning fired. Without these the
+                # operator is told a magnitude and left to diff directory
+                # listings by hand to find out what actually moved.
+                print(f"  WARNING: {r.vanished_detail}")
             if r.files_skipped:
                 print(f"  files skipped:    {r.files_skipped:,}  (unsupported/unreadable by design)")
             if r.prune_refused:

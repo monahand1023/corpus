@@ -143,6 +143,11 @@ class IngestResult:
     # the same source name (destructive: chunk ids collide and the second
     # ingest overwrites the first, with nothing pruned for any guard to see).
     path_change_detail: str | None = None
+    # Names the DOCUMENTS a warning is about -- set only when one of the
+    # warnings above already fired, because identifying them costs a second
+    # scan of the source's chunks and there is no reason to pay it on a run
+    # that looks healthy.
+    vanished_detail: str | None = None
     # Set when this run permanently skipped more inputs than the last one AND
     # pruning deleted chunks. A skip does not suppress pruning — it means
     # "never readable" — so files reclassified as unreadable have their
@@ -410,6 +415,28 @@ class Ingester:
                 failed_files,
             )
 
+        # Name the documents behind whichever warning fired. Every other guard
+        # reports a magnitude ("19% fewer documents", "412 orphans"), which
+        # says something moved but not what -- leaving the operator to diff
+        # directory listings by hand to act on it.
+        #
+        # Deliberately lazy: this is a second scan of the source's chunks, and
+        # `delete_orphans` has already made one. A healthy run pays neither.
+        # Safe at this point in both cases that reach it -- a yield drop is
+        # computed before pruning, and a refused prune deleted nothing -- so
+        # the chunks being named are still present either way.
+        vanished_detail: str | None = None
+        if yield_drop_detail or prune_refused:
+            sample, total = self._store.vanished_documents(source_name, seen_ids)
+            if total:
+                shown = ", ".join(sample)
+                more = f" (+{total - len(sample):,} more)" if total > len(sample) else ""
+                vanished_detail = (
+                    f"{total:,} document(s) indexed previously were not found this "
+                    f"run: {shown}{more}"
+                )
+                logger.warning("  %s: %s", source_name, vanished_detail)
+
         skip_rise_detail = self._check_skip_rise(source_name, skipped_files, orphans)
 
         # THE BASELINE ONLY ADVANCES ON A TRUSTED RUN.
@@ -454,6 +481,7 @@ class Ingester:
             files_failed=failed_files,
             pruning_performed=prune,
             yield_drop_detail=yield_drop_detail,
+            vanished_detail=vanished_detail,
             path_change_detail=path_change_detail,
             skip_rise_detail=skip_rise_detail,
             files_skipped=skipped_files,

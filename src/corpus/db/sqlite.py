@@ -819,6 +819,36 @@ class ChunkStore:
             self._conn.execute("DELETE FROM chunks WHERE source_type = ?", (source_type,))
         return len(rowids)
 
+    def vanished_documents(
+        self, source_type: str, seen_ids: set[str], limit: int = 8
+    ) -> tuple[list[str], int]:
+        """Which DOCUMENTS this run stopped finding, not just how many chunks.
+
+        Every existing guard reports magnitudes -- "19% fewer documents", "412
+        orphans" -- which tells an operator that something moved but not what,
+        so the only way to act on the warning is to go diffing directory
+        listings by hand. This names them.
+
+        A document is "vanished" only when EVERY one of its chunks is an
+        orphan. One that merely lost some chunks was re-chunked (a parser
+        change, an edit), which is ordinary and not what the guards are for.
+
+        Returns (sample, total). The sample is bounded because this ends up in
+        a log line and a source can lose thousands of documents at once.
+        """
+        rows = self._conn.execute(
+            "SELECT id, source_key FROM chunks WHERE source_type = ?", (source_type,)
+        ).fetchall()
+        totals: dict[str, int] = {}
+        missing: dict[str, int] = {}
+        for row in rows:
+            key = row["source_key"]
+            totals[key] = totals.get(key, 0) + 1
+            if row["id"] not in seen_ids:
+                missing[key] = missing.get(key, 0) + 1
+        vanished = sorted(k for k, n in missing.items() if n == totals.get(k))
+        return vanished[:limit], len(vanished)
+
     def delete_orphans(
         self,
         source_type: str,

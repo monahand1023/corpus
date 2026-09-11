@@ -1206,3 +1206,90 @@ def test_a_skip_rise_with_nothing_pruned_is_not_reported(tmp_path: Path) -> None
         assert result.skip_rise_detail is None
     finally:
         CONNECTOR_REGISTRY.pop("skipfree", None)
+
+
+# --- naming the documents behind a warning -----------------------------------
+#
+# Every other guard reports a magnitude -- "19% fewer documents", "412
+# orphans". That says something moved but not WHAT, so acting on the warning
+# means diffing directory listings by hand.
+
+
+def test_a_yield_drop_names_the_documents_that_vanished(tmp_path: Path) -> None:
+    try:
+        result = _yield_run(tmp_path, "vnames", 100, 10)
+
+        assert result.vanished_detail is not None
+        # 90 of the 100 stopped being enumerated, and specific ones are named.
+        assert "90" in result.vanished_detail
+        # Sorted, so the sample leads with f10.txt -- f0..f9 are the ten still found.
+        assert "f10.txt" in result.vanished_detail
+        assert "f0.txt" not in result.vanished_detail
+        # The sample is bounded -- this reaches a log line.
+        assert "more)" in result.vanished_detail
+    finally:
+        CONNECTOR_REGISTRY.pop("vnames", None)
+
+
+def test_a_healthy_run_names_nothing_and_pays_no_scan(tmp_path: Path) -> None:
+    """The naming costs a second scan of the source's chunks; a run with no
+    warning must not pay it."""
+    try:
+        conn = _CountingConnector("vclean", [f"f{i}.txt" for i in range(60)])
+        _register("vclean", conn)
+        ing, store = make_ingester_with_config(
+            tmp_path, [{"name": "vclean", "type": "vclean", "path": str(tmp_path)}]
+        )
+        ing.ingest("vclean")
+
+        calls = {"n": 0}
+        real = store.vanished_documents
+
+        def counting(*a, **kw):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            return real(*a, **kw)
+
+        store.vanished_documents = counting  # type: ignore[method-assign]
+        result = ing.ingest("vclean")
+
+        assert result.yield_drop_detail is None
+        assert result.vanished_detail is None
+        assert calls["n"] == 0, "scanned for vanished documents on a healthy run"
+    finally:
+        CONNECTOR_REGISTRY.pop("vclean", None)
+
+
+def test_vanished_means_every_chunk_gone_not_merely_re_chunked(tmp_path: Path) -> None:
+    """A document that lost SOME chunks was re-chunked -- a parser change, an
+    edit -- which is ordinary. Only a document whose every chunk is orphaned
+    has actually stopped being found."""
+    from corpus.db.sqlite import ChunkStore
+    from corpus.types import ChunkKind
+    from corpus.util.hash import chunk_id, sha256
+
+    store = ChunkStore(tmp_path / "v.db", embedding_dim=8)
+
+    def mk(key: str, idx: int) -> tuple:
+        text = f"{key}-{idx}"
+        return (
+            Chunk(
+                id=chunk_id("s", key, ChunkKind.SECTION, idx),
+                content=text,
+                content_hash=sha256(text),
+                metadata=ChunkMetadata(
+                    source_type="s", source_key=key, title=key,
+                    chunk_kind=ChunkKind.SECTION, chunk_index=idx,
+                ),
+            ),
+            [0.1] * 8,
+        )
+
+    store.upsert_batch([mk("kept.txt", 0), mk("kept.txt", 1), mk("gone.txt", 0)])
+
+    # This run found only the first chunk of kept.txt, and nothing of gone.txt.
+    seen = {chunk_id("s", "kept.txt", ChunkKind.SECTION, 0)}
+    sample, total = store.vanished_documents("s", seen)
+
+    assert total == 1
+    assert sample == ["gone.txt"], "a re-chunked document must not read as vanished"
+    store.close()
