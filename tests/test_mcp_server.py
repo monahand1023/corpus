@@ -640,7 +640,7 @@ class TestUntrustedMarking:
         with _patch_init(store, embedder, retriever, config):
             out = asyncio.run(get_summary("notes", "doc.md"))
 
-        assert _mod._UNTRUSTED_PREFIX in out
+        assert _mod.UNTRUSTED_PREFIX in out
 
     def test_a_missing_summary_needs_no_marker(self):
         # Nothing corpus-derived in the output, so nothing to mark.
@@ -651,7 +651,7 @@ class TestUntrustedMarking:
             out = asyncio.run(get_summary("notes", "doc.md"))
 
         assert "corpus-summarize" in out
-        assert _mod._UNTRUSTED_PREFIX not in out
+        assert _mod.UNTRUSTED_PREFIX not in out
 
 
 class TestUnknownSourceType:
