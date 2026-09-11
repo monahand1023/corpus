@@ -11,11 +11,9 @@ Hygiene rules:
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 import os
 import sys
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -27,7 +25,7 @@ from corpus.credentials import describe_search, resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
-from corpus.query_log import QueryTimer, log_query
+from corpus.mcp_util import QueryTimer, record_query, safe_tool
 from corpus.retriever import Retriever
 
 logging.basicConfig(
@@ -125,25 +123,6 @@ _UNTRUSTED_PREFIX = (
 )
 
 
-def _safe_tool(fn: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
-    """Wrap a tool handler so an unexpected exception returns a generic message
-    (details go to stderr) instead of leaking internal state to the LLM.
-
-    ``functools.wraps`` preserves ``__wrapped__`` so FastMCP's signature
-    introspection still sees the real parameters and builds the input schema.
-    """
-
-    @functools.wraps(fn)
-    async def wrapper(*args: object, **kwargs: object) -> str:
-        try:
-            return await fn(*args, **kwargs)
-        except Exception:
-            logger.exception("tool %s failed", fn.__name__)
-            return f"Error running {fn.__name__}: an internal error occurred (see server logs)."
-
-    return wrapper
-
-
 def _log_path() -> Path | None:
     """Where to append served queries, or None when logging is off.
 
@@ -159,22 +138,19 @@ def _log_path() -> Path | None:
 
 def _record(tool: str, query: str, chunks: list, elapsed_ms: float, **extra: object) -> None:
     """Append one served query. Never raises -- see corpus.query_log."""
-    path = _log_path()
-    if path is None:
-        return
-    include = _config is not None and _config.query_log.include_results
-    log_query(
-        path,
+    record_query(
+        _log_path(),
         tool=tool,
         query=query,
-        results=[(c.source_type, c.source_key) for c in chunks] if include else None,
+        chunks=chunks,
         elapsed_ms=elapsed_ms,
+        include_results=_config is not None and _config.query_log.include_results,
         **extra,
     )
 
 
 @mcp.tool(description="Semantic + BM25 hybrid search over the corpus. Returns top-K chunks.")
-@_safe_tool
+@safe_tool
 async def search_knowledge(
     query: Annotated[str, Field(description="Natural-language question or search terms")],
     source_types: Annotated[
@@ -231,7 +207,7 @@ async def search_knowledge(
         "Use after search_knowledge to read a full doc in order."
     )
 )
-@_safe_tool
+@safe_tool
 async def get_doc(
     source_type: Annotated[str, Field(description="Source type from corpus.toml, e.g. 'notes'")],
     source_key: Annotated[str, Field(description="Document identifier as stored")],
@@ -253,7 +229,7 @@ async def get_doc(
         "the parent's chunks."
     )
 )
-@_safe_tool
+@safe_tool
 async def expand_context(
     chunk_id: Annotated[str, Field(description="Chunk ID from a prior result")],
     include: Annotated[list[str] | str | None, Field(description="Subset of [siblings, references, parent]")] = None,
@@ -275,7 +251,7 @@ async def expand_context(
 
 
 @mcp.tool(description="Search results reordered chronologically instead of by relevance.")
-@_safe_tool
+@safe_tool
 async def timeline(
     topic: Annotated[str, Field(description="Topic to trace through time")],
     top_k: Annotated[int, Field(description="Events to return (1-50)", ge=1, le=50)] = 15,
@@ -295,7 +271,7 @@ async def timeline(
 
 
 @mcp.tool(description="Chunks updated within the last N days, newest first.")
-@_safe_tool
+@safe_tool
 async def recent_activity(
     days: Annotated[int, Field(description="How many days back (1-365)", ge=1, le=365)] = 7,
     source_types: Annotated[list[str] | str | None, Field(description="Optional source-type filter")] = None,
@@ -323,7 +299,7 @@ async def recent_activity(
         "if you've run `corpus-summarize` on the source type."
     )
 )
-@_safe_tool
+@safe_tool
 async def get_summary(
     source_type: Annotated[str, Field(description="Source type, e.g. 'notes'")],
     source_key: Annotated[str, Field(description="Document identifier")],
@@ -345,7 +321,7 @@ async def get_summary(
 
 
 @mcp.tool(description="Total chunks and per-source counts. Health check.")
-@_safe_tool
+@safe_tool
 async def corpus_stats() -> str:
     store, _, _, _ = _init()
     stats = await asyncio.to_thread(store.stats)
