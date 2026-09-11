@@ -9,7 +9,7 @@ at a low default for prose queries.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -52,6 +52,81 @@ def _has_generic_id_hint(query: str) -> bool:
 # range. Bounds the worst case: a range that matches nothing would otherwise
 # widen until it had scanned every chunk in the store.
 _TIMELINE_MAX_POOL = 2_000
+
+
+def assemble_results(
+    fused: Sequence[StoredChunk],
+    top_k: int,
+    *,
+    dedupe_by_source: bool = True,
+    max_per_source_type: int | None = 3,
+    reject: Callable[[StoredChunk], bool] | None = None,
+    source_key: Callable[[StoredChunk], Hashable] | None = None,
+    content_key: Callable[[StoredChunk], Hashable] | None = None,
+) -> list[StoredChunk]:
+    """Turn a fused candidate list into the final top_k.
+
+    This existed in three near-identical copies -- here, and in two private
+    forks -- which is how the same truncation bug came to be fixed three
+    times. The forks differ only in WHICH chunks they reject and how they
+    identify a duplicate, so those are the hooks; the selection logic is
+    shared.
+
+    `reject` drops a chunk outright (domain noise, date/person filters).
+    `source_key` overrides the dedupe identity -- one fork keys email by
+    thread so a 40-message thread cannot fill the answer. `content_key`
+    adds a second dedupe pass over content itself, collapsing the same text
+    republished across document versions.
+
+    The per-type cap is a PREFERENCE for spread, not a budget on the answer.
+    A fixed cap meeting a variable top_k silently truncates, and the
+    arithmetic is brutal on a narrow archive: measured on a live large
+    store with 3 source types and cap 3, an MCP search could not return more
+    than 9 however large top_k was, while advertising "Default 15, max 30" --
+    and a query whose matches were mostly one type returned 5.
+
+    So the cap is honoured first, then any remaining slots are filled from
+    what it displaced, best-scoring first. Spread still wins every slot it
+    can actually use; top_k goes back to meaning what it says; and a short
+    result now means the candidate pool really was exhausted, which is the
+    only honest reason to return fewer than were asked for.
+    """
+    seen_sources: set[Hashable] = set()
+    seen_content: set[Hashable] = set()
+    per_type_count: dict[str, int] = {}
+    result: list[StoredChunk] = []
+    overflow: list[StoredChunk] = []
+
+    for c in fused:
+        if reject is not None and reject(c):
+            continue
+        if dedupe_by_source:
+            key = source_key(c) if source_key is not None else (c.source_type, c.source_key)
+            if key in seen_sources:
+                continue
+            seen_sources.add(key)
+        if content_key is not None:
+            ckey = content_key(c)
+            if ckey in seen_content:
+                continue
+            seen_content.add(ckey)
+        if max_per_source_type is not None:
+            stype = c.source_type
+            if per_type_count.get(stype, 0) >= max_per_source_type:
+                # Passed every other gate -- held back only by the cap, so it
+                # is a legitimate candidate if slots go unfilled.
+                overflow.append(c)
+                continue
+            per_type_count[stype] = per_type_count.get(stype, 0) + 1
+        result.append(c)
+        if len(result) >= top_k:
+            return result
+
+    # Appended, not merged by score: the diversity-selected chunks keep the
+    # front of the context window, where they do the most good.
+    if len(result) < top_k:
+        result.extend(overflow[: top_k - len(result)])
+    return result
 
 
 class Retriever:
@@ -175,36 +250,23 @@ class Retriever:
             self._attach_summaries(pool)
             fused = self._reranker.rerank(question, pool)
 
-        if not dedupe_by_source and max_per_source_type is None:
-            return RetrievalResult(query=question, chunks=fused[:top_k])
-
-        seen_sources: set[tuple[str, str]] = set()
-        per_type_count: dict[str, int] = {}
         # The cap spreads results ACROSS source types. A query already
         # filtered to one type has nothing to spread across, so the cap can
         # only subtract: `top_k=10, filter_sources=['notes']` returned 3
         # results with 40 matching chunks in the store. Disabled for that
-        # case only — where more than one type is in play the cap still
-        # means what it says, including when it leaves the caller short.
+        # case only.
         if filter_sources is not None and len(set(filter_sources)) == 1:
             max_per_source_type = None
-        result: list[StoredChunk] = []
-        for c in fused:
-            if dedupe_by_source:
-                key = (c.source_type, c.source_key)
-                if key in seen_sources:
-                    continue
-                seen_sources.add(key)
-            if max_per_source_type is not None:
-                stype = c.source_type
-                if per_type_count.get(stype, 0) >= max_per_source_type:
-                    continue
-                per_type_count[stype] = per_type_count.get(stype, 0) + 1
-            result.append(c)
-            if len(result) >= top_k:
-                break
 
-        return RetrievalResult(query=question, chunks=result)
+        return RetrievalResult(
+            query=question,
+            chunks=assemble_results(
+                fused,
+                top_k,
+                dedupe_by_source=dedupe_by_source,
+                max_per_source_type=max_per_source_type,
+            ),
+        )
 
     def timeline(
         self,

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from corpus.db.sqlite import ChunkStore
-from corpus.retriever import Retriever
+from corpus.db.sqlite import ChunkStore, StoredChunk
+from corpus.retriever import Retriever, assemble_results
 from corpus.types import Chunk, ChunkKind, ChunkMetadata
 from corpus.util.hash import chunk_id, sha256
 
@@ -62,10 +62,16 @@ def test_dedupe_by_source_key(retriever: Retriever) -> None:
 
 
 def test_max_per_source_type_cap(retriever: Retriever) -> None:
-    result = retriever.query("anything", top_k=10, max_per_source_type=2, hybrid=False)
+    """Where the cap alone can satisfy top_k, it binds exactly.
+
+    4 slots across 2 source types at cap 2 needs no backfill, so nothing
+    here relaxes the cap.
+    """
+    result = retriever.query("anything", top_k=4, max_per_source_type=2, hybrid=False)
     counts: dict[str, int] = {}
     for c in result.chunks:
         counts[c.source_type] = counts.get(c.source_type, 0) + 1
+    assert len(result.chunks) == 4
     for n in counts.values():
         assert n <= 2
 
@@ -566,15 +572,36 @@ def test_single_source_filter_is_not_capped(retriever: Retriever) -> None:
     assert {c.source_type for c in result.chunks} == {"notes"}
 
 
-def test_the_cap_still_binds_across_multiple_types(retriever: Retriever) -> None:
-    # Where diversity is actually possible the cap means what it says, even
-    # when honouring it leaves the caller short of top_k.
-    result = retriever.query("anything", top_k=10, max_per_source_type=2, hybrid=False)
+def test_the_cap_backfills_instead_of_truncating(retriever: Retriever) -> None:
+    """A fixed cap must not silently shrink a variable top_k.
 
+    This previously asserted the opposite -- that the cap binds even when it
+    leaves the caller short. Live evidence overturned it: on a large
+    archive with 3 source types and cap 3, an MCP search advertising "max 30"
+    could not structurally return more than 9, and typically returned 5.
+
+    The store holds 9 distinct source keys (6 notes + 3 papers), so top_k=8
+    is satisfiable only by going past 2-per-type.
+    """
+    result = retriever.query("anything", top_k=8, max_per_source_type=2, hybrid=False)
+
+    assert len(result.chunks) == 8
+    # Spread still won every slot it could use: both types appear, and the
+    # cap shaped the front of the list before backfill took over.
+    assert {c.source_type for c in result.chunks} == {"notes", "papers"}
+    head = result.chunks[:4]
     counts: dict[str, int] = {}
-    for c in result.chunks:
+    for c in head:
         counts[c.source_type] = counts.get(c.source_type, 0) + 1
     assert all(n <= 2 for n in counts.values()), counts
+
+
+def test_a_short_result_now_means_the_pool_was_exhausted(retriever: Retriever) -> None:
+    """Backfill must not invent results. 9 distinct source keys exist; asking
+    for 20 returns 9, not 20."""
+    result = retriever.query("anything", top_k=20, max_per_source_type=2, hybrid=False)
+
+    assert len(result.chunks) == 9
 
 
 # --- timeline ---------------------------------------------------------------
@@ -658,3 +685,75 @@ def test_timeline_with_a_range_that_matches_nothing_returns_empty(tmp_path: Path
         assert r.timeline("migration status", top_k=5, since="2030-01-01") == []
     finally:
         store.close()
+
+
+# --- assemble_results hooks -------------------------------------------------
+#
+# The selection logic is shared with two private forks that hook into it. The
+# Retriever above never passes a hook, so without these the fork-only paths
+# would be untested here and would drift again -- which is exactly how the
+# same truncation bug ended up in three copies.
+
+
+def _stored(source_type: str, source_key: str, content: str = "x") -> StoredChunk:
+    return StoredChunk(
+        id=chunk_id(source_type, source_key, ChunkKind.HEADER, 0),
+        source_type=source_type,
+        source_key=source_key,
+        content=content,
+        metadata={},
+        title=f"{source_type}:{source_key}",
+        url=None,
+    )
+
+
+def test_reject_hook_drops_chunks_before_they_consume_a_slot() -> None:
+    fused = [_stored("a", f"k{i}") for i in range(6)]
+    out = assemble_results(
+        fused, top_k=3, max_per_source_type=None,
+        reject=lambda c: c.source_key in {"k0", "k1"},
+    )
+    assert [c.source_key for c in out] == ["k2", "k3", "k4"]
+
+
+def test_source_key_hook_overrides_the_dedupe_identity() -> None:
+    """One fork keys email by thread, so a 40-message thread cannot fill the
+    answer on its own."""
+    fused = [_stored("email", f"msg-{i}") for i in range(5)] + [_stored("doc", "d1")]
+    out = assemble_results(
+        fused, top_k=10, max_per_source_type=None,
+        source_key=lambda c: (c.source_type, "thread-1" if c.source_type == "email" else c.source_key),
+    )
+    assert [(c.source_type, c.source_key) for c in out] == [("email", "msg-0"), ("doc", "d1")]
+
+
+def test_content_key_hook_collapses_republished_text() -> None:
+    fused = [
+        _stored("doc", "v1", "the same paragraph"),
+        _stored("doc", "v2", "the same paragraph"),
+        _stored("doc", "v3", "something else"),
+    ]
+    out = assemble_results(
+        fused, top_k=10, max_per_source_type=None, content_key=lambda c: c.content,
+    )
+    assert [c.source_key for c in out] == ["v1", "v3"]
+
+
+def test_backfill_only_promotes_chunks_that_passed_every_other_gate() -> None:
+    """A chunk rejected or deduped must never reappear via the overflow list."""
+    fused = [
+        _stored("a", "a1", "one"),
+        _stored("a", "a2", "two"),               # over a cap of 1 -> overflow
+        _stored("a", "noise", "three"),          # rejected outright
+        _stored("a", "a3", "dupe"),              # over the cap -> overflow
+        _stored("a", "a4", "dupe"),              # same content as a3 -> collapsed
+    ]
+    out = assemble_results(
+        fused, top_k=5, max_per_source_type=1,
+        reject=lambda c: c.source_key == "noise",
+        content_key=lambda c: c.content,
+    )
+    keys = [c.source_key for c in out]
+    assert "noise" not in keys and "a4" not in keys
+    # a1 takes the single capped slot; a2 and a3 backfill in score order.
+    assert keys == ["a1", "a2", "a3"]
