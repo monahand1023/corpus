@@ -244,6 +244,12 @@ class CorpusConfig(BaseModel):
             "reranker": raw.get("reranker", {}),
             "pruning": raw.get("pruning", {}),
             "performance": raw.get("performance", {}),
+            # Every field declared on this class must appear here. `contextual`
+            # was declared and never read, so `[contextual]` in a corpus.toml
+            # parsed as valid TOML and was silently discarded -- min_tokens,
+            # model and window_size could not be configured at all, and
+            # nothing said so. `test_every_declared_section_is_read` pins it.
+            "contextual": raw.get("contextual", {}),
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }

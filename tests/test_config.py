@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import corpus.config
 from corpus.config import ConfigError, CorpusConfig
 
 
@@ -162,3 +163,50 @@ def test_performance_sizes_must_be_positive() -> None:
         PerformanceConfig(cache_size_mb=0)
     with pytest.raises(ValidationError):
         PerformanceConfig(mmap_size_mb=-1)
+
+
+def test_the_contextual_section_is_actually_read(tmp_path: Path) -> None:
+    """`[contextual]` used to be declared on CorpusConfig and never read.
+
+    A corpus.toml setting min_tokens / model / window_size parsed as valid
+    TOML and was silently discarded -- the defaults always won, with no error
+    and no warning. It was caught only because a dry-run's chunk count did not
+    match an independent hand count, and it would otherwise have spent real
+    money contextualizing chunks the operator had explicitly excluded.
+    """
+    cfg_path = tmp_path / "corpus.toml"
+    cfg_path.write_text(
+        '[corpus]\ndb_path = "./x.db"\n\n'
+        "[contextual]\nmin_tokens = 260\nwindow_size = 12\n"
+    )
+
+    config = CorpusConfig.load(cfg_path)
+
+    assert config.contextual.min_tokens == 260
+    assert config.contextual.window_size == 12
+
+
+def test_every_declared_section_is_read_from_the_toml() -> None:
+    """Structural guard for the whole class of bug, not just `contextual`.
+
+    A field declared on CorpusConfig but absent from `load`'s merge dict is
+    unconfigurable and fails silently. Reading the source is the only way to
+    catch that: every such field still type-checks, still validates, and still
+    returns its default.
+    """
+    import ast
+    import re
+
+    source = Path(corpus.config.__file__).read_text()
+    declared = [
+        node.target.id
+        for cls in ast.walk(ast.parse(source))
+        if isinstance(cls, ast.ClassDef) and cls.name == "CorpusConfig"
+        for node in cls.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+    read = set(re.findall(r'raw\.get\("([a-z_]+)"', source))
+    # db_path comes out of the [corpus] section rather than one of its own.
+    missing = [d for d in declared if d not in read and d != "db_path"]
+
+    assert not missing, f"declared on CorpusConfig but never read from TOML: {missing}"
