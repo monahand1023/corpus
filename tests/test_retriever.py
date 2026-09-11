@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from corpus.db.sqlite import ChunkStore, StoredChunk
+import corpus.retriever
 from corpus.retriever import Retriever, assemble_results
 from corpus.types import Chunk, ChunkKind, ChunkMetadata
 from corpus.util.hash import chunk_id, sha256
@@ -500,8 +501,14 @@ def test_duplicate_filter_sources_do_not_double_fetch_or_change_results(tmp_path
         "anything", top_k=5, filter_sources=["notes", "notes", "photos"],
         max_per_source_type=None, hybrid=False,
     )
-    notes_calls = [c for c in calls if c == ["notes"]]
-    assert len(notes_calls) == 1, f"notes fetched {len(notes_calls)} times, expected 1: {calls}"
+    # Assert the INTENT, not the pool-building shape: a duplicated entry must
+    # not cause the same source type to be fetched twice. (This previously
+    # pinned "exactly one call with filter_sources == ['notes']", which was a
+    # detail of the per-source fan-out the adaptive pool replaced.)
+    for c in calls:
+        assert c is None or len(c) == len(set(c)), f"duplicate types in one fetch: {c}"
+    notes_fetches = [c for c in calls if c is not None and "notes" in c]
+    assert len(notes_fetches) == 1, f"notes fetched {len(notes_fetches)} times: {calls}"
 
     result_deduped = r.query(
         "anything", top_k=5, filter_sources=["notes", "photos"],
@@ -757,3 +764,92 @@ def test_backfill_only_promotes_chunks_that_passed_every_other_gate() -> None:
     assert "noise" not in keys and "a4" not in keys
     # a1 takes the single capped slot; a2 and a3 backfill in score order.
     assert keys == ["a1", "a2", "a3"]
+
+
+# --- adaptive candidate pool -------------------------------------------------
+#
+# Every chunk has a distance to the query, so a source type holding most of the
+# corpus fills the pool by volume regardless of relevance. A type absent from
+# the POOL cannot be recovered downstream: neither the diversity cap nor its
+# backfill invents candidates. Measured on a large archive that is predominantly one
+# type, a global-only pool starved a type completely on 1 query in 12.
+
+
+@pytest.fixture
+def skewed(tmp_path: Path) -> Retriever:
+    """One type swamps the store, mimicking the live 82/9/9 split."""
+    store = ChunkStore(tmp_path / "skew.db", embedding_dim=DIM)
+    items = []
+    # 200 "bulk" chunks packed tightly around the query vector.
+    for i in range(200):
+        items.append((make_chunk("bulk", f"b-{i}", 0, f"bulk {i}"), fake_embedding(i)))
+    # 3 "rare" chunks further away -- they lose every global top-k race.
+    for i in range(3):
+        items.append((make_chunk("rare", f"r-{i}", 0, f"rare {i}"), fake_embedding(5000 + i)))
+    store.upsert_batch(items)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+    yield r
+    store.close()
+
+
+def test_a_starved_source_type_is_topped_up_into_the_pool(skewed: Retriever) -> None:
+    result = skewed.query("anything", top_k=5, max_per_source_type=2, hybrid=False)
+
+    assert "rare" in {c.source_type for c in result.chunks}, (
+        "the swamped type never reached the candidate pool, so the cap and its "
+        "backfill had nothing to select"
+    )
+
+
+def test_the_top_up_does_not_fire_when_every_type_is_represented(tmp_path: Path) -> None:
+    """The cost must be paid only by queries that were actually starved."""
+    store = ChunkStore(tmp_path / "even.db", embedding_dim=DIM)
+    items = []
+    for i in range(10):
+        items.append((make_chunk("a", f"a-{i}", 0, f"a {i}"), fake_embedding(i)))
+        items.append((make_chunk("b", f"b-{i}", 0, f"b {i}"), fake_embedding(i + 50)))
+    store.upsert_batch(items)
+    embedder = MagicMock()
+    embedder.embed_query = MagicMock(return_value=fake_embedding(0))
+    r = Retriever(store=store, embedder=embedder)
+
+    calls: list[object] = []
+    real = store.vector_search
+
+    def counting(embedding, top_k, filter_sources=None):  # type: ignore[no-untyped-def]
+        calls.append(filter_sources)
+        return real(embedding, top_k, filter_sources=filter_sources)
+
+    store.vector_search = counting  # type: ignore[method-assign]
+    r.query("anything", top_k=5, max_per_source_type=3, hybrid=False)
+
+    assert len(calls) == 1, f"expected one global fetch, got {len(calls)}: {calls}"
+    store.close()
+
+
+def test_the_pool_never_contains_the_same_chunk_twice(skewed: Retriever) -> None:
+    """A chunk can arrive from BOTH the global pass and its type's top-up.
+
+    RRF ranks by position, so the same id appearing twice would be scored as
+    two candidates and double-weighted. The old fan-out queried each type
+    exactly once and could not produce duplicates; this can.
+    """
+    captured: list[list[StoredChunk]] = []
+    real_rrf = corpus.retriever.reciprocal_rank_fusion
+
+    def spy(lists, weights, key):  # type: ignore[no-untyped-def]
+        captured.extend(lists)
+        return real_rrf(lists, weights=weights, key=key)
+
+    corpus.retriever.reciprocal_rank_fusion = spy
+    try:
+        skewed.query("anything", top_k=5, max_per_source_type=2, hybrid=True)
+    finally:
+        corpus.retriever.reciprocal_rank_fusion = real_rrf
+
+    assert captured, "fusion was never reached"
+    vector_list = captured[0]
+    ids = [c.id for c in vector_list]
+    assert len(ids) == len(set(ids)), "duplicate chunk in the vector candidate list"
