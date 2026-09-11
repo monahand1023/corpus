@@ -232,3 +232,23 @@ path = "~/Documents/notes"
 # pattern = '\b[A-Z]{2,}-\d+\b'
 # source_type = "tickets"
 # description = "Jira-style keys (PROJ-123)"
+
+# --- Query logging (optional, OFF by default) -----------------------------
+# Appends every query the MCP server serves to a local JSONL file.
+#
+# Why you might want it: tuning questions -- how to weight BM25 against
+# vectors, whether reranking earns its latency, whether Contextual Retrieval
+# pays for itself -- can only be answered against realistic queries. A gold
+# set you BUILD measures its own construction: queries mined from document
+# titles share nearly every token with their target and so measure lexical
+# overlap, and queries written by a model echo the source's vocabulary.
+# Served queries have neither bias.
+#
+# Privacy: queries say what you were looking for and when. The file is local,
+# nothing here transmits it, and deleting it removes the record. Set
+# include_results = false to log that a query happened without the documents
+# it surfaced.
+# [query_log]
+# enabled = true
+# path = "./data/queries.jsonl"   # defaults to queries.jsonl beside the store
+# include_results = true

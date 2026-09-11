@@ -131,6 +131,24 @@ class PerformanceConfig(BaseModel):
     temp_store_memory: bool = True
 
 
+class QueryLogConfig(BaseModel):
+    """Append served queries to a local JSONL file. OFF by default.
+
+    The point is to answer tuning questions with the queries actually being
+    served rather than a synthesised gold set, because a synthesised set
+    measures its own construction (see `corpus.query_log`).
+
+    Queries are revealing, so this is opt-in, the file stays local, and
+    `include_results` can be cleared to record that a query happened without
+    the documents it surfaced.
+    """
+
+    enabled: bool = False
+    # Defaults alongside the store when enabled and unset.
+    path: Path | None = None
+    include_results: bool = True
+
+
 class ContextualConfig(BaseModel):
     """Settings for `corpus-contextualize`.
 
@@ -220,6 +238,7 @@ class CorpusConfig(BaseModel):
     pruning: PruningConfig = Field(default_factory=PruningConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     contextual: ContextualConfig = ContextualConfig()
+    query_log: QueryLogConfig = Field(default_factory=QueryLogConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
     references: list[ReferencePattern] = Field(default_factory=list)
 
@@ -250,6 +269,7 @@ class CorpusConfig(BaseModel):
             # model and window_size could not be configured at all, and
             # nothing said so. `test_every_declared_section_is_read` pins it.
             "contextual": raw.get("contextual", {}),
+            "query_log": raw.get("query_log", {}),
             "sources": raw.get("sources", []),
             "references": raw.get("references", []),
         }

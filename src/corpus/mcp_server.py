@@ -27,6 +27,7 @@ from corpus.credentials import describe_search, resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.embedder.base import Embedder
 from corpus.embedder.factory import make_embedder
+from corpus.query_log import QueryTimer, log_query
 from corpus.retriever import Retriever
 
 logging.basicConfig(
@@ -143,6 +144,35 @@ def _safe_tool(fn: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str
     return wrapper
 
 
+def _log_path() -> Path | None:
+    """Where to append served queries, or None when logging is off.
+
+    Defaults beside the store rather than the cwd: an MCP server's working
+    directory is whatever launched it, and a log that lands somewhere
+    different on each launch is worse than no log.
+    """
+    cfg = _config
+    if cfg is None or not cfg.query_log.enabled:
+        return None
+    return Path(cfg.query_log.path) if cfg.query_log.path else cfg.db_path.parent / "queries.jsonl"
+
+
+def _record(tool: str, query: str, chunks: list, elapsed_ms: float, **extra: object) -> None:
+    """Append one served query. Never raises -- see corpus.query_log."""
+    path = _log_path()
+    if path is None:
+        return
+    include = _config is not None and _config.query_log.include_results
+    log_query(
+        path,
+        tool=tool,
+        query=query,
+        results=[(c.source_type, c.source_key) for c in chunks] if include else None,
+        elapsed_ms=elapsed_ms,
+        **extra,
+    )
+
+
 @mcp.tool(description="Semantic + BM25 hybrid search over the corpus. Returns top-K chunks.")
 @_safe_tool
 async def search_knowledge(
@@ -175,10 +205,19 @@ async def search_knowledge(
                 f"Unknown source type(s): {', '.join(sorted(unknown))}. "
                 f"This corpus has: {', '.join(sorted(known))}."
             )
-    result = await asyncio.to_thread(
-        retriever.query, query, top_k, filter_sources
-    )
+    with QueryTimer() as timer:
+        result = await asyncio.to_thread(
+            retriever.query, query, top_k, filter_sources
+        )
     chunks = result.chunks
+    _record(
+        "search_knowledge",
+        query,
+        chunks,
+        timer.elapsed_ms,
+        top_k=top_k,
+        filters=filter_sources,
+    )
     if not chunks:
         return f"No results for: {query}"
     return _UNTRUSTED_PREFIX + "\n\n---\n\n".join(
