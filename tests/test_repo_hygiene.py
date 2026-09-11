@@ -95,3 +95,85 @@ def test_no_real_corpus_toml_in_the_repository_root() -> None:
         "into a private consumer repo instead (the a mail consumer / a media consumer / "
         "a document consumer pattern), never inside corpus itself."
     )
+
+
+# --- identifiers borrowed from private archives ------------------------------
+#
+# The checks above guard against private *files* landing here. They do not
+# guard against a private identifier landing inside a tracked source file,
+# which is how a real ticket key from a private consumer's archive reached
+# this repo's test suite and sat there through 71 commits. It never reached
+# origin, but nothing would have stopped it.
+#
+# The guard is PATTERN-based rather than a denylist of private project names,
+# for the obvious reason: writing those names here to forbid them would put
+# them in the public repo, which is the thing being prevented. So instead the
+# rule is stated positively -- a ticket key in this repo must be a recognisable
+# placeholder -- which leaks nothing and holds for any private archive, named
+# or not, present or future.
+
+import re
+
+# Hyphen-number identifiers that are technical vocabulary, not ticket keys.
+_STANDARD_PREFIXES = {
+    "UTF", "PDF", "CVE", "UUID", "MPEG", "ISO", "RFC", "SHA", "MD", "AES",
+    "RSA", "HTTP", "JPEG", "PNG", "GIF", "MP", "H", "X", "ES", "PEP", "BGE",
+}
+
+# Placeholder prefixes a public test suite may legitimately use.
+_PLACEHOLDER_PREFIXES = {"TKT", "PROJ", "TICKET", "DOC", "ABC", "FOO", "BAR", "TEST", "EXAMPLE"}
+
+_TICKET_KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-[0-9]{1,6}\b")
+
+_TEXT_SUFFIXES = {
+    ".py", ".md", ".toml", ".txt", ".cfg", ".ini", ".yml", ".yaml",
+    ".json", ".sh", ".rst", ".html",
+}
+
+
+def _tracked_text_files() -> list[Path]:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return [
+        REPO_ROOT / name
+        for name in out.split("\0")
+        # This file is skipped because it DEFINES the pattern: the regex
+        # source and the prefix allowlists are themselves ticket-key-shaped.
+        if name and Path(name).suffix in _TEXT_SUFFIXES
+        and Path(name).name != Path(__file__).name
+    ]
+
+
+def test_no_ticket_keys_from_a_private_archive() -> None:
+    offenders: list[str] = []
+    for path in _tracked_text_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for match in _TICKET_KEY.finditer(line):
+                prefix = match.group(1)
+                if prefix in _STANDARD_PREFIXES or prefix in _PLACEHOLDER_PREFIXES:
+                    continue
+                offenders.append(
+                    f"  {path.relative_to(REPO_ROOT)}:{lineno}: {match.group(0)}"
+                )
+
+    assert not offenders, (
+        "Found ticket-key-shaped identifier(s) in this PUBLIC repo that are "
+        "neither a known technical standard nor a recognisable placeholder:\n"
+        + "\n".join(offenders)
+        + "\n\n"
+        "corpus is a PUBLIC repo (github.com/monahand1023/corpus). A real key "
+        "from a private consumer's archive must never appear here, not even as "
+        "test data -- it discloses that the archive exists, what its "
+        "identifiers look like, and roughly how large it is. Use a placeholder "
+        f"prefix instead ({', '.join(sorted(_PLACEHOLDER_PREFIXES))}), or add "
+        "a genuinely standard prefix to _STANDARD_PREFIXES if that is what "
+        "this is."
+    )
