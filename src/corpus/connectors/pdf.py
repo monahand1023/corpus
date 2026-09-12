@@ -41,6 +41,7 @@ class PdfConnector:
         self._root = Path(os.path.expanduser(str(path))).resolve()
         self._glob = glob
         self.failed_files = 0
+        self.skipped_files = 0
 
     def load(self) -> Iterable[SourceDocument]:
         # Per-file read failures are counted, not just logged: a skipped file
@@ -50,7 +51,11 @@ class PdfConnector:
         # non-zero. Reset per run so a reused instance cannot suppress pruning
         # forever on the strength of an old failure.
         self.failed_files = 0
+        self.skipped_files = 0
         from pypdf import PdfReader
+
+        # Lazy like PdfReader above: pypdf is an optional extra.
+        from pypdf.errors import FileNotDecryptedError
 
         if not self._root.is_dir():
             raise FileNotFoundError(
@@ -70,6 +75,23 @@ class PdfConnector:
                 # per-source handler would not catch it either, taking down an
                 # entire `--all` run.
                 pages = list(reader.pages)
+            except FileNotDecryptedError:
+                # PERMANENT, so it counts as a skip rather than a failure.
+                # `failed_files` means "might succeed next time" and suppresses
+                # orphan pruning for the whole source; an encrypted PDF will
+                # never decrypt without its password, so counting it there
+                # switches pruning OFF FOREVER for that source. Measured on a
+                # real library: a handful of password-protected PDFs in one source meant
+                # it could never prune a deleted document again, on any run.
+                # `skipped_files` is the right bucket -- reported and visible,
+                # but it does not gate pruning, because the absence is not a
+                # surprise and will not resolve itself.
+                logger.info(
+                    "%s: skipping '%s' -- encrypted, no password available",
+                    self.source_type, path.name,
+                )
+                self.skipped_files += 1
+                continue
             except Exception as e:  # pypdf raises many subclasses; treat any read failure as skip
                 logger.warning("PDF source '%s': cannot open %s: %s", self.source_type, path, e)
                 self.failed_files += 1

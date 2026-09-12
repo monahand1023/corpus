@@ -65,6 +65,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is ~260 tokens in the units `token_count` records.
 
 ### Fixed
+- **An encrypted PDF switched orphan pruning off permanently.** `failed_files`
+  means "might succeed next time" and suppresses pruning for the whole source,
+  which is right for a locked file or a transient I/O error. A
+  password-protected PDF is not that: no future run will have the password, so
+  counting it there gated pruning off forever — a source with a handful of
+  encrypted PDFs could never remove a deleted document from its index again, on
+  any run. Encryption now counts as `skipped_files` (reported and visible, does
+  not gate pruning). Other read failures are unchanged.
 - **The `[contextual]` config section was parsed and silently discarded**, so
   every value in it was unconfigurable and the default silently stood.
 - **Ingest warnings now name the documents involved, unconditionally.** Every

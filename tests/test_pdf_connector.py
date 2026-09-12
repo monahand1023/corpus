@@ -166,4 +166,39 @@ def test_lazy_parse_failure_is_contained_to_the_file(tmp_path: Path) -> None:
 
     assert len(docs) == 1, "the readable PDF must still be ingested"
     assert docs[0].title == "fine"
-    assert conn.failed_files == 1
+    # An encrypted PDF is PERMANENTLY unreadable, so it is a skip, not a
+    # failure. `failed_files` means "might succeed next time" and suppresses
+    # orphan pruning for the whole source -- counting encryption there turns
+    # pruning off FOREVER, because no future run will have the password.
+    # Measured on a real library: a handful of password-protected PDFs in one source
+    # meant it could never prune a deleted document again.
+    assert conn.skipped_files == 1
+    assert conn.failed_files == 0, "encryption is permanent; it must not gate pruning"
+
+
+def test_a_transient_read_failure_still_counts_as_a_failure(tmp_path: Path) -> None:
+    """The counterpart to the test above: only PERMANENT unreadability is a
+    skip. A malformed or momentarily unreadable file might read fine next run,
+    so it must still suppress pruning -- otherwise its chunks get deleted as
+    though the file had genuinely disappeared."""
+    (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "fine.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    def reader_factory(path: str) -> MagicMock:
+        r = MagicMock()
+        if Path(path).name == "broken.pdf":
+            type(r).pages = property(
+                lambda self: (_ for _ in ()).throw(OSError("temporarily unreadable"))
+            )
+        else:
+            r.pages = [MagicMock(extract_text=MagicMock(return_value="Readable body."))]
+            r.metadata = None
+        return r
+
+    conn = PdfConnector(source_type="papers", path=tmp_path)
+    with patch("pypdf.PdfReader", side_effect=reader_factory):
+        docs = list(conn.load())
+
+    assert len(docs) == 1
+    assert conn.failed_files == 1, "a transient failure must still gate pruning"
+    assert conn.skipped_files == 0
