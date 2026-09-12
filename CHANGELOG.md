@@ -7,6 +7,75 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`corpus.retriever.assemble_results()`** — the selection pass (source
+  dedupe, the per-type diversity cap, backfill, truncation to `top_k`) is now a
+  shared function rather than something each consumer reimplements. Hooks cover
+  the parts that genuinely differ: `reject` drops a chunk outright (domain
+  noise, date or author filters), `source_key` overrides the dedupe identity
+  (keying email by THREAD, so one long thread cannot fill an answer), and
+  `content_key` adds a second pass collapsing text republished across document
+  versions.
+- **`corpus.retriever.build_vector_pool()`** — candidate-pool construction,
+  likewise shared. One global k-NN followed by a targeted top-up for any source
+  type holding fewer than `max_per_source_type` candidates.
+- **`ChunkStore.sweep_orphans()`** — prunes orphans AND reports which DOCUMENTS
+  stopped being found, computed from the scan it already performs.
+  `delete_orphans()` stays as a thin wrapper for callers wanting only a count.
+- **`ChunkStore.vanished_documents()`** — which documents disappeared, for the
+  one path with no sweep to ride on (a prune suppressed by read failures).
+- **`IngestResult.vanished_detail`** — names the documents behind a warning.
+  Every other guard reports a magnitude ("19% fewer documents", "412 orphans"),
+  which says something moved but not what, leaving an operator to diff
+  directory listings by hand.
+- **`corpus.mcp_util.UNTRUSTED_PREFIX` and `format_chunk_block()`** — the
+  data-not-instructions marker and the chunk renderer, importable by consumers
+  with their own MCP server. `mcp_util` exists so they need not import
+  `mcp_server`, which builds a FastMCP instance and reconfigures logging at
+  import time.
+- **`[query_log]` config section** — opt-in, local JSONL beside the store,
+  off by default. Records the query, each result's `(source_type, source_key)`
+  and elapsed ms: enough to rebuild a gold set from real usage later without
+  copying document text into a second place. Recording what someone searched
+  for is a decision they make, not one they discover.
+
+### Changed
+- **The diversity cap now backfills instead of truncating.** The cap was
+  ABSOLUTE — a chunk over it was dropped and nothing replaced it — so the real
+  ceiling on any answer was (source types x cap), whatever `top_k` said. On a
+  store with few source types that silently removed most of a result set. The
+  cap is a PREFERENCE for spread, not a budget on the answer: it is honoured
+  first, then any slots it left empty are filled from what it displaced, best
+  scoring first. A short result now means the candidate pool was genuinely
+  exhausted, which is the only honest reason to return fewer than were asked
+  for.
+- **The vector candidate pool is adaptive rather than a per-source fan-out.**
+  Every chunk has a distance to the query, so a source type holding most of a
+  corpus fills the pool by volume regardless of relevance — and a type absent
+  from the POOL cannot be recovered downstream, because neither the cap nor its
+  backfill invents candidates. Fanning out per source type on every query fixed
+  that but cost roughly 2.5x on a narrow corpus to help a minority of queries.
+  One global k-NN plus a top-up only for under-served types costs a fraction of
+  that, and is FASTER on a corpus with many source types, where a single large
+  k-NN beats dozens of small filtered ones.
+- **`should_contextualize` floor raised from 50 to 260 tokens.** Derived, not
+  guessed: the generated blurb is a near-constant ~141 characters whatever the
+  chunk size, so its SHARE of the embedded text is what decides whether it
+  helps. Measured harmful where the share reached ~28%, neutral at ~8%. Holding
+  the share at or under 12% needs content of at least ~1,034 characters, which
+  is ~260 tokens in the units `token_count` records.
+
+### Fixed
+- **The `[contextual]` config section was parsed and silently discarded**, so
+  every value in it was unconfigurable and the default silently stood.
+- **Ingest warnings now name the documents involved, unconditionally.** Every
+  guard fires on a RATIO, which leaves two shapes invisible by construction: a
+  drop UNDER the yield-drop threshold, and substitution — N documents replaced
+  by N others, leaving document count, chunk count and orphan ratio all
+  unremarkable while content turns over. Both are now reported, and both count
+  toward the CLI exit code; without that they would print and still exit 0.
+  The reporting is free — it rides on the scan the orphan sweep already makes.
+
+### Added (earlier in this cycle)
 - **Ingest reports a rise in permanently-skipped inputs.** `skipped_files`
   means "this connector will never read these", which is why — unlike
   `failed_files` — it does not suppress pruning. That is right for a format

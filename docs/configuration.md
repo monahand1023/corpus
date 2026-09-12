@@ -114,7 +114,7 @@ The embedder layer is a Protocol (`src/corpus/embedder/base.py`). To add OpenAI,
 | Setting | Type | Default | Notes |
 |---|---|---|---|
 | `top_k` | int | `5` | Default result count when callers don't override. 1-20. |
-| `max_per_source_type` | int? | `3` | Diversity cap; no single source type fills more than this. `null` to disable. |
+| `max_per_source_type` | int? | `3` | Diversity cap: how many results each source type gets *before* any backfill. `null` to disable. See below — this is a preference, not a hard ceiling. |
 | `hybrid` | bool | `true` | Enable BM25+vector fusion. Disable for vector-only baseline. |
 
 ```toml
@@ -123,6 +123,22 @@ top_k = 5
 max_per_source_type = 3
 hybrid = true
 ```
+
+**`max_per_source_type` is a preference, not a hard ceiling.** It shapes the
+front of the result list, then any slots it left empty are filled from the
+chunks it displaced, best-scoring first. So a type CAN exceed the cap when the
+alternative is returning fewer results than were asked for.
+
+It used to be absolute, and that was wrong: the cap multiplied by the number of
+source types became the real ceiling on every answer, whatever `top_k` said. A
+store with three source types and a cap of 3 could never return more than 9
+results — a tool advertising 30 would quietly return a fraction of them, and a
+query whose matches were mostly one type returned barely a handful. A short
+result now means the candidate pool was genuinely exhausted, which is the only
+honest reason to return fewer than were requested.
+
+If you want a hard ceiling per type, lower `top_k` instead — that is the knob
+that means "return no more than this".
 
 These are *defaults*. CLI flags (`-k`, `--no-hybrid`) and MCP tool args override per call.
 
@@ -148,6 +164,37 @@ corpus-ingest --source photos --prune-anyway
 ```
 
 `--prune-anyway` also overrides the pre-existing `failed_files` gate (see [`troubleshooting.md`](troubleshooting.md)); both are the same "I've reviewed this, delete anyway" escape hatch.
+
+## `[query_log]` — record served queries (opt-in, local)
+
+| Setting | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | Off unless you turn it on. Recording what someone searched for is a decision they make, not one they discover. |
+| `path` | string | *(beside the store)* | Defaults to `queries.jsonl` next to `db_path`, NOT the working directory — an MCP server's cwd is whatever launched it, and a log that lands somewhere different on each launch is worse than no log. |
+| `include_results` | bool | `true` | Record each result's `(source_type, source_key)`. Set false to log only the query text and timing. |
+
+```toml
+[query_log]
+enabled = true
+```
+
+Appends one JSON object per served query: the query text, each result's
+`(source_type, source_key)`, and elapsed milliseconds. Enough to judge later
+whether a result was any good, and to rebuild an evaluation set from real
+usage — without copying document text into a second place.
+
+**Why you would want this.** Any gold set you write by hand or mine from your
+own corpus partly measures its own construction: title-mined queries measure
+lexical overlap, and queries written by a model echo the source's vocabulary.
+Tuning `fts_weight`, reranking or contextualization against such a set can
+produce a clean, confident, wrong answer — a sweep that looks monotone on one
+synthesised set can reverse on another. Queries people actually ran are the
+only unbiased population, and they can only be collected going forward, so
+every day without logging is data that cannot be recovered later.
+
+Writing failures are swallowed after one warning: a full disk or a read-only
+directory must never take down retrieval for the sake of a log. Delete the
+file to erase the history; nothing transmits it anywhere.
 
 ## `[performance]` — SQLite memory tuning
 

@@ -178,6 +178,49 @@ uv run pytest tests/ -q
 
 **For MCP-specific changes** (tool schemas, FastMCP wiring, output formatting), restart Claude Code. There's no `corpus-mcp --reload` because the protocol is bound to the subprocess lifetime.
 
+## Building your own MCP server
+
+If your consumer needs its own tool vocabulary, import the shared machinery
+from `corpus.mcp_util` rather than reimplementing it — and deliberately NOT
+from `corpus.mcp_server`, which constructs a FastMCP instance and reconfigures
+the root logger at import time. Importing that module would give you a second
+server and a rewired logger as side effects.
+
+```python
+from corpus.mcp_util import (
+    UNTRUSTED_PREFIX,      # the data-not-instructions banner
+    QueryTimer,            # elapsed-ms measurement
+    format_chunk_block,    # the [i] source:key / title / URL / content renderer
+    record_query,          # append to the query log, never raises
+    safe_tool,             # decorator: generic error text, detail to the log
+)
+
+@mcp.tool(description="...")
+@safe_tool
+async def search_knowledge(query: str, top_k: int = 5) -> str:
+    chunks = ...
+    return UNTRUSTED_PREFIX + "\n\n---\n\n".join(
+        format_chunk_block(i, c) for i, c in enumerate(chunks, 1)
+    )
+```
+
+`format_chunk_block` takes an optional `extra` callable returning one more
+header line — useful when your chunks have no URL and traceability comes from
+somewhere else (an originating file path, a message sender, a folder).
+
+**Mark every tool that returns indexed text.** Corpus content is not written by
+the person running the server: an archive of mail, tickets, pull requests or
+shared documents is full of text other people wrote, and anyone who ever wrote
+into it could have included something shaped like an instruction — years before
+it was indexed, with no idea it would be fed to a model. Unmarked, it reaches
+the model indistinguishable from the operator's own words. Tools returning only
+aggregates (counts, coverage summaries) need no banner; anything carrying
+document text, titles, or a generated summary OF document text does. A summary
+is generated FROM the content, so an injection can survive summarisation.
+
+This is a framing, not a sandbox. It does not make injection impossible — it
+removes the case where there is no defence at all.
+
 ## Multiple corpora
 
 If you want different MCP servers for different archives (work archive vs personal notes, for instance), give each its own entry:
