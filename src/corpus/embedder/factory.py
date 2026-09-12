@@ -33,13 +33,16 @@ def make_embedder(
         return VoyageEmbedder(model=model, api_key=api_key)
 
     if provider == "gemini":
-        try:
-            from corpus.embedder.gemini import GeminiEmbedder
-        except ImportError as e:
-            raise ImportError(
-                "The 'gemini' embedder requires the google-genai SDK, which is not "
-                "installed. Install it with `pip install corpus-rag[gemini]`."
-            ) from e
+        # NOT wrapped in try/except ImportError, unlike `voyage` directly above.
+        # The asymmetry is deliberate and reflects where each SDK is imported:
+        # `voyage.py` does `import voyageai` at module level, so importing the
+        # module genuinely raises when the SDK is absent and the wrapper there
+        # is live. `gemini.py` imports `google.genai` lazily inside
+        # `GeminiEmbedder.__init__`, so this import cannot raise for a missing
+        # SDK -- a wrapper here would be dead code that merely looks like
+        # protection. The real handler lives at the lazy import in
+        # `GeminiEmbedder.__init__`, which raises with the same install hint.
+        from corpus.embedder.gemini import GeminiEmbedder
 
         return GeminiEmbedder(model=model, api_key=api_key, dim=dim)
 

@@ -1094,3 +1094,31 @@ def test_every_fts_write_goes_through_the_single_text_builder() -> None:
         "normalize_for_fts should be called only inside _fts_text; found at lines "
         f"{[i + 1 for i in calls]}"
     )
+
+
+def test_busy_timeout_is_five_seconds_on_every_connection(tmp_path: Path) -> None:
+    """Opening the store from a second process while the MCP server holds it
+    must wait briefly rather than raise `database is locked` immediately.
+
+    This pins the EFFECTIVE value, not the pragma, because the pragma alone is
+    not what provides it: `sqlite3.connect()` already defaults to timeout=5.0,
+    i.e. busy_timeout=5000, so the explicit `PRAGMA busy_timeout = 5000` is
+    belt-and-braces. A first version of this test asserted the pragma's value
+    and passed happily with the pragma moved into the write-only branch --
+    vacuous, because Python was supplying the number either way.
+
+    Pinning the effective value instead catches the regression from ANY of its
+    sources: the pragma changing, a `timeout=` argument appearing on the
+    connect call, or a future Python changing its default. Both connection
+    kinds are checked because the read-only branch skips journal_mode and
+    synchronous, and it would be easy to move this pragma in there by mistake
+    -- removing the timeout from exactly the read-only MCP connection that
+    motivated it.
+    """
+    rw = ChunkStore(tmp_path / "busy.db", embedding_dim=DIM)
+    assert rw._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    rw.close()
+
+    ro = ChunkStore(tmp_path / "busy.db", embedding_dim=DIM, read_only=True)
+    assert ro._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    ro.close()

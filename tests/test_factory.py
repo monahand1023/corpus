@@ -42,15 +42,28 @@ def test_make_embedder_missing_voyage_sdk_gives_actionable_error(monkeypatch) ->
 
 
 def test_make_embedder_missing_gemini_sdk_gives_actionable_error(monkeypatch) -> None:
+    """Only the `google` SDK is absent -- `corpus.embedder.gemini` imports fine.
+
+    That is the real shape of this failure, and it matters: `gemini.py` imports
+    `google.genai` LAZILY inside `GeminiEmbedder.__init__`, so importing the
+    module never raises for a missing SDK. This test used to fake
+    `corpus.embedder.gemini` itself failing to import, which cannot happen for
+    that reason -- and passing required a try/except in the factory that could
+    never fire. The protection that actually runs is the lazy import's own
+    handler, so that is what this exercises.
+    """
     import builtins
 
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "corpus.embedder.gemini" or name.startswith("google"):
+        if name.startswith("google"):
             raise ImportError("No module named 'google'")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    # A key must be present, or __init__ raises about the key before it ever
+    # reaches the import.
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     with pytest.raises(ImportError, match=r"pip install corpus-rag\[gemini\]"):
         make_embedder(provider="gemini", model="gemini-embedding-001", dim=1536)
