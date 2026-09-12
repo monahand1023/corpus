@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from corpus.db.sqlite import ChunkStore, StoredChunk
 import corpus.retriever
+from corpus.db.sqlite import ChunkStore, StoredChunk
 from corpus.retriever import Retriever, assemble_results
 from corpus.types import Chunk, ChunkKind, ChunkMetadata
 from corpus.util.hash import chunk_id, sha256
