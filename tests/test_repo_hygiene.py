@@ -33,6 +33,7 @@ blocks it from ever being committed, even via `git add -f`.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +113,6 @@ def test_no_real_corpus_toml_in_the_repository_root() -> None:
 # placeholder -- which leaks nothing and holds for any private archive, named
 # or not, present or future.
 
-import re
 
 # Hyphen-number identifiers that are technical vocabulary, not ticket keys.
 _STANDARD_PREFIXES = {
