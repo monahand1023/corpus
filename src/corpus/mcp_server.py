@@ -128,7 +128,9 @@ def _log_path() -> Path | None:
     return Path(cfg.query_log.path) if cfg.query_log.path else cfg.db_path.parent / "queries.jsonl"
 
 
-def _record(tool: str, query: str, chunks: list, elapsed_ms: float, **extra: object) -> None:
+def _record(
+    tool: str, query: str, chunks: list[StoredChunk], elapsed_ms: float, **extra: object
+) -> None:
     """Append one served query. Never raises -- see corpus.query_log."""
     record_query(
         _log_path(),
