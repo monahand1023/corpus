@@ -211,6 +211,35 @@ Either `source_type` in the tool call is misspelled or that source isn't in your
 
 You're running an older version that doesn't pass `check_same_thread=False` to sqlite3. Pull latest — this was fixed early in development.
 
+### `ps` shows dozens of MCP processes
+
+Mostly expected. Count them by owner before assuming a leak:
+
+```sh
+ps -eo pid,ppid,command | grep -i mcp | grep -v grep
+```
+
+Each Claude session spawns one process per configured server, and most sit
+behind a resident `uv run` or `npm exec` wrapper — so ten servers show up as
+roughly eighteen processes, doubled again for a second session. Those are
+owned, not leaked: they exit when their client does, because closing the
+stdio pipe ends them. You can halve the count by pointing your client config
+at the venv entry point (`/path/to/.venv/bin/corpus-mcp`) instead of
+`uv --directory /path/to run corpus-mcp`, which drops the wrapper layer.
+
+A process whose **PPID is 1** is the real leak, and it will only ever be one
+started with a daemon transport (`--transport http`). Check whether anything
+still uses it before killing it:
+
+```sh
+lsof -nP -iTCP:8000 | grep -v LISTEN   # any established connections?
+```
+
+Servers built on current `corpus.mcp_util` shut themselves down when
+orphaned and refuse to start a second copy on the same port — see
+"Server lifetime" in `docs/mcp_integration.md`. A reboot clears any that
+predate those guards.
+
 ### Changes to MCP code aren't reflected in Claude Code
 
 The MCP subprocess caches imports. Restart Claude Code (full app restart, not just a new window). Or do most of your iteration via the CLI commands, which always pick up fresh code.

@@ -221,6 +221,63 @@ is generated FROM the content, so an injection can survive summarisation.
 This is a framing, not a sandbox. It does not make injection impossible — it
 removes the case where there is no defence at all.
 
+## Server lifetime: stdio versus a daemon transport
+
+These two transports fail in opposite directions, and the difference decides
+which guards a server needs.
+
+**stdio needs none of them.** The transport *is* the pipe from the client, so
+one client session means exactly one process — by definition, not by accident.
+A machine running several Claude sessions will show several copies of every
+stdio server, and that is correct: two clients cannot share one pipe. They are
+not leaked, they are owned. Closing the pipe ends them (measurably, in about
+300ms), so killing a client — however violently — takes its servers with it.
+
+Do not put a run-lock on a stdio path. The first session would win and every
+later one would find the server refusing to start, which is a worse failure
+than the one the lock prevents.
+
+**An HTTP/SSE server has neither property.** Nothing owns the process, so
+nothing reaps it: when the shell that launched one exits, the server is
+reparented to init and keeps listening indefinitely. Two guards supply what
+the pipe would have:
+
+```python
+from corpus.mcp_util import (
+    claim_single_instance,  # flock run-lock; returns the holder's PID, or None
+    port_holder,            # human-readable "who has this port", or None
+    exit_when_orphaned,     # shut down once reparented to init
+)
+
+if args.transport == "http":
+    holder = claim_single_instance(f"my-archive-http-{args.port}")
+    if holder is not None:
+        logger.info("already serving port %d as pid %d — nothing to do",
+                    args.port, holder)
+        return                      # idempotent: asking twice is not an error
+    conflict = port_holder(args.port)
+    if conflict is not None:
+        logger.error("%s — free it or pass --port", conflict)
+        sys.exit(2)
+    exit_when_orphaned()
+    mcp.run(transport="sse")
+```
+
+`claim_single_instance` uses an `flock`, not a PID file, and the difference is
+the point: the kernel releases an flock when the holder dies by any means,
+including SIGKILL. There is no stale lock to detect and no cleanup path that
+can be skipped, so a crashed server never blocks its own replacement.
+
+The lock and the port are separate resources and can disagree — an unrelated
+program can hold the port while the lock is free — so `port_holder` probes it
+and turns that case into one readable line instead of a bind traceback from
+inside the ASGI server. It races by construction; the lock is what enforces
+exclusion, the probe only explains the common case.
+
+`exit_when_orphaned` returns False and does nothing when the parent is already
+init, because that means deliberate daemonisation (nohup, launchd, a container
+entrypoint) — arming there would kill exactly the servers meant to persist.
+
 ## Multiple corpora
 
 If you want different MCP servers for different archives (work archive vs personal notes, for instance), give each its own entry:
