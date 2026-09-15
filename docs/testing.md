@@ -31,6 +31,7 @@ This is not a criticism of them; it is the reason the next layer exists.
 ```sh
 corpus-smoke --config corpus.toml               # this repo's server
 corpus-smoke --claude-config ~/.claude.json     # every archive Claude launches
+corpus-smoke --claude-config ~/.claude.json --probe 'live-mail=invoice'
 ```
 
 Spawns the real command from the real config and talks the real protocol:

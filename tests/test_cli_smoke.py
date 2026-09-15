@@ -240,3 +240,50 @@ def test_a_terse_status_line_counts_as_empty() -> None:
 
 def test_whitespace_only_is_empty() -> None:
     assert _looks_empty("   \n\t  ")
+
+
+# --- per-server probes -----------------------------------------------------
+# A server backed by a LIVE source rather than an index needs its own probe. A
+# generic one against a live mailbox legitimately finds nothing, and "found
+# nothing" is exactly what a broken server looks like -- so the run reported
+# 5/6 healthy for a server that was working.
+
+
+def _split_probes(raw_probes, names, default):
+    """Mirrors the CLI's parsing; kept here so the rule is pinned."""
+    probes = {}
+    chosen_default = default
+    for raw in raw_probes:
+        name, sep, query = raw.partition("=")
+        if sep and name in names:
+            probes[name] = query
+        else:
+            chosen_default = raw
+    return probes, chosen_default
+
+
+def test_a_bare_probe_replaces_the_default_for_every_server() -> None:
+    probes, default = _split_probes(["invoice"], {"a", "b"}, "original")
+    assert probes == {}
+    assert default == "invoice"
+
+
+def test_a_named_probe_overrides_only_that_server() -> None:
+    probes, default = _split_probes(["live=invoice"], {"live", "other"}, "original")
+    assert probes == {"live": "invoice"}
+    assert default == "original"
+
+
+def test_named_and_bare_probes_combine() -> None:
+    probes, default = _split_probes(
+        ["everything", "live=invoice"], {"live", "other"}, "original"
+    )
+    assert probes == {"live": "invoice"}
+    assert default == "everything"
+
+
+def test_a_query_containing_an_equals_sign_is_not_a_server_override() -> None:
+    # "revenue=2024" names no server, so it is a query, not an override.
+    probes, default = _split_probes(["revenue=2024"], {"live"}, "original")
+    assert probes == {}
+    assert default == "revenue=2024"

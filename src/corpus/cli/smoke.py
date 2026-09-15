@@ -306,7 +306,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Include servers unrelated to corpus (off by default)",
     )
-    parser.add_argument("--probe", default=PROBE_QUERY, help="Search probe query")
+    parser.add_argument(
+        "--probe",
+        action="append",
+        default=[],
+        metavar="[SERVER=]QUERY",
+        help=(
+            "Search probe. Bare QUERY replaces the default for every server; "
+            "SERVER=QUERY overrides just that one. Repeatable. A server "
+            "backed by a LIVE source rather than an index needs its own -- a "
+            "generic probe against a live mailbox legitimately finds nothing, "
+            "which is indistinguishable from the server being broken."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--json", action="store_true", help="Emit JSON")
     args = parser.parse_args(argv)
@@ -345,6 +357,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not targets:
             parser.error(f"no configured server matched {sorted(wanted)}")
 
+    # Split "server=query" overrides from a bare query that replaces the
+    # default for everything.
+    probes: dict[str, str] = {}
+    default_probe = PROBE_QUERY
+    for raw in args.probe:
+        name, sep, query = raw.partition("=")
+        if sep and name in {t.name for t in targets}:
+            probes[name] = query
+        else:
+            default_probe = raw
+
     async def run_all() -> list[ServerReport]:
         reports = []
         for t in targets:
@@ -355,7 +378,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             reports.append(
                 await _smoke_one(
                     t.name, t.command, t.args, t.env,
-                    timeout=args.timeout, probe=args.probe, cwd=t.cwd,
+                    timeout=args.timeout,
+                    probe=probes.get(t.name, default_probe),
+                    cwd=t.cwd,
                 )
             )
         return reports
