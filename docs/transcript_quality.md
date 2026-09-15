@@ -53,6 +53,43 @@ invention, because these are the literal strings subtitle files end with.
 Match the **whole** transcript, never a substring — real talks say "thank you"
 too.
 
+#### Matching it is harder than writing it
+
+A phrase list is easy to write and easy to get silently wrong. A review of an
+early version found **22 of 45 entries could never match anything**, for three
+separate reasons — and the tests passed, because they asserted against the
+list rather than against real model output.
+
+**Credits end in a name.** `"Субтитры создавал"` was in the list; what the
+model emits is `"Субтитры создавал DimaTorzok"`. Whole-string equality cannot
+match a line that ends in an arbitrary studio, community or person. Those
+entries need prefix matching.
+
+**But prefix matching over-reaches.** A fabricated credit frequently sits in
+*front* of real audio, and matching the prefix alone discards the recording to
+remove the noise. `subtitle_boilerplate()` therefore requires what follows the
+prefix to look like a name: short, and not in a script the prefix's language
+does not use. That last clause matters both ways — a CJK credit's tail is
+*always* CJK, so applying the script check blindly made every CJK prefix
+unreachable. Judge the tail against the script the *prefix* is written in.
+
+**Normalisation has to match what transcribers actually emit.** Three traps,
+each of which silently disabled entries:
+
+- Accents and interior punctuation vary by rendering: `"Amara.org"` against
+  `"amara org"`, `"réalisés"` against `"realises"`.
+- Decomposed Unicode. macOS emits NFD routinely, so folding that inspects each
+  character leaves a standalone combining mark untouched and `"vídeo"` cannot
+  match `"video"`. Normalise to NFC *before* folding.
+- Fold accents on **Latin letters only**. NFKD decomposes Japanese dakuten —
+  `ご` becomes `こ` — so blanket decomposition destroys every CJK entry.
+- Include `U+2019`, the apostrophe transcribers default to, and the opening
+  `¡` and `¿`.
+
+The general lesson: **test a phrase list against strings the model really
+produced**, not against the list's own contents. Every defect above passed a
+green test suite.
+
 ### 2. A language nobody speaks
 
 If every detected language is one the archive's people do not speak, the text
