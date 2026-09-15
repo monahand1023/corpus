@@ -1,0 +1,318 @@
+"""The sidecar database a transcription run writes, and an index reads.
+
+Transcribing is slow, expensive and separate from indexing: hours of GPU on
+one side, an embedding API on the other, and no reason for either to wait on
+the other. A sidecar database is the seam. A run fills it; `corpus-ingest`
+reads it whenever it likes; re-running either is cheap because both know what
+is already done.
+
+The schema is shaped by what a long run actually needs, and every table here
+earned its place on a real real archive:
+
+* `transcripts` — what was said. `policy` records the rules in force when the
+  text was ACCEPTED. Rejections carried that from the start and acceptances
+  did not, and the asymmetry showed the moment a rule tightened: finding the
+  transcripts the new rules would never have produced meant a one-off script.
+  With the column it is a query.
+
+* `no_text` — files that transcribed cleanly and produced nothing usable.
+  These are NOT failures; the run did exactly what it should and the audio has
+  no speech in it. Recording them is what makes a restart cheap: without the
+  row the file is simply absent from `transcripts`, so the next run re-decodes
+  and re-transcribes it in full to reach the same answer. One interrupted pass
+  re-paid that for 889 already-examined silent clips before this table existed.
+
+* `dropped_windows` — every window the filter discarded, with the evidence it
+  judged on. Without these rows the filter is unauditable: it makes thousands
+  of destructive decisions and keeping only a COUNT of them leaves the
+  question that matters unanswerable — how much of what it threw away was real
+  speech. Recall can be measured from surviving text; precision cannot be
+  measured at all. Keyed on path rather than on a transcript row, because a
+  file whose windows were ALL discarded produces no transcript, and those are
+  both the most interesting cases to audit and the ones that would vanish.
+
+* `failures` — the run broke. Distinct from `no_text` on purpose, because
+  conflating "this file has no speech" with "this file crashed the decoder"
+  makes both unactionable.
+
+POLICY FINGERPRINTS. `no_text` and `dropped_windows` both carry one, and it
+must cover EVERY setting that can turn audio into "nothing usable" — including
+the ones that reject without the model running at all. A stored verdict
+outliving the rule that produced it is the failure this exists to prevent.
+`policy_fingerprint` builds it; the caller passes everything, and passing too
+much is harmless where passing too little is silent.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS transcripts (
+  path TEXT PRIMARY KEY,
+  duration_s REAL,
+  dropped_windows INTEGER NOT NULL DEFAULT 0,
+  text TEXT NOT NULL,
+  languages TEXT NOT NULL,      -- JSON: per-window detected language
+  segments TEXT NOT NULL,       -- JSON: [{start, end, lang, text}]
+  model TEXT NOT NULL,
+  policy TEXT NOT NULL DEFAULT '',
+  transcribed_at TEXT NOT NULL,
+  elapsed_s REAL
+);
+
+CREATE TABLE IF NOT EXISTS failures (
+  path TEXT PRIMARY KEY,
+  error TEXT NOT NULL,
+  failed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS no_text (
+  path TEXT PRIMARY KEY,
+  duration_s REAL NOT NULL,
+  policy TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  rejected_text TEXT NOT NULL DEFAULT '',
+  checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dropped_windows (
+  path TEXT NOT NULL,
+  window_start REAL NOT NULL,
+  no_speech REAL NOT NULL,
+  avg_logprob REAL NOT NULL,
+  text TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  PRIMARY KEY (path, window_start)
+);
+"""
+
+# Columns added after the first databases were created. SQLite's
+# CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a database made
+# by an earlier version keeps the old shape unless it is migrated.
+_ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "no_text": (
+        ("reason", "TEXT NOT NULL DEFAULT ''"),
+        ("rejected_text", "TEXT NOT NULL DEFAULT ''"),
+    ),
+    "transcripts": (("policy", "TEXT NOT NULL DEFAULT ''"),),
+}
+
+
+@dataclass(frozen=True)
+class Window:
+    """One transcribed window: what was said, when, and in what language."""
+
+    start: float
+    end: float
+    text: str
+    lang: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"start": self.start, "end": self.end, "lang": self.lang,
+                "text": self.text}
+
+
+@dataclass
+class Transcript:
+    path: str
+    text: str
+    windows: list[Window] = field(default_factory=list)
+    duration_s: float | None = None
+    dropped_windows: int = 0
+    model: str = ""
+    policy: str = ""
+    elapsed_s: float | None = None
+
+    @property
+    def languages(self) -> list[str | None]:
+        return [w.lang for w in self.windows]
+
+
+def policy_fingerprint(settings: Mapping[str, Any]) -> str:
+    """A stable hash of every setting that can reject audio.
+
+    Pass EVERYTHING that participates in a rejection, including settings that
+    reject before the model runs. That completeness was once false in a real
+    pipeline: the voice-activity thresholds were omitted even though they
+    produce the single most destructive verdict available -- "no speech",
+    reached without transcribing at all -- so tightening them left stale
+    verdicts in place and the files were never retried.
+
+    Passing a setting that turns out not to matter only causes a needless
+    retry. Omitting one that does causes a wrong answer that never expires.
+    """
+    payload = json.dumps(settings, sort_keys=True, default=_stable)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _stable(value: Any) -> Any:
+    """Make sets and paths hashable in a stable order."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(str(v) for v in value)
+    if isinstance(value, Path):
+        return str(value)
+    return str(value)
+
+
+def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
+    """Open the sidecar, creating and migrating it unless read-only."""
+    if read_only:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    migrate(conn)
+    return conn
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """Add any missing columns. Returns what it changed, for logging."""
+    applied: list[str] = []
+    for table, columns in _ADDED_COLUMNS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue  # table absent: SCHEMA will create it whole
+        for name, ddl in columns:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                applied.append(f"{table}.{name}")
+    conn.commit()
+    return applied
+
+
+@contextmanager
+def open_store(
+    path: Path | str, *, read_only: bool = False
+) -> Iterator[sqlite3.Connection]:
+    conn = connect(path, read_only=read_only)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def save_transcript(conn: sqlite3.Connection, transcript: Transcript) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO transcripts (path, duration_s, dropped_windows,"
+        " text, languages, segments, model, policy, transcribed_at, elapsed_s)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            transcript.path,
+            transcript.duration_s,
+            transcript.dropped_windows,
+            transcript.text,
+            json.dumps(transcript.languages),
+            json.dumps([w.as_dict() for w in transcript.windows],
+                       ensure_ascii=False),
+            transcript.model,
+            transcript.policy,
+            _now(),
+            transcript.elapsed_s,
+        ),
+    )
+    conn.commit()
+
+
+def save_no_text(
+    conn: sqlite3.Connection,
+    path: str,
+    *,
+    duration_s: float,
+    policy: str,
+    reason: str = "",
+    rejected_text: str = "",
+) -> None:
+    """Record that a file produced nothing usable, under THESE rules.
+
+    The policy is what makes the row safe to trust later: when the rules
+    change the fingerprint changes, the row stops matching, and the file is
+    retried rather than inheriting a verdict made under different rules.
+    """
+    conn.execute(
+        "INSERT OR REPLACE INTO no_text"
+        " (path, duration_s, policy, reason, rejected_text, checked_at)"
+        " VALUES (?,?,?,?,?,?)",
+        (path, duration_s, policy, reason, rejected_text, _now()),
+    )
+    conn.commit()
+
+
+def save_failure(conn: sqlite3.Connection, path: str, error: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO failures (path, error, failed_at) VALUES (?,?,?)",
+        (path, error, _now()),
+    )
+    conn.commit()
+
+
+def save_dropped_windows(
+    conn: sqlite3.Connection,
+    path: str,
+    dropped: Sequence[Mapping[str, Any]],
+    *,
+    policy: str,
+) -> None:
+    """Keep the evidence behind each discarded window.
+
+    This is what makes the filter auditable at all. Without it the only record
+    of thousands of destructive decisions is a count.
+    """
+    conn.executemany(
+        "INSERT OR REPLACE INTO dropped_windows"
+        " (path, window_start, no_speech, avg_logprob, text, policy)"
+        " VALUES (?,?,?,?,?,?)",
+        [
+            (
+                path,
+                float(d.get("window_start", 0.0)),
+                float(d.get("no_speech", 0.0)),
+                float(d.get("avg_logprob", 0.0)),
+                str(d.get("text", "")),
+                policy,
+            )
+            for d in dropped
+        ],
+    )
+    conn.commit()
+
+
+def already_done(conn: sqlite3.Connection, *, policy: str) -> set[str]:
+    """Paths this run can skip: transcribed, or judged empty under THIS policy.
+
+    Failures are deliberately NOT included -- a failure is worth retrying,
+    since it usually means a broken decode or a transient resource problem
+    rather than a settled verdict about the audio.
+    """
+    done = {r[0] for r in conn.execute("SELECT path FROM transcripts")}
+    done |= {
+        r[0]
+        for r in conn.execute("SELECT path FROM no_text WHERE policy = ?", (policy,))
+    }
+    return done
+
+
+def counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Row counts per table, for progress reporting and sanity checks."""
+    out: dict[str, int] = {}
+    for table in ("transcripts", "no_text", "failures", "dropped_windows"):
+        try:
+            out[table] = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        except sqlite3.Error:
+            out[table] = 0
+    return out
