@@ -221,5 +221,8 @@ def test_a_short_phrase_is_not_all_repetition(text: str) -> None:
     One trigram repeats itself by construction, so the shortest real
     utterances scored as perfectly degenerate.
     """
-    assert repeat_share(text) == 0.0
+    # Well under the rejection threshold is what matters; an exact 0.0 would
+    # only hold for the word-unit path, and short text falls back to
+    # character n-grams so that "Mmmmmm..." -- a single token -- is still seen.
+    assert repeat_share(text) < 0.5
     assert judge_transcript(text, duration_s=20.0).keep is True

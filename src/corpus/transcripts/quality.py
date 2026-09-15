@@ -183,11 +183,16 @@ def repeat_share(text: str) -> float:
     units says nothing about repetition, and reporting 1.0 there turns the
     shortest real utterances into false positives.
     """
-    if _UNSPACED_SCRIPT.search(text):
-        units = [text[i:i + 6] for i in range(len(text) - 5)]
-    else:
+    units: list[str] = []
+    if not _UNSPACED_SCRIPT.search(text):
         words = text.lower().split()
         units = [" ".join(words[i:i + 3]) for i in range(len(words) - 2)]
+    if len(units) < _MIN_UNITS_FOR_RATIO:
+        # Character n-grams, for scripts without word spaces and for a single
+        # enormous "word" -- "Mmmmmmmmmm..." is one token, so word units
+        # cannot see it, and it is exactly the degenerate output to catch.
+        lowered = text.lower()
+        units = [lowered[i:i + 6] for i in range(len(lowered) - 5)]
     if len(units) < _MIN_UNITS_FOR_RATIO:
         return 0.0
     return Counter(units).most_common(1)[0][1] / len(units)
