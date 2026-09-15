@@ -106,6 +106,13 @@ MEASURED_TEXT_YIELD_RATIOS: dict[str, float] = {
     "html": 0.3532,
     "text": 0.9951,
     "markdown": 1.0054,
+    # A transcript sidecar, measured on a 36.7 MB database holding 7,441
+    # recordings and 10.9 M characters of transcript. The file is mostly
+    # text already, so the loss is not decoding -- it is that each window
+    # is stored TWICE, once joined into `text` and once as JSON segments
+    # with its timestamps and language, plus the audit tables. Sizing from
+    # the joined text is the right call because that is what gets indexed.
+    "transcripts": 0.2956,
 }
 
 # Registered connector types NOT in the measured table above, with reasoned

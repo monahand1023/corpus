@@ -39,6 +39,10 @@ DEFAULT_GLOBS: dict[str, str] = {
     # cannot express them all without also matching `.md`.
     "music": "**/*.mp3",
     "olm": "**/*.olm",
+    # Detection pattern only. The connector reads a sidecar DATABASE, not
+    # the media itself, so pointing `--path` at a folder of recordings
+    # finds nothing until a transcription pass has produced one.
+    "transcripts": "**/*transcripts.db",
 }
 
 
@@ -54,6 +58,24 @@ def _build_markdown(cfg: SourceConfig) -> tuple[MarkdownConnector, MarkdownChunk
     )
     chunker = MarkdownChunker(source_type=cfg.name)
     return connector, chunker
+
+
+def _build_transcripts(cfg: SourceConfig) -> tuple[Any, Any]:
+    """Transcribed audio/video, read from a sidecar database.
+
+    `path` here is the DATABASE, not a media folder -- transcription is slow
+    and expensive and indexing is neither, so they are separate steps joined
+    by that file. No optional extra is needed to READ one; producing it is
+    what costs.
+    """
+    from corpus.connectors.transcripts import TranscriptChunker, TranscriptConnector
+
+    connector = TranscriptConnector(
+        source_type=cfg.name,
+        path=cfg.path,
+        exclude=getattr(cfg, "exclude", ()) or (),
+    )
+    return connector, TranscriptChunker(source_type=cfg.name)
 
 
 def _build_text(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
@@ -317,6 +339,7 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "csv": _build_csv,
     "tsv": _build_tsv,
     "aup3": _build_aup3,
+    "transcripts": _build_transcripts,
 }
 
 
