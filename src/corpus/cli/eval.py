@@ -65,6 +65,7 @@ def _run_query_set(
     top_k: int,
     hybrid: bool,
     rerank: bool,
+    rerank_pool_size: int = 30,
 ) -> list[QueryRecord]:
     records: list[QueryRecord] = []
     for q in queries:
@@ -75,6 +76,7 @@ def _run_query_set(
             filter_sources=effective_filter,
             hybrid=hybrid,
             rerank=rerank,
+            rerank_pool_size=rerank_pool_size,
         )
         found = [c.source_key for c in result.chunks]
         expected = list(q.expected_keys)
@@ -248,6 +250,17 @@ def main() -> int:
         ),
     )
     parser.add_argument("--rerank", action="store_true")
+    parser.add_argument(
+        "--rerank-pool-size",
+        type=int,
+        default=30,
+        help=(
+            "Candidates the cross-encoder re-scores. Latency is linear in "
+            "this: measured on one archive, 0.35s with no re-ranking, 2.3s "
+            "at 8, 4.5s at 15, 8.6s at 30. Worth sweeping before enabling "
+            "re-ranking on a server people wait on."
+        ),
+    )
     parser.add_argument("--no-hybrid", action="store_true")
     parser.add_argument(
         "--compare",
@@ -347,7 +360,12 @@ def main() -> int:
             )
             return 0
         records = _run_query_set(
-            retriever, queries, top_k=args.top_k, hybrid=not args.no_hybrid, rerank=args.rerank
+            retriever,
+            queries,
+            top_k=args.top_k,
+            hybrid=not args.no_hybrid,
+            rerank=args.rerank,
+            rerank_pool_size=args.rerank_pool_size,
         )
         if args.as_json:
             print(json.dumps(_build_json(records, args.top_k, not args.no_hybrid, args.rerank), indent=2))
