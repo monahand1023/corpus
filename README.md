@@ -621,6 +621,7 @@ A database or a real `corpus.toml` inside `corpus`'s own package directory or re
 | [`docs/configuration.md`](docs/configuration.md) | Every `corpus.toml` setting + env var, including the Voyage-vs-Gemini embedder choice |
 | [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code + Claude Desktop wiring, all 7 tools, the investigation pattern |
 | [`docs/adding_a_source.md`](docs/adding_a_source.md) | Walkthrough for writing a custom connector |
+| [`docs/transcript_quality.md`](docs/transcript_quality.md) | Filtering invented text out of machine transcripts — why confidence and voice-activity detection both fail as quality gates, and the three signals that work |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and the actual fixes |
 
 Architecture overview, benchmarking, and eval methodology are covered inline in this README (sections above).
