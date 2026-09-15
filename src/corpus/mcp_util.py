@@ -88,13 +88,33 @@ def record_query(
     """
     if path is None:
         return
-    # A health check is not a search. `corpus-smoke` drives the real server
-    # with a synthetic probe, and without this its probe lands in the log
-    # alongside genuine queries -- the log whose entire purpose is to let
-    # tuning use real usage instead of a synthesised set. One afternoon of
-    # smoke tests left three archives whose logged queries were almost
-    # entirely the probe.
+    # A health check is not a search, and neither is a unit test. The query
+    # log exists so tuning -- and, in one deployment, a deferred architecture
+    # decision -- can use real usage instead of a synthesised set. Anything
+    # that writes to it without a person having asked a question destroys
+    # exactly the evidence it was collecting.
+    #
+    # Both halves were found the hard way. `corpus-smoke` drove the real
+    # server with a probe until CORPUS_SYNTHETIC_QUERY was added, leaving
+    # three archives whose logs were almost entirely that probe. Worse, a
+    # consumer's TEST SUITE pointed at the repo's real log: 276 logged
+    # queries turned out to be 180 copies of "q", 32 of "find me something"
+    # and 30 of "nothing here" -- fixtures, not usage -- and the archive had
+    # been read as the most-used of five on the strength of that count.
+    #
+    # PYTEST_CURRENT_TEST is set by pytest for the duration of each test, so
+    # this covers any consumer whose tests exercise a tool handler without
+    # having thought about the log at all.
+    # A synthetic probe is never a search, so this one has no override.
     if os.environ.get("CORPUS_SYNTHETIC_QUERY"):
+        return
+    # A test MAY opt in, since the engine has to exercise this path somewhere.
+    # The opt-in is an override rather than "unset PYTEST_CURRENT_TEST",
+    # because pytest re-sets that variable at each test phase -- a fixture
+    # deleting it during setup finds it back by the time the body runs.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get(
+        "CORPUS_ALLOW_QUERY_LOG"
+    ):
         return
     results = None
     if include_results and chunks is not None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from corpus.mcp_util import QueryTimer, record_query, safe_tool
 
@@ -58,7 +61,20 @@ def test_logging_off_writes_nothing(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_served_query_records_what_it_returned(tmp_path: Path) -> None:
+@pytest.fixture
+def serving(monkeypatch):
+    """Make record_query behave as it does under a real server.
+
+    record_query deliberately refuses to write while pytest is running, so a
+    consumer's test suite cannot fill the query log with fixtures. Tests of
+    the logging path itself have to opt out of that guard explicitly, which is
+    the right shape: writing to the log is now something a test must ASK for.
+    """
+    monkeypatch.setenv("CORPUS_ALLOW_QUERY_LOG", "1")
+    monkeypatch.delenv("CORPUS_SYNTHETIC_QUERY", raising=False)
+
+
+def test_a_served_query_records_what_it_returned(tmp_path: Path, serving) -> None:
     log = tmp_path / "q.jsonl"
 
     record_query(
@@ -76,7 +92,9 @@ def test_a_served_query_records_what_it_returned(tmp_path: Path) -> None:
     ]
 
 
-def test_results_can_be_withheld_while_still_recording_the_query(tmp_path: Path) -> None:
+def test_results_can_be_withheld_while_still_recording_the_query(
+    tmp_path: Path, serving
+) -> None:
     log = tmp_path / "q.jsonl"
 
     record_query(log, tool="search_knowledge", query="salary review",
@@ -94,22 +112,48 @@ def test_the_timer_reports_elapsed_time() -> None:
     assert t.elapsed_ms >= 0
 
 
-def test_a_synthetic_probe_is_not_written_to_the_query_log(tmp_path, monkeypatch) -> None:
-    """A health check is not a search.
+def test_a_synthetic_probe_is_never_logged_even_when_a_test_opts_in(
+    tmp_path, monkeypatch, serving
+) -> None:
+    """A health check is not a search, and that guard has no override.
 
-    `corpus-smoke` drives the real server with a synthetic probe. Without this
-    opt-out its probe lands in the query log beside genuine queries -- and that
-    log exists precisely so tuning can use real usage instead of a synthesised
-    set. One afternoon of smoke tests left three archives whose logged queries
-    were almost entirely the probe.
+    corpus-smoke drives the real server with a probe. Without this, an
+    afternoon of smoke tests left three archives whose logged queries were
+    almost entirely that probe -- in a log whose entire purpose is to hold
+    real usage.
     """
     log = tmp_path / "queries.jsonl"
-
     monkeypatch.setenv("CORPUS_SYNTHETIC_QUERY", "1")
+
     record_query(log, tool="search_knowledge", query="notes from last year")
     assert not log.exists()
 
     monkeypatch.delenv("CORPUS_SYNTHETIC_QUERY")
     record_query(log, tool="search_knowledge", query="a real question")
     assert log.exists()
-    assert "a real question" in log.read_text()
+
+
+def test_a_test_run_writes_nothing_unless_it_asks(tmp_path, monkeypatch) -> None:
+    """A unit test is not a search either.
+
+    Deliberately takes no `serving` fixture: this checks the DEFAULT. A
+    consumer's test suite pointed at its repo's real query log, and 276 logged
+    queries turned out to be 180 copies of "q", 32 of "find me something" and
+    30 of "nothing here" -- fixtures, not usage. That archive had been read as
+    the most-used of five on the strength of the count, and the log was
+    collecting evidence for a deferred architecture decision, so the pollution
+    destroyed exactly what it existed to gather.
+
+    pytest sets PYTEST_CURRENT_TEST for the duration of each test, so this
+    covers any consumer whose tests exercise a handler without having thought
+    about the log at all.
+    """
+    log = tmp_path / "queries.jsonl"
+    assert os.environ.get("PYTEST_CURRENT_TEST")
+
+    record_query(log, tool="search_knowledge", query="find me something")
+    assert not log.exists()
+
+    monkeypatch.setenv("CORPUS_ALLOW_QUERY_LOG", "1")
+    record_query(log, tool="search_knowledge", query="a real question")
+    assert log.exists()
