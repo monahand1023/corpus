@@ -111,7 +111,7 @@ def _check_served_vs_evaluated(config_path: str | None) -> bool:
     return True
 
 
-def _check_gold_set(queries_path: str | None, config_path: str | None) -> bool:
+def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool:
     if not queries_path:
         print("\ngold set          SKIPPED (no --queries)")
         return True
@@ -119,11 +119,10 @@ def _check_gold_set(queries_path: str | None, config_path: str | None) -> bool:
     if not path.is_file():
         print(f"\ngold set          SKIPPED (no such file: {path})")
         return True
-    if not config_path:
-        print("\ngold set          SKIPPED (needs --config to read the index)")
+    if not db_path:
+        print("\ngold set          SKIPPED (needs --config or --db to read the index)")
         return True
 
-    from corpus.cli._common import load_config_or_exit
     from corpus.cli.eval import _load_queries
     from corpus.eval.goldset import (
         audit_queries,
@@ -132,12 +131,23 @@ def _check_gold_set(queries_path: str | None, config_path: str | None) -> bool:
         sqlite_lookup,
     )
 
-    config = load_config_or_exit(config_path)
-    queries = _load_queries(path)
+    try:
+        queries = _load_queries(path)
+    except Exception as exc:
+        # A gold set that will not import is itself a finding, and it must not
+        # take the other checks down with it -- a diagnostic that stops at the
+        # first problem hides every later one.
+        print("\ngold set")
+        print(f"  [ FAIL ] could not import {path}: {type(exc).__name__}: {exc}")
+        print(
+            "           (a gold set often imports its own package; run this "
+            "from the deployment's interpreter)"
+        )
+        return False
     findings = audit_queries(
         queries,
-        lookup=sqlite_lookup(config.db_path),
-        documents=sqlite_documents(config.db_path, queries),
+        lookup=sqlite_lookup(db_path),
+        documents=sqlite_documents(db_path, queries),
     )
     print(f"\ngold set          {len(queries)} queries")
     has_error = report_findings(findings, stream=sys.stdout)
@@ -146,17 +156,15 @@ def _check_gold_set(queries_path: str | None, config_path: str | None) -> bool:
     return not has_error
 
 
-def _check_index_quality(config_path: str | None) -> bool:
-    if not config_path:
-        print("\nindex quality     SKIPPED (no --config)")
+def _check_index_quality(db_path: str | None) -> bool:
+    if not db_path:
+        print("\nindex quality     SKIPPED (no --config or --db)")
         return True
-    from corpus.cli._common import load_config_or_exit
     from corpus.survey.index_quality import NotACorpusIndexError, run_index_quality
 
-    config = load_config_or_exit(config_path)
     print("\nindex quality")
     try:
-        result = run_index_quality(config.db_path, sample_per_kind=0)
+        result = run_index_quality(db_path, sample_per_kind=0)
     except NotACorpusIndexError as exc:
         print(f"  SKIPPED ({exc})")
         return True
@@ -189,6 +197,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Check that the measurement setup itself can be trusted",
     )
     parser.add_argument("--config", default=None, help="Path to corpus.toml")
+    parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Index to check, for a deployment with no corpus.toml. The "
+            "archives most likely to have drifted are FORKS of this engine "
+            "with their own config handling, so a tool that only checks the "
+            "well-behaved consumers checks the wrong half."
+        ),
+    )
     parser.add_argument(
         "--query-log",
         action="append",
@@ -229,10 +248,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         skipped.append("query logs")
     _check_cross_archive(reports)
 
+    db_path = args.db
+    if db_path is None and args.config:
+        from corpus.cli._common import load_config_or_exit
+
+        db_path = str(load_config_or_exit(args.config).db_path)
+
     for name, check, needs in (
         ("served vs evaluated", _check_served_vs_evaluated(args.config), args.config),
-        ("gold set", _check_gold_set(args.queries, args.config), args.queries and args.config),
-        ("index quality", _check_index_quality(args.config), args.config),
+        ("gold set", _check_gold_set(args.queries, db_path), args.queries and db_path),
+        ("index quality", _check_index_quality(db_path), db_path),
     ):
         if needs:
             ran[name] = check

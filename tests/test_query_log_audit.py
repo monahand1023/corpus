@@ -176,3 +176,23 @@ def test_overlap_ignores_fixtures_so_pollution_cannot_fake_demand(
         audit_query_log(_log(b, ["notes from last year", "q", "beta only thing"])),
     ])
     assert overlap == {}
+
+
+# --- the diagnostic must not stop at the first problem ---------------------
+
+
+def test_an_unimportable_gold_set_fails_that_check_only(tmp_path, capsys) -> None:
+    """A diagnostic that aborts hides every check after the one that broke.
+
+    Gold sets commonly import their own package, so running the doctor with
+    the wrong interpreter raises ModuleNotFoundError from inside the check --
+    which took the whole run down and reported nothing about the query logs.
+    """
+    from corpus.cli.doctor import _check_gold_set
+
+    broken = tmp_path / "eval_queries.py"
+    broken.write_text("import a_package_that_does_not_exist\n")
+
+    assert _check_gold_set(str(broken), str(tmp_path / "index.db")) is False
+    out = capsys.readouterr().out
+    assert "could not import" in out
