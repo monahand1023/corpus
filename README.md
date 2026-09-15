@@ -260,6 +260,7 @@ corpus-survey census ~/Downloads/export  # what's here, and can corpus index it?
 corpus-survey archives ~/Downloads/export        # what's really inside these zips?
 corpus-survey media ~/Downloads/recordings --rate 15  # how many hours, at 15x realtime?
 corpus-survey overlap ~/Downloads/notes --db archive/corpus.db  # already indexed?
+corpus-survey index-quality --db archive/corpus.db  # did junk get indexed?
 corpus-index ~/Downloads/export          # survey + plan + confirm + ingest, one command
 corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothing
 ```

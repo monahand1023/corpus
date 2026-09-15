@@ -21,6 +21,7 @@ from typing import Any
 from corpus.survey.archives import ArchiveInfo, ArchiveSurveyResult, run_archive_survey
 from corpus.survey.census import BucketStat, CensusResult, run_census
 from corpus.survey.format import human_count, human_size
+from corpus.survey.index_quality import IndexQualityResult, run_index_quality
 from corpus.survey.media import (
     DEFAULT_SAMPLE_SIZE_PER_TYPE,
     MediaSurveyResult,
@@ -394,6 +395,75 @@ def _overlap_result_to_dict(result: OverlapResult) -> dict[str, Any]:
     }
 
 
+def _print_index_quality(result: IndexQualityResult) -> None:
+    print(f"scanned {human_count(result.scanned_chunks)} chunks")
+    if result.clean:
+        print("no transcription artefacts found")
+        return
+
+    print(
+        f"\naffected: {human_count(result.affected_chunks)} chunk(s) across "
+        f"{human_count(len(result.documents_affected))} document(s)"
+    )
+    print(f"  entirely caption boilerplate : {len(result.whole_chunk)}")
+    print(f"  sign-off glued to real speech: {len(result.tails)}")
+
+    if result.by_source_type:
+        print("\nby source type:")
+        for source_type, count in result.by_source_type.most_common():
+            print(f"  {source_type:24} {human_count(count)}")
+
+    shown = [f for f in result.whole_chunk if f.before]
+    if shown:
+        print("\nchunks that are ONLY a sign-off (these should never have been indexed):")
+        for finding in shown:
+            print(f"  [{finding.source_type}] {finding.before!r}")
+
+    shown = [f for f in result.tails if f.before]
+    if shown:
+        print("\nsign-off glued to real speech (cut the tail, keep the speech):")
+        for finding in shown:
+            print(f"  [{finding.source_type}]")
+            print(f"    ...{finding.before!r}")
+            print(f"    -> ...{finding.after!r}")
+
+    print(
+        "\nBoth are fixed at INGEST, not by editing the database: apply "
+        "corpus.transcripts.strip_caption_tail in the connector or chunker and "
+        "re-run ingest. Content-hash comparison re-embeds only what changed."
+    )
+
+
+def _run_index_quality(args: argparse.Namespace) -> int:
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"error: database not found: {db_path}", file=sys.stderr)
+        return 1
+
+    result = run_index_quality(
+        db_path,
+        source_types=tuple(args.source_type),
+        sample_per_kind=args.samples,
+    )
+    if args.as_json:
+        print(json.dumps({
+            "total_chunks": result.total_chunks,
+            "scanned_chunks": result.scanned_chunks,
+            "affected_chunks": result.affected_chunks,
+            "documents_affected": len(result.documents_affected),
+            "whole_chunk_boilerplate": len(result.whole_chunk),
+            "sign_off_tails": len(result.tails),
+            "by_source_type": dict(result.by_source_type),
+        }, indent=2))
+    else:
+        _print_index_quality(result)
+
+    # A chunk that is ENTIRELY a sign-off is an unambiguous filtering defect,
+    # so it fails. A glued tail is a known-imperfect state that a re-ingest
+    # fixes, so it reports without failing a build over it.
+    return 1 if result.whole_chunk else 0
+
+
 def _run_overlap(args: argparse.Namespace) -> int:
     root = Path(args.path)
     if not root.is_dir():
@@ -483,6 +553,28 @@ def build_parser() -> argparse.ArgumentParser:
         "projects processing time from the estimated total hours",
     )
     p_media.set_defaults(func=_run_media)
+
+    p_quality = sub.add_parser(
+        "index-quality",
+        help="Scan an EXISTING index for transcription artefacts that got indexed",
+    )
+    p_quality.add_argument(
+        "--db", required=True, metavar="PATH", help="Path to the corpus SQLite database"
+    )
+    p_quality.add_argument(
+        "--source-type",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Limit the scan to this source type (repeatable)",
+    )
+    p_quality.add_argument(
+        "--samples", type=int, default=8, help="Example findings to show per kind"
+    )
+    p_quality.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit the result as JSON"
+    )
+    p_quality.set_defaults(func=_run_index_quality)
 
     p_overlap = sub.add_parser(
         "overlap", help="Estimate how much of a directory is already indexed elsewhere"

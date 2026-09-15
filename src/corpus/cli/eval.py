@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sqlite3
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from corpus.cli._common import load_config_or_exit
 from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
+from corpus.eval.goldset import audit_queries
 from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_query
 from corpus.retriever import Retriever
 
@@ -37,6 +39,65 @@ class QueryRecord:
     note: str
     is_negative: bool
     score: QueryScore | None
+
+
+# Enough keys per query to catch a query copied out of its own answer,
+# without reading a 1,456-document answer set to do it.
+_ECHO_SAMPLE_PER_QUERY = 25
+
+
+def _indexed_keys(db_path: str | Path) -> Any:
+    """A callable reporting which of `keys` exist in the index.
+
+    Read-only and parameterised in batches, so an answer set of any size costs
+    one query per 500 keys and cannot lock the database against a live server.
+    """
+
+    def lookup(keys: Sequence[str]) -> set[str]:
+        found: set[str] = set()
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            for start in range(0, len(keys), 500):
+                batch = list(keys[start : start + 500])
+                marks = ",".join("?" * len(batch))
+                rows = conn.execute(
+                    f"SELECT DISTINCT source_key FROM chunks WHERE source_key IN ({marks})",
+                    batch,
+                ).fetchall()
+                found.update(r[0] for r in rows)
+        except sqlite3.Error:
+            return set(keys)  # cannot check; do not manufacture findings
+        finally:
+            conn.close()
+        return found
+
+    return lookup
+
+
+def _expected_documents(db_path: str | Path, queries: Sequence[Any]) -> dict[str, str]:
+    """Text for a sample of each query's expected keys, for the echo check."""
+    wanted: list[str] = []
+    for query in queries:
+        keys = list(getattr(query, "expected_keys", None) or [])
+        wanted.extend(keys[:_ECHO_SAMPLE_PER_QUERY])
+    if not wanted:
+        return {}
+    out: dict[str, str] = {}
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        for start in range(0, len(wanted), 500):
+            batch = wanted[start : start + 500]
+            marks = ",".join("?" * len(batch))
+            for key, content in conn.execute(
+                f"SELECT source_key, content FROM chunks WHERE source_key IN ({marks})",
+                batch,
+            ):
+                out.setdefault(key, content or "")
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return out
 
 
 def _load_queries(path: Path) -> list[Any]:
@@ -231,7 +292,16 @@ def main() -> int:
         default="tests/eval_queries.py",
         help="Path to a Python module exporting EVAL_QUERIES",
     )
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help=(
+            "Results per query. Defaults to [retriever] top_k from the config "
+            "-- the number the MCP server actually serves. Measuring at a "
+            "different k reports a figure no user experiences."
+        ),
+    )
     parser.add_argument("--rerank", action="store_true")
     parser.add_argument("--no-hybrid", action="store_true")
     parser.add_argument(
@@ -243,6 +313,11 @@ def main() -> int:
         "--json", action="store_true", dest="as_json", help="Emit the result as JSON"
     )
     parser.add_argument("--config", default=None)
+    parser.add_argument(
+        "--allow-gold-issues",
+        action="store_true",
+        help="Run even when the gold set audit reports an error",
+    )
     parser.add_argument(
         "--check",
         default=None,
@@ -278,6 +353,41 @@ def main() -> int:
         model=config.embedder.model,
         dim=config.embedder.dim,
     )
+    # The served path is the one worth measuring. Reporting recall@15 when
+    # the server hands back 5 results describes a system nobody is running.
+    if args.top_k is None:
+        args.top_k = config.retriever.top_k
+        print(
+            f"top-k {args.top_k} (from [retriever] top_k; override with --top-k)",
+            file=sys.stderr,
+        )
+    hybrid = not args.no_hybrid
+    if hybrid != config.retriever.hybrid:
+        print(
+            f"warning: evaluating with hybrid={hybrid} but the config serves "
+            f"hybrid={config.retriever.hybrid}; this measures a path nobody runs",
+            file=sys.stderr,
+        )
+
+    findings = audit_queries(
+        queries,
+        lookup=_indexed_keys(config.db_path),
+        documents=_expected_documents(config.db_path, queries),
+    )
+    if findings:
+        print(f"\nGold set audit: {len(findings)} finding(s)", file=sys.stderr)
+        for finding in findings:
+            print(finding.render(), file=sys.stderr)
+        print("", file=sys.stderr)
+    if any(f.severity == "error" for f in findings) and not args.allow_gold_issues:
+        print(
+            "Refusing to run: the answer key is broken, so the metrics would "
+            "describe the key rather than the retriever. Fix it, or pass "
+            "--allow-gold-issues.",
+            file=sys.stderr,
+        )
+        return 2
+
     reranker = None
     if args.rerank:
         from corpus.reranker.local import BGEReranker

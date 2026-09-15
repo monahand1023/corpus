@@ -9,6 +9,8 @@ every layer here was added after a defect slipped through the layer above it.
 | Smoke test | `corpus-smoke` | Does the server start, and answer? | Whether the answers are the right ones |
 | Retrieval eval | `corpus-eval` | Can you find what you indexed? | Whether the reply reads well |
 | Judge | `corpus-judge` | Is the generated answer any good? | Cost; it is the only layer that bills |
+| Index scan | `corpus-survey index-quality` | Did junk get indexed? | Anything that is not a transcription artefact |
+| Gold audit | (runs inside `corpus-eval`) | Is the answer key itself broken? | Whether the queries are the right ones |
 
 Run the first two on every change. Run the third when retrieval, chunking, or
 the embedder changes. Run the fourth when tuning, not as a gate.
@@ -97,6 +99,16 @@ nothing. Deleting an inconvenient query is how a baseline becomes decoration.
 not the config's `[retriever] top_k`. Measuring at 15 when users get 5 reports
 a number nobody experiences.
 
+These are checked automatically. `corpus-eval` audits the gold set before
+scoring and refuses to run when the key is broken beyond doubt -- expected
+keys that are not in the index at all, which can only ever score zero. Softer
+smells are reported and do not block: an answer set that matched nothing, a
+round size repeated across sets (a `LIMIT` in the labelling code), a duplicate
+query, and a query sharing a three-word run with its own answer. That last one
+found a real defect in a shipped gold set on its first run.
+
+The rules behind those checks, and why each one exists:
+
 **Make the answer key COMPLETE.** An answer set is an OR-set: the query hits
 if any key in it ranks. That makes an incomplete set actively misleading --
 the retriever returns a perfectly good answer, it is missing from the key, and
@@ -131,7 +143,7 @@ serves, hybrid retrieval, no reranker, eight queries each:
 |---|---|---|---|
 | transcripts (k=5) | 0.625 | 0.442 | 0.486 |
 | photos (k=8) | 0.625 | 0.479 | 0.256 |
-| mail (k=8) | 0.875 | 0.279 | 0.171 |
+| mail (k=8) | 0.875 | 0.342 | 0.216 |
 
 The useful signal is the SHAPE, not the absolute values. Mail has the best
 recall and the worst MRR: the right thread is nearly always in the top 8, but
@@ -143,6 +155,29 @@ much harder bar than "find one".
 Eight queries is a small set. It is enough to catch a regression and to tell
 these shapes apart; it is not enough to detect a small improvement, and a
 change of a few points between runs is noise, not progress.
+
+## After ingest — `corpus-survey index-quality`
+
+```sh
+corpus-survey index-quality --db data/corpus.db
+corpus-survey index-quality --db data/corpus.db --source-type transcripts --json
+```
+
+The rest of `corpus-survey` asks "what is out there, should we index it?".
+This asks the question that only exists afterwards: we indexed it, is any of
+it junk? It separates two defects because they are fixed differently.
+
+A chunk that is ENTIRELY a caption sign-off should never have been indexed --
+the connector is not filtering, and the command exits non-zero. A chunk with a
+sign-off glued to the END of real speech must NOT be dropped, because
+discarding those deletes real recordings; the tail is cut and the speech kept,
+so this reports without failing.
+
+Both are invisible from outside. The index reports a successful build, search
+returns results, and some of those results are text no person ever said. Run
+it after importing anything transcribed. The fix is always at ingest -- apply
+`corpus.transcripts.strip_caption_tail` in the connector or chunker and
+re-ingest, which re-embeds only the chunks whose content actually changed.
 
 ## Layer 4 — `corpus-judge`: is the answer good?
 
@@ -171,9 +206,11 @@ retriever:
 Only the second kind is a retriever problem. Had the first been taken at face
 value, the fix would have been tuning applied to a system that was working.
 
-The same investigation turned up something no unit test could see: 596 indexed
-chunks across 364 documents contain subtitle boilerplate *embedded inside*
-otherwise-real speech. The whole-text boilerplate filter is working exactly as
+The same investigation turned up something no unit test could see: 618 indexed
+chunks across 389 documents contained subtitle boilerplate *embedded inside*
+otherwise-real speech (the figure `corpus-survey index-quality` now reports;
+hand-written `LIKE` patterns had estimated 596, which is exactly why the
+measurement belongs in a command rather than in someone's shell history). The whole-text boilerplate filter is working exactly as
 designed — it drops text that is *entirely* boilerplate, and deliberately does
 not drop a transcript merely for containing some, because that measurably
 deletes real content (see [transcript_quality.md](transcript_quality.md)).
