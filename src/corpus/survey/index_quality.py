@@ -37,6 +37,10 @@ from corpus.transcripts.quality import strip_caption_tail, subtitle_boilerplate
 _BATCH = 5_000
 
 
+class NotACorpusIndexError(Exception):
+    """The database exists but holds no corpus index."""
+
+
 @dataclass
 class QualityFinding:
     source_type: str
@@ -79,6 +83,17 @@ def run_index_quality(
     result = IndexQualityResult()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
+        # A consumer repo holds several SQLite files -- a caption cache, a
+        # sidecar, an embeddings copy -- and only one of them is the index.
+        # Pointing at the wrong one should say so, not raise OperationalError
+        # from the middle of a scan.
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'"
+        ).fetchone()
+        if table is None:
+            raise NotACorpusIndexError(
+                f"{db_path} has no 'chunks' table, so it is not a corpus index"
+            )
         where, params = "", []
         if source_types:
             marks = ",".join("?" * len(source_types))

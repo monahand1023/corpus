@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from corpus.survey.index_quality import run_index_quality
+from corpus.survey.index_quality import NotACorpusIndexError, run_index_quality
 
 SCHEMA = """
 CREATE TABLE chunks (
@@ -121,3 +121,21 @@ def test_blank_chunks_are_skipped_not_flagged(tmp_path: Path) -> None:
     result = run_index_quality(db)
     assert result.clean
     assert result.scanned_chunks == 1
+
+
+def test_a_database_that_is_not_an_index_says_so(tmp_path: Path) -> None:
+    """A consumer repo holds several SQLite files and only one is the index.
+
+    Pointing at a caption cache or a sidecar should report that plainly, not
+    raise OperationalError out of the middle of a scan.
+    """
+    import pytest
+
+    path = tmp_path / "captions.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE captions (id TEXT, text TEXT)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(NotACorpusIndexError, match="chunks"):
+        run_index_quality(path)

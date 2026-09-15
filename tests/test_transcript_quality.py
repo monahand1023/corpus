@@ -475,3 +475,24 @@ def test_a_sign_off_survives_screening_at_the_end_of_a_long_chunk() -> None:
     cleaned = strip_caption_tail(long_text + " ご視聴ありがとうございました")
     assert cleaned.endswith("about the trip.")
     assert strip_caption_tail(long_text) == long_text
+
+
+def test_text_merely_mentioning_a_sign_off_word_is_untouched() -> None:
+    """Passing the fast screen is not the same as matching a phrase.
+
+    The screen looks for ONE word of a phrase anywhere in the tail, so
+    ordinary prose mentioning "watching" or "subscribe" reaches the full pass
+    and removes nothing. An earlier version still returned the normalised,
+    whitespace-collapsed copy in that case, so the output differed from the
+    input with nothing taken out -- and callers compare the two to decide
+    whether a sign-off was present. It reported 5,585 contaminated chunks in a
+    mail archive that had one.
+    """
+    for untouched in [
+        "I love  watching the birds from the  kitchen window",
+        "Please subscribe me to the  newsletter, thanks",
+        "The subtitles by then were  already out of sync",
+        "Amara asked about  dinner",
+        "vielen Dank fuer  alles, sagte er",
+    ]:
+        assert strip_caption_tail(untouched) == untouched

@@ -21,7 +21,11 @@ from typing import Any
 from corpus.survey.archives import ArchiveInfo, ArchiveSurveyResult, run_archive_survey
 from corpus.survey.census import BucketStat, CensusResult, run_census
 from corpus.survey.format import human_count, human_size
-from corpus.survey.index_quality import IndexQualityResult, run_index_quality
+from corpus.survey.index_quality import (
+    IndexQualityResult,
+    NotACorpusIndexError,
+    run_index_quality,
+)
 from corpus.survey.media import (
     DEFAULT_SAMPLE_SIZE_PER_TYPE,
     MediaSurveyResult,
@@ -440,11 +444,15 @@ def _run_index_quality(args: argparse.Namespace) -> int:
         print(f"error: database not found: {db_path}", file=sys.stderr)
         return 1
 
-    result = run_index_quality(
-        db_path,
-        source_types=tuple(args.source_type),
-        sample_per_kind=args.samples,
-    )
+    try:
+        result = run_index_quality(
+            db_path,
+            source_types=tuple(args.source_type),
+            sample_per_kind=args.samples,
+        )
+    except NotACorpusIndexError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if args.as_json:
         print(json.dumps({
             "total_chunks": result.total_chunks,

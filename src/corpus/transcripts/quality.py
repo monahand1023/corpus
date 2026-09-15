@@ -198,6 +198,8 @@ _PUNCT = re.compile(
 # community". Anything longer, or anything in a script the prefix's language
 # does not use, is real speech that happens to sit behind an invented credit.
 _CREDIT_TAIL_MAX_CHARS = 30
+# "the amara org community" is the longest real one seen.
+_CREDIT_TAIL_MAX_WORDS = 4
 # Scripts written without spaces between words need character n-grams; split on
 # whitespace and a wall of identical syllables is a single token scoring zero
 # repetition.
@@ -347,7 +349,16 @@ def _strip_credit_line(text: str, prefixes: tuple[str, ...]) -> str:
     for prefix in prefixes:
         for match in _credit_pattern(prefix).finditer(text):
             tail = text[match.end():].strip()
-            if len(_normalise(tail)) > _CREDIT_TAIL_MAX_CHARS:
+            normalised_tail = _normalise(tail)
+            if len(normalised_tail) > _CREDIT_TAIL_MAX_CHARS:
+                continue
+            # A name is a few words. The character limit alone let a real
+            # sentence through -- "The subtitles by then were already out of
+            # sync" has a 29-character tail, so the whole sentence was cut
+            # down to "The". Unlike subtitle_boilerplate, which anchors these
+            # prefixes at the START of the text, this searches anywhere, so it
+            # needs the tighter test.
+            if len(normalised_tail.split()) > _CREDIT_TAIL_MAX_WORDS:
                 continue
             # Judge the tail against the script the PREFIX is written in: a CJK
             # credit's name is always CJK, so applying the Latin guard there
@@ -415,37 +426,40 @@ def strip_caption_tail(
     heads = (
         credit_prefixes if credit_prefixes is not None else SUBTITLE_CREDIT_PREFIXES
     )
-    # NFD so an accent is a separate combining mark the patterns can treat
-    # as optional; recomposed to NFC on the way out so callers never see
-    # decomposed text.
-    out = unicodedata.normalize("NFD", text)
-    # Nothing to remove: return the input UNCHANGED rather than a normalised,
-    # whitespace-collapsed copy. Callers compare the result against the input
-    # to decide whether a sign-off was present, so returning a cosmetically
-    # different string for clean text would report contamination that is not
-    # there.
-    # Only the END of the text can matter, so only the end is screened.
-    # Both rules are tail-bounded: a sign-off has to finish the text, and a
-    # credit line counts only when at most _CREDIT_TAIL_MAX_CHARS of name
-    # follow it. The longest phrase and the longest prefix plus that tail both
-    # fit inside the window with room to spare, so nothing the full pass would
-    # act on can start before it. Without this, screening a 2 GB index means
-    # scanning every character of every chunk to decide it ends in "ducks".
-    # Normalising only the window matters as much as searching only the
-    # window: NFD over a whole 5,000-character chunk cost more than the search
-    # it was preparing for.
+    # Only the END of the text can matter, so only the end is screened. Both
+    # rules are tail-bounded: a sign-off has to finish the text, and a credit
+    # line counts only when at most _CREDIT_TAIL_MAX_CHARS of name follow it,
+    # so nothing the full pass would act on can start before the window.
     window = _fold_for_screen(text[-_SCREEN_WINDOW_CHARS:])
     anchors = _screen_anchors(frozenset(phrases), tuple(heads))
     if not any(anchor in window for anchor in anchors):
         return text
+
+    # NFD so an accent is a separate combining mark the patterns can treat as
+    # optional; recomposed to NFC on the way out so callers never see
+    # decomposed text.
     out = unicodedata.normalize("NFD", text)
+    removed = False
     # Longest first: "gracias por ver el video" must win over "gracias por ver",
     # which would otherwise leave "el video" stranded.
     for phrase in sorted(phrases, key=len, reverse=True):
         stripped = _tail_pattern(phrase).sub("", out)
         if stripped != out:
             out = stripped
-    out = _strip_credit_line(out, heads)
+            removed = True
+    credited = _strip_credit_line(out, heads)
+    if credited != out:
+        out = credited
+        removed = True
+    # Passing the screen is not the same as matching. The screen looks for one
+    # word of a phrase anywhere in the tail, so ordinary text mentioning
+    # "watching" or "subscribe" reaches this point and removes nothing.
+    # Returning the normalised, whitespace-collapsed copy in that case makes
+    # the output differ from the input with nothing taken out -- and callers
+    # compare the two to decide whether a sign-off was there. Doing so
+    # reported 5,585 contaminated chunks in a mail archive that had one.
+    if not removed:
+        return text
     out = _WHITESPACE.sub(" ", out).strip()
     out = unicodedata.normalize("NFC", out)
     # Spanish opens with punctuation, so cutting "gracias por ver el video"
