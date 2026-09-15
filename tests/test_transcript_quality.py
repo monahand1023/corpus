@@ -160,3 +160,66 @@ def test_the_repetition_ceiling_stays_permissive() -> None:
 def test_the_verdict_is_truthy_for_keep() -> None:
     assert bool(TranscriptVerdict(True)) is True
     assert bool(TranscriptVerdict(False, "x")) is False
+
+
+# --- credit lines end in a name, and nothing else --------------------------
+
+@pytest.mark.parametrize("text", [
+    "Субтитры создавал DimaTorzok",
+    "Untertitel von Stefan K.",
+    "Teksting av Nicolai Winther",
+    "Subtitles by the Amara.org community",
+    "Sous-titres réalisés par la communauté d'Amara.org",
+    "Altyazı M.K.",
+])
+def test_a_credit_line_is_caught_whatever_name_it_ends_with(text: str) -> None:
+    """Whole-string equality could not match these.
+
+    A credit ends in a name that cannot be enumerated, so 22 of the first 45
+    entries in this list were unreachable and 8 of 10 realistic outputs went
+    straight through.
+    """
+    assert subtitle_boilerplate(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "Субтитры сделал DimaTorzok 今日はいい天気ですね。",
+    "Субтитры сделал DimaTorzok これは本物の音声です。聞こえますか?",
+    "Altyazı M.K. Terima kasih telah menonton! 本日はご参加ありがとうございます。",
+])
+def test_real_speech_behind_an_invented_credit_survives(text: str) -> None:
+    """These were deleted, and they are recordings of someone's family.
+
+    An invented credit often precedes real audio. Matching the prefix alone
+    discards the recording to remove the noise; the tail after the prefix has
+    to look like a name for the line to be a credit.
+    """
+    assert subtitle_boilerplate(text) is False
+
+
+def test_a_sentence_that_merely_opens_like_a_credit_survives() -> None:
+    assert subtitle_boilerplate(
+        "Subtitles by hand are a pain, so we built a tool that makes them.") is False
+
+
+def test_accents_and_dots_do_not_hide_a_credit() -> None:
+    """"Amara.org" against "amara org", "réalisés" against "realises"."""
+    assert subtitle_boilerplate("Subtitles by the Amara.org community") is True
+    assert subtitle_boilerplate("Subtitulos realizados por Amara") is True
+
+
+def test_normalisation_leaves_japanese_intact() -> None:
+    """NFKD splits dakuten -- ご becomes こ -- so every Japanese phrase stopped
+    matching. Folding is confined to Latin letters."""
+    assert subtitle_boilerplate("ご視聴ありがとうございました") is True
+
+
+@pytest.mark.parametrize("text", ["Happy birthday everyone", "I love you", "Yes absolutely"])
+def test_a_short_phrase_is_not_all_repetition(text: str) -> None:
+    """repeat_share returned 1.00 for any three-word text.
+
+    One trigram repeats itself by construction, so the shortest real
+    utterances scored as perfectly degenerate.
+    """
+    assert repeat_share(text) == 0.0
+    assert judge_transcript(text, duration_s=20.0).keep is True
