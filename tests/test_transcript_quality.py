@@ -10,11 +10,14 @@ from __future__ import annotations
 import pytest
 
 from corpus.transcripts import (
+    CAPTION_SIGNOFF_TAILS,
+    SUBTITLE_BOILERPLATE,
     TranscriptVerdict,
     impossible_speech_rate,
     judge_transcript,
     only_unspoken_languages,
     repeat_share,
+    strip_caption_tail,
     subtitle_boilerplate,
 )
 
@@ -281,3 +284,73 @@ def test_duration_is_required_so_the_rate_signal_cannot_be_skipped() -> None:
     import inspect
     param = inspect.signature(judge_transcript).parameters["duration_s"]
     assert param.default is inspect.Parameter.empty
+
+
+# --- strip_caption_tail ----------------------------------------------------
+# For the shape subtitle_boilerplate deliberately will not touch: a sign-off
+# glued to the end of real speech. Discarding a whole transcript for merely
+# containing one measurably deletes real recordings (12.3% of the reference
+# archive), so the sign-off is cut off and the speech is kept.
+
+
+def test_a_sign_off_is_cut_from_the_end_of_real_speech() -> None:
+    assert strip_caption_tail("まって、まってご視聴ありがとうございました") == "まって、まって"
+
+
+def test_an_english_sign_off_is_cut_with_its_punctuation() -> None:
+    assert (
+        strip_caption_tail("The gate is round the side Thank you for watching!")
+        == "The gate is round the side"
+    )
+
+
+def test_text_that_is_only_a_sign_off_becomes_empty() -> None:
+    assert strip_caption_tail("¡Gracias por ver el video!") == ""
+
+
+def test_the_longest_matching_phrase_wins() -> None:
+    # "gracias por ver" is also in the set; matching it first would strand
+    # "el video" as though it were speech.
+    assert strip_caption_tail("Bueno. Gracias por ver el video") == "Bueno."
+
+
+# --- the two ways an earlier, unanchored version destroyed real content ----
+
+
+def test_a_sign_off_phrase_in_mid_sentence_is_left_alone() -> None:
+    # A recorded meeting. Matching this phrase anywhere it appeared turned it
+    # into "for coming today" -- the defect that made the match end-anchored.
+    speech = "So speaking of time and budget, thank you very much for coming today."
+    assert strip_caption_tail(speech) == speech
+
+
+def test_a_phrase_that_continues_into_another_word_is_not_a_tail() -> None:
+    # "Takk for ating medieting." -> "ieting." when the match was unanchored.
+    assert strip_caption_tail("Takk for ating medieting.") == "Takk for ating medieting."
+
+
+def test_generic_politeness_is_never_stripped() -> None:
+    # These ARE in SUBTITLE_BOILERPLATE, because a whole 30-minute transcript
+    # reading "Thank you." is invented. One window of a longer recording
+    # reading "Thank you." is a person talking.
+    for spoken in ["Thank you.", "Okay.", "Gracias.", "ありがとうございます"]:
+        assert strip_caption_tail(spoken) == spoken
+
+
+def test_the_tail_set_is_a_subset_of_the_whole_text_set() -> None:
+    # The two lists must not drift: anything safe to strip from a tail is by
+    # definition boilerplate, but not the reverse.
+    extra = CAPTION_SIGNOFF_TAILS - SUBTITLE_BOILERPLATE
+    assert extra == set(), f"not also whole-text boilerplate: {sorted(extra)}"
+
+
+def test_no_tail_phrase_is_short_enough_to_be_ordinary_speech() -> None:
+    # The guard on the judgement call behind the set: every member is a fixed
+    # caption phrase, not something a person says in passing.
+    too_short = {p for p in CAPTION_SIGNOFF_TAILS if len(p.split()) < 2 and len(p) < 8}
+    assert too_short == set(), f"suspiciously short: {sorted(too_short)}"
+
+
+def test_empty_and_blank_text_survive() -> None:
+    assert strip_caption_tail("") == ""
+    assert strip_caption_tail("   ") == "   "

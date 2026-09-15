@@ -21,8 +21,10 @@ import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
+from functools import cache
 
 __all__ = [
+    "CAPTION_SIGNOFF_TAILS",
     "DEFAULT_MAX_CHARS_PER_SECOND",
     "DEFAULT_UNSPOKEN_MAX_CHARS",
     "SUBTITLE_BOILERPLATE",
@@ -32,6 +34,7 @@ __all__ = [
     "judge_transcript",
     "only_unspoken_languages",
     "repeat_share",
+    "strip_caption_tail",
     "subtitle_boilerplate",
 ]
 
@@ -71,6 +74,7 @@ SUBTITLE_BOILERPLATE: frozenset[str] = frozenset({
     "ありがとうございました", "ありがとうございます", "おやすみなさい", "音楽", "拍手",
     "字幕", "字幕由amara org社群提供", "谢谢", "谢谢观看", "請不吝點贊",
     "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目", "terima kasih banyak", "спасибо", "감사합니다", "구독과 좋아요",
+    "매주 일요일 업로드됩니다",
 })
 
 # PREFIXES: credit lines that end in a name, studio or community, so the full
@@ -111,6 +115,62 @@ DEFAULT_MAX_CHARS_PER_SECOND = 25.0
 # Transcribers mislabel real speech too: two minutes of English conversation
 # came back tagged Hawaiian and Portuguese.
 DEFAULT_UNSPOKEN_MAX_CHARS = 150
+
+# Sign-offs safe to cut off the END of a window that still holds real speech.
+#
+# This is a deliberately SMALLER set than SUBTITLE_BOILERPLATE, and the two do
+# different jobs. SUBTITLE_BOILERPLATE answers "is this whole transcript a
+# caption artefact?", where "Thank you." as the entire text of a 30-minute
+# recording is obviously invented. That reasoning does not survive being moved
+# to a single window: "Thank you." as one 30-second window inside a longer
+# recording is somebody talking, and dropping it deletes real content.
+#
+# So membership here has one test -- could a person plausibly have SAID this?
+# Excluded for failing it:
+#   * short generic politeness ("ok", "thank you", "gracias", "ありがとうございます")
+#   * "thank you very much", which is real speech. Stripping it anywhere it
+#     appeared turned a recorded meeting's "thank you very much for coming
+#     today" into "for coming today".
+# Included: broadcast/caption register ("thank you for VIEWING", "please
+# subscribe"), and sign-offs in languages the archive does not contain.
+#
+# Anything from this set is removed ONLY when it sits at the very end of the
+# text. Matching it anywhere is what destroyed the meeting above, and an
+# unanchored match also chewed into a real word -- "Takk for ating medieting."
+# became "ieting."
+CAPTION_SIGNOFF_TAILS: frozenset[str] = frozenset({
+    # Caption register: about watching a video, not about the conversation.
+    "ご視聴ありがとうございました",
+    "ご視聴ありがとうございます",
+    "チャンネル登録お願いします",
+    "字幕由amara org社群提供",
+    "구독과 좋아요 부탁드립니다",
+    "매주 일요일 업로드됩니다",
+    "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目",
+    "please subscribe",
+    "thanks for watching",
+    "thank you for watching",
+    "gracias por ver",
+    "gracias por ver el video",
+    "gracias por su atencion",
+    "спасибо за просмотр",
+    # A transcriber's own annotation, never a spoken line.
+    "background noise",
+    # Sign-offs in languages a given archive may not contain at all. Harmless
+    # to carry everywhere: each is a fixed caption phrase, not conversation.
+    "takk for ating med",
+    "takk for at du sa pa",
+    "takk for at du sa med",
+    "tusen takk for at du sa med",
+    "danke fur zuschauen",
+    "vielen dank",
+    "bedankt voor het kijken",
+    "merci d avoir regarde",
+    "obrigado por assistir",
+    "grazie per la visione",
+    "terima kasih telah menonton",
+    "terima kasih banyak",
+})
 
 _WHITESPACE = re.compile(r"\s+")
 # Includes the characters transcribers actually emit: U+2019 is Whisper's
@@ -202,6 +262,52 @@ def subtitle_boilerplate(
         if _UNSPACED_SCRIPT.search(head) or not _UNSPACED_SCRIPT.search(tail):
             return True
     return False
+
+
+@cache
+def _tail_pattern(phrase: str) -> re.Pattern[str]:
+    """Match a normalised phrase against RAW text, anchored to the end.
+
+    The phrase list is stored normalised -- lowercased, punctuation removed --
+    but the text being cleaned is not, so the two are bridged here rather than
+    by normalising the text and losing the original. `[\\s\\W]*` between tokens
+    absorbs the punctuation and spacing that normalisation would have removed,
+    and the trailing `$` is the whole safety property.
+    """
+    tokens = [re.escape(token) for token in phrase.split()]
+    body = r"[\s\W]*".join(tokens)
+    return re.compile(body + r"[\s\W]*$", re.IGNORECASE)
+
+
+def strip_caption_tail(text: str, *, tails: frozenset[str] | None = None) -> str:
+    """Remove a caption sign-off from the end of `text`, leaving the rest.
+
+    For text where a sign-off is glued to real speech -- the common shape, and
+    one `subtitle_boilerplate` deliberately will not touch, because discarding
+    a whole transcript for containing a sign-off measurably deletes real
+    recordings. Returns `text` unchanged when nothing matches, and may return
+    "" when the text was nothing but a sign-off.
+
+    Removal is anchored to the end for a reason worth keeping: matching these
+    phrases anywhere they appear cut "thank you very much for coming today"
+    down to "for coming today", and truncated "Takk for ating medieting." to
+    "ieting." by chewing into the following word.
+    """
+    if not text.strip():
+        return text
+    phrases = tails if tails is not None else CAPTION_SIGNOFF_TAILS
+    out = unicodedata.normalize("NFC", text)
+    # Longest first: "gracias por ver el video" must win over "gracias por ver",
+    # which would otherwise leave "el video" stranded.
+    for phrase in sorted(phrases, key=len, reverse=True):
+        stripped = _tail_pattern(phrase).sub("", out)
+        if stripped != out:
+            out = stripped
+    out = _WHITESPACE.sub(" ", out).strip()
+    # Spanish opens with punctuation, so cutting "gracias por ver el video"
+    # off "¡Gracias por ver el video!" leaves a lone "¡". Nothing that
+    # normalises away to nothing is speech.
+    return "" if out and not _normalise(out) else out
 
 
 # Fewest units needed before a repetition ratio means anything. With one unit

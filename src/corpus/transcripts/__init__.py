@@ -15,6 +15,7 @@ What works is judging the text.
 """
 
 from corpus.transcripts.quality import (
+    CAPTION_SIGNOFF_TAILS,
     SUBTITLE_BOILERPLATE,
     SUBTITLE_CREDIT_PREFIXES,
     TranscriptVerdict,
@@ -22,10 +23,12 @@ from corpus.transcripts.quality import (
     judge_transcript,
     only_unspoken_languages,
     repeat_share,
+    strip_caption_tail,
     subtitle_boilerplate,
 )
 
 __all__ = [
+    "CAPTION_SIGNOFF_TAILS",
     "SUBTITLE_BOILERPLATE",
     "SUBTITLE_CREDIT_PREFIXES",
     "TranscriptVerdict",
@@ -33,5 +36,6 @@ __all__ = [
     "judge_transcript",
     "only_unspoken_languages",
     "repeat_share",
+    "strip_caption_tail",
     "subtitle_boilerplate",
 ]
