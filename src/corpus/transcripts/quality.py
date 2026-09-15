@@ -64,6 +64,14 @@ SUBTITLE_BOILERPLATE: frozenset[str] = frozenset({
     "obrigada", "obrigado por assistir", "grazie", "grazie per la visione",
     "dank je wel", "bedankt voor het kijken", "spasibo", "спасибо за просмотр",
     "subtitulos", "gracias por su atencion",
+    # Spanish-language YouTube calls to action. Found glued to real family
+    # speech -- "Cierra la puerta por favor ¡Suscríbete al canal".
+    "suscribete",
+    "suscribete al canal",
+    "suscribete y activa la campanita",
+    "dale like y suscribete",
+    "suscribete al canal y activa las notificaciones",
+    "si te gusta el video dale like y suscribete al canal y activa las notificaciones",
     # Non-speech annotations the model emits instead of text, and bare
     # interjections that carry nothing findable on their own.
     "applause", "music", "silence", "foreign", "laughter", "inaudible",
@@ -154,6 +162,12 @@ CAPTION_SIGNOFF_TAILS: frozenset[str] = frozenset({
     "gracias por ver el video",
     "gracias por su atencion",
     "спасибо за просмотр",
+    "suscribete",
+    "suscribete al canal",
+    "suscribete y activa la campanita",
+    "dale like y suscribete",
+    "suscribete al canal y activa las notificaciones",
+    "si te gusta el video dale like y suscribete al canal y activa las notificaciones",
     # A transcriber's own annotation, never a spoken line.
     "background noise",
     # Sign-offs in languages a given archive may not contain at all. Harmless
@@ -264,22 +278,82 @@ def subtitle_boilerplate(
     return False
 
 
+# Combining marks, which NFD splits off from their base letter.
+# Combining marks NFD splits off from their base character. The second range
+# is the Japanese voiced/semi-voiced sound marks: NFD turns ご into こ + U+3099,
+# and omitting them here made every CJK phrase unmatchable -- the same class of
+# silent failure as NFKD collapsing ご onto こ.
+_COMBINING = "̀-゙ͯ-゚"
+# Punctuation that OPENS a clause, so it belongs to the sign-off being cut
+# rather than to the speech before it. Without this, cutting the sign-off off
+# "...por favor ¡Suscríbete al canal" left a lone "¡" behind.
+_OPENING_PUNCT = "¡¿"
+
+
+def _accent_tolerant(token: str) -> str:
+    """A token pattern that also matches its accented spellings.
+
+    The phrase lists are stored normalised, which folds accents away, but the
+    text being cleaned keeps them: the stored "suscribete" has to match a real
+    "Suscríbete". Case-insensitivity does NOT do this -- `í` and `i` are
+    different characters -- and that gap is the same "cannot fire" defect that
+    left 22 of 45 entries in these lists unreachable. Matching against
+    NFD-decomposed text, where an accent is a separate combining mark, makes
+    the mark optional after every letter.
+    """
+    decomposed = unicodedata.normalize("NFD", token)
+    return "".join(re.escape(ch) + f"[{_COMBINING}]*" for ch in decomposed)
+
+
 @cache
 def _tail_pattern(phrase: str) -> re.Pattern[str]:
-    """Match a normalised phrase against RAW text, anchored to the end.
+    """Match a normalised phrase against NFD text, anchored to the end.
 
-    The phrase list is stored normalised -- lowercased, punctuation removed --
-    but the text being cleaned is not, so the two are bridged here rather than
-    by normalising the text and losing the original. `[\\s\\W]*` between tokens
-    absorbs the punctuation and spacing that normalisation would have removed,
-    and the trailing `$` is the whole safety property.
+    `[\\s\\W]*` between tokens absorbs the punctuation and spacing that
+    normalisation would have removed, and the trailing `$` is the whole safety
+    property.
     """
-    tokens = [re.escape(token) for token in phrase.split()]
-    body = r"[\s\W]*".join(tokens)
-    return re.compile(body + r"[\s\W]*$", re.IGNORECASE)
+    body = r"[\s\W]*".join(_accent_tolerant(token) for token in phrase.split())
+    lead = rf"[\s]*[{_OPENING_PUNCT}]*[\s]*"
+    return re.compile(lead + body + r"[\s\W]*$", re.IGNORECASE)
 
 
-def strip_caption_tail(text: str, *, tails: frozenset[str] | None = None) -> str:
+@cache
+def _credit_pattern(prefix: str) -> re.Pattern[str]:
+    """Find a credit prefix anywhere; the caller decides if it ends the text."""
+    body = r"[\s\W]*".join(_accent_tolerant(token) for token in prefix.split())
+    return re.compile(body, re.IGNORECASE)
+
+
+def _strip_credit_line(text: str, prefixes: tuple[str, ...]) -> str:
+    """Cut a trailing credit line -- prefix plus the name it ends in.
+
+    These cannot go in a phrase list: "Субтитры создавал DimaTorzok" ends in a
+    name that is not knowable in advance. What IS knowable is that only a name
+    follows, so a prefix counts as a credit line when what trails it is short.
+    Anything longer is real speech that happens to sit behind a fabricated
+    credit, and cutting there would delete the recording to remove the noise.
+    """
+    best = None
+    for prefix in prefixes:
+        for match in _credit_pattern(prefix).finditer(text):
+            tail = text[match.end():].strip()
+            if len(_normalise(tail)) > _CREDIT_TAIL_MAX_CHARS:
+                continue
+            # Judge the tail against the script the PREFIX is written in: a CJK
+            # credit's name is always CJK, so applying the Latin guard there
+            # would make those prefixes unreachable.
+            if _UNSPACED_SCRIPT.search(prefix) or not _UNSPACED_SCRIPT.search(tail):
+                best = match.start() if best is None else min(best, match.start())
+    return text if best is None else text[:best].strip()
+
+
+def strip_caption_tail(
+    text: str,
+    *,
+    tails: frozenset[str] | None = None,
+    credit_prefixes: tuple[str, ...] | None = None,
+) -> str:
     """Remove a caption sign-off from the end of `text`, leaving the rest.
 
     For text where a sign-off is glued to real speech -- the common shape, and
@@ -296,14 +370,22 @@ def strip_caption_tail(text: str, *, tails: frozenset[str] | None = None) -> str
     if not text.strip():
         return text
     phrases = tails if tails is not None else CAPTION_SIGNOFF_TAILS
-    out = unicodedata.normalize("NFC", text)
+    # NFD so an accent is a separate combining mark the patterns can treat
+    # as optional; recomposed to NFC on the way out so callers never see
+    # decomposed text.
+    out = unicodedata.normalize("NFD", text)
     # Longest first: "gracias por ver el video" must win over "gracias por ver",
     # which would otherwise leave "el video" stranded.
     for phrase in sorted(phrases, key=len, reverse=True):
         stripped = _tail_pattern(phrase).sub("", out)
         if stripped != out:
             out = stripped
+    heads = (
+        credit_prefixes if credit_prefixes is not None else SUBTITLE_CREDIT_PREFIXES
+    )
+    out = _strip_credit_line(out, heads)
     out = _WHITESPACE.sub(" ", out).strip()
+    out = unicodedata.normalize("NFC", out)
     # Spanish opens with punctuation, so cutting "gracias por ver el video"
     # off "¡Gracias por ver el video!" leaves a lone "¡". Nothing that
     # normalises away to nothing is speech.

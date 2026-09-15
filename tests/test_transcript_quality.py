@@ -354,3 +354,76 @@ def test_no_tail_phrase_is_short_enough_to_be_ordinary_speech() -> None:
 def test_empty_and_blank_text_survive() -> None:
     assert strip_caption_tail("") == ""
     assert strip_caption_tail("   ") == "   "
+
+
+# --- trailing credit lines -------------------------------------------------
+# Credit lines cannot live in a phrase list: they end in a name that is not
+# knowable in advance. What is knowable is that ONLY a name follows.
+
+
+def test_a_window_that_is_only_a_credit_line_becomes_empty() -> None:
+    assert strip_caption_tail("Субтитры создавал DimaTorzok") == ""
+    assert strip_caption_tail("Teksting av Nicolai Winther") == ""
+
+
+def test_a_credit_line_is_cut_off_the_end_and_the_rest_stays() -> None:
+    assert strip_caption_tail("🎵🎵🎵 🎵🎵🎵 Teksting av Nicolai Winther") == "🎵🎵🎵 🎵🎵🎵"
+
+
+def test_real_speech_following_a_fabricated_credit_survives() -> None:
+    # This exact recording -- someone filming their family -- was DELETED by an
+    # earlier prefix rule that matched the credit and discarded the transcript.
+    # The credit is invented; everything after it is a person talking.
+    speech = "Субтитры создавал DimaTorzok 山が正面 見えてる?見えてる!今も撮ってる!"
+    assert strip_caption_tail(speech) == speech
+
+
+def test_a_long_tail_after_a_prefix_is_speech_not_a_name() -> None:
+    sentence = (
+        "Hello there, subtitles by me and my long real sentence continues on here"
+    )
+    assert strip_caption_tail(sentence) == sentence
+
+
+# --- accents and dakuten ---------------------------------------------------
+# The phrase lists are stored normalised, which folds accents away, but the
+# text being cleaned keeps them. Case-insensitivity does NOT bridge that: í and
+# i are different characters. This is the "cannot fire" defect that left 22 of
+# 45 entries in these lists unreachable, and it recurred here.
+
+
+def test_an_accented_spelling_matches_its_folded_phrase() -> None:
+    # Stored as "suscribete al canal"; the transcript says "¡Suscríbete al canal".
+    assert (
+        strip_caption_tail("Cierra la puerta por favor ¡Suscríbete al canal")
+        == "Cierra la puerta por favor"
+    )
+
+
+def test_opening_punctuation_goes_with_the_sign_off() -> None:
+    # Spanish opens a clause with ¡. Leaving it behind produces a stray "¡".
+    assert strip_caption_tail("Sí ¡Suscríbete") == "Sí"
+
+
+def test_an_accented_credit_prefix_still_fires() -> None:
+    assert strip_caption_tail("Subtítulos realizados por la comunidad") == ""
+
+
+def test_a_real_word_sharing_the_stem_is_not_a_sign_off() -> None:
+    sentence = "Me suscribo a la revista todos los años"
+    assert strip_caption_tail(sentence) == sentence
+
+
+def test_voiced_kana_survive_the_decomposition_used_for_matching() -> None:
+    # Matching happens on NFD text, which splits ご into こ + U+3099. If the
+    # combining range omits those marks every CJK phrase silently stops
+    # matching; if the result is not recomposed, callers get decomposed kana.
+    assert strip_caption_tail("まって、まってご視聴ありがとうございました") == "まって、まって"
+
+
+def test_returned_text_is_recomposed_not_decomposed() -> None:
+    import unicodedata
+
+    out = strip_caption_tail("ご飯を食べた ご視聴ありがとうございました")
+    assert out == unicodedata.normalize("NFC", out)
+    assert "ご飯" in out
