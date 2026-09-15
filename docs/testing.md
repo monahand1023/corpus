@@ -97,9 +97,52 @@ nothing. Deleting an inconvenient query is how a baseline becomes decoration.
 not the config's `[retriever] top_k`. Measuring at 15 when users get 5 reports
 a number nobody experiences.
 
+**Make the answer key COMPLETE.** An answer set is an OR-set: the query hits
+if any key in it ranks. That makes an incomplete set actively misleading --
+the retriever returns a perfectly good answer, it is missing from the key, and
+the eval reports a miss against software that is working. This has now bitten
+twice, in two different disguises:
+
+- *Capping the set.* A photo archive's largest trip has 1,456 photos; capping
+  answer sets at 400 turned a real 0.625 into a false 0.500 and made the
+  largest, easiest query look like a failure.
+- *Matching only the first message.* Labelling a mail thread by subject prefix
+  missed every `Re:` in it, reducing a 93-message thread to one message and
+  another thread to zero.
+
+Both look exactly like retrieval failures. Before tuning anything, confirm the
+key is right -- read the source text, and check the size of each answer set.
+
+**Prefer labels from outside the retriever.** The place a photo library
+recorded, the subject a sender wrote: these are ground truth produced before
+any of this existed. Hand-picking documents you already know the retriever
+finds measures your own memory.
+
 **Check whether the eval path matches the served path.** The eval reranks only
 with `--rerank`. If the MCP server does not rerank, neither should the eval —
 and vice versa, or the number describes a system nobody is running.
+
+### What the numbers look like in practice
+
+Three personal archives, each measured at the `top_k` its own MCP server
+serves, hybrid retrieval, no reranker, eight queries each:
+
+| Archive | recall@k | MRR | nDCG@k |
+|---|---|---|---|
+| transcripts (k=5) | 0.625 | 0.442 | 0.486 |
+| photos (k=8) | 0.625 | 0.479 | 0.256 |
+| mail (k=8) | 0.875 | 0.279 | 0.171 |
+
+The useful signal is the SHAPE, not the absolute values. Mail has the best
+recall and the worst MRR: the right thread is nearly always in the top 8, but
+it lands third to sixth. That is a ranking problem, not a retrieval one, and
+it is what a reranker is for. The photo archive's low nDCG is partly by
+construction -- its ideal ranking fills all 8 slots from the right trip, a
+much harder bar than "find one".
+
+Eight queries is a small set. It is enough to catch a regression and to tell
+these shapes apart; it is not enough to detect a small improvement, and a
+change of a few points between runs is noise, not progress.
 
 ## Layer 4 — `corpus-judge`: is the answer good?
 
