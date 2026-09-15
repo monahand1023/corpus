@@ -119,7 +119,10 @@ async def _smoke_one(
     # The server inherits the caller's environment plus whatever the config
     # pins; a server that only works because of a variable set in the
     # developer's shell is a server that will fail under Claude.
-    full_env = {**os.environ, **(env or {})}
+    # Marks the probe as synthetic so the server does not append it to the
+    # query log. That log exists so tuning can use real usage instead of a
+    # synthesised set, and a health check filling it defeats the point.
+    full_env = {**os.environ, **(env or {}), "CORPUS_SYNTHETIC_QUERY": "1"}
     # cwd matters and is easy to get wrong here: credentials load from a `.env`
     # beside the config, so a server spawned in the wrong directory fails to
     # find its API key and dies during initialize. Claude launches these with

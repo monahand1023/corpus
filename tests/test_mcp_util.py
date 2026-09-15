@@ -92,3 +92,24 @@ def test_the_timer_reports_elapsed_time() -> None:
         sum(range(1000))
 
     assert t.elapsed_ms >= 0
+
+
+def test_a_synthetic_probe_is_not_written_to_the_query_log(tmp_path, monkeypatch) -> None:
+    """A health check is not a search.
+
+    `corpus-smoke` drives the real server with a synthetic probe. Without this
+    opt-out its probe lands in the query log beside genuine queries -- and that
+    log exists precisely so tuning can use real usage instead of a synthesised
+    set. One afternoon of smoke tests left three archives whose logged queries
+    were almost entirely the probe.
+    """
+    log = tmp_path / "queries.jsonl"
+
+    monkeypatch.setenv("CORPUS_SYNTHETIC_QUERY", "1")
+    record_query(log, tool="search_knowledge", query="notes from last year")
+    assert not log.exists()
+
+    monkeypatch.delenv("CORPUS_SYNTHETIC_QUERY")
+    record_query(log, tool="search_knowledge", query="a real question")
+    assert log.exists()
+    assert "a real question" in log.read_text()

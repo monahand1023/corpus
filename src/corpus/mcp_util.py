@@ -88,6 +88,14 @@ def record_query(
     """
     if path is None:
         return
+    # A health check is not a search. `corpus-smoke` drives the real server
+    # with a synthetic probe, and without this its probe lands in the log
+    # alongside genuine queries -- the log whose entire purpose is to let
+    # tuning use real usage instead of a synthesised set. One afternoon of
+    # smoke tests left three archives whose logged queries were almost
+    # entirely the probe.
+    if os.environ.get("CORPUS_SYNTHETIC_QUERY"):
+        return
     results = None
     if include_results and chunks is not None:
         results = [(c.source_type, c.source_key) for c in chunks]
