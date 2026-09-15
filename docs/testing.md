@@ -192,15 +192,22 @@ Five archives, each at the `top_k` its own server uses:
 | archive | content | baseline recall/MRR/nDCG | with re-rank | verdict |
 |---|---|---|---|---|
 | tickets/PRs/wiki (n=31) | prose | 0.935 / 0.866 / 0.818 | **0.968 / 0.903 / 0.831** | ENABLED |
-| docs/email/attachments (n=39) | prose | 0.821 / 0.632 / 0.616 | 0.744 / 0.586 / 0.577 | no |
+| docs/email/attachments (n=39) | prose | 0.897 / 0.643 / 0.650 | 0.872 / 0.662 / 0.668 | within noise; left off |
 | mail (n=8) | prose | 0.875 / 0.342 / 0.217 | 0.875 / 0.416 / 0.377 | mixed; not enabled |
 | photos (n=8) | metadata lines | 0.625 / 0.479 / 0.256 | 0.625 / 0.321 / 0.266 | no |
 | transcripts (n=8) | ASR fragments | 0.625 / 0.442 / 0.486 | 0.375 / 0.250 / 0.283 | no |
 
-**Re-ranking helped one archive out of five.** On two it cost recall outright
--- 0.625 to 0.375 on transcripts, 0.821 to 0.744 on the document archive. A
-cross-encoder can only reorder the candidate pool, so LOSING recall means it
-actively pushed correct answers below the cut.
+**Re-ranking clearly helped one archive out of five**, improved ranking
+without touching recall on a second, landed inside the noise floor on a third,
+and hurt the last two -- 0.625 to 0.375 recall on transcripts, and a third of
+the MRR on photos. A cross-encoder can only reorder the candidate pool, so
+LOSING recall means it actively pushed correct answers below the cut.
+
+The document archive's row was WRONG in an earlier version of this table, and
+wrong in the instructive way: it had been measured at k=5 while its server
+serves 15, which made a 0.025 difference look like 0.077. Re-measured at the
+served k it is a wash. Getting `--top-k` to default from the served
+configuration is not a nicety.
 
 Two predictors were tried and both failed. The first was query style: the gold
 set audit shows the tickets archive shares wording with its own answers far

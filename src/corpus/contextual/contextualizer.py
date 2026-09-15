@@ -36,6 +36,26 @@ two real archives:
     neutral-to-positive and 28% was clearly negative (recall 0.683 vs 0.750
     on vector-only retrieval, Wilcoxon p=0.0002). See `DEFAULT_MIN_TOKENS`.
 
+    CONFIRMED THE HARD WAY on a second archive, 2026-09-15. Transcribed audio
+    chunks one ~30-second window at a time, and exactly 1 of 45,092 chunks
+    cleared the 260-token floor -- so the floor was lowered to 10 to reach the
+    documents a gold set showed were failing. That is a coverage argument, and
+    coverage is the wrong quantity. At a floor of 10 a ~40-character chunk
+    carries a ~141-character context: a share of roughly 78%, far past the 28%
+    already measured as harmful. Result on 34,872 contextualised chunks:
+
+        recall@5  0.625 -> 0.500    MRR 0.442 -> 0.406    nDCG 0.486 -> 0.429
+
+    It fixed none of the failing queries and broke one that had been passing.
+    The mechanism is the one predicted above: every window of a recording gets
+    a near-identical context, which collapses the distinctions between them.
+
+    The general rule this archive illustrates: contextual retrieval assumes a
+    chunk is a FRAGMENT of something longer. Where the chunk is most of what
+    exists, there is nothing for a context sentence to situate, and it only
+    adds a shared prefix that makes siblings look alike. Check the context's
+    share BEFORE lowering the floor to improve coverage.
+
 Hence `should_contextualize`, and hence `min_tokens` being configurable per
 source in `corpus.toml` rather than a constant here.
 """
