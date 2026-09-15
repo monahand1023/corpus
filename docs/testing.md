@@ -179,6 +179,58 @@ it after importing anything transcribed. The fix is always at ingest -- apply
 `corpus.transcripts.strip_caption_tail` in the connector or chunker and
 re-ingest, which re-embeds only the chunks whose content actually changed.
 
+### Using the baselines: is re-ranking worth it?
+
+`corpus-eval --compare --rerank` runs the query set under several retrieval
+configs and prints a metric x config table. This is what the baselines are
+for, and the answer turned out to be archive-specific in a way no amount of
+reasoning would have produced.
+
+Four archives, each at the `top_k` its own server uses:
+
+| archive | config | recall | MRR | nDCG |
+|---|---|---|---|---|
+| work tickets/docs (n=31) | hybrid | 0.935 | 0.866 | 0.795 |
+| | vector-only | 0.903 | 0.817 | 0.748 |
+| mail (n=8) | hybrid | 0.875 | 0.342 | 0.217 |
+| | vector-only | 0.875 | 0.429 | 0.236 |
+| | hybrid+rerank | 0.875 | **0.416** | **0.377** |
+| transcripts (n=8) | hybrid | 0.625 | 0.442 | 0.486 |
+| | vector-only | 0.500 | 0.275 | 0.331 |
+| | hybrid+rerank | **0.375** | 0.250 | 0.283 |
+| photos (n=8) | hybrid | 0.625 | 0.479 | 0.256 |
+| | vector-only | 0.625 | 0.479 | 0.256 |
+| | hybrid+rerank | 0.625 | **0.321** | 0.266 |
+
+Re-ranking helped one archive and hurt two. On transcripts it cut recall from
+0.625 to 0.375 -- a cross-encoder can only reorder the candidate pool, so
+losing recall means it actively pushed correct answers below the cut. Short,
+noisy, code-switched transcript fragments are not what a cross-encoder trained
+on clean question/passage pairs expects. On photos it cost a third of MRR.
+
+BM25's contribution splits the same way. It earns its place on the work
+archive, where queries use the archive's own vocabulary. On mail, where the
+gold queries are deliberately paraphrased, turning it OFF improved MRR from
+0.342 to 0.429 for free. On photos, hybrid and vector-only are identical to
+three decimal places -- BM25 contributes nothing to photo metadata.
+
+**The gold-set audit predicts which case an archive is in.** The work
+archive's queries share a three-word run with their own answers 17 times out
+of 31; the personal archives' queries are paraphrased away from theirs. An
+archive whose users type its vocabulary wants BM25 and gains little from a
+cross-encoder. An archive whose users describe what they half-remember wants
+the opposite.
+
+So: measure per archive, and re-measure after changing the embedder or the
+chunker. A blanket "turn on re-ranking" would have quietly degraded two of
+these four. Note also the cost -- ~390ms per pair on CPU, several seconds per
+query at the default pool size (see `reranker/local.py`) -- which the nDCG
+gain has to justify.
+
+These sets are small (n=8 for three of them). They are big enough to catch a
+regression and to tell these shapes apart; a few points between runs is noise,
+and only the large moves above should be acted on.
+
 ## Layer 4 — `corpus-judge`: is the answer good?
 
 An LLM grades generated answers against retrieved context. The only layer that
