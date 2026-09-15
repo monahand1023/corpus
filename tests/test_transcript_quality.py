@@ -188,7 +188,7 @@ def test_a_credit_line_is_caught_whatever_name_it_ends_with(text: str) -> None:
     "Altyazı M.K. Terima kasih telah menonton! 本日はご参加ありがとうございます。",
 ])
 def test_real_speech_behind_an_invented_credit_survives(text: str) -> None:
-    """These were deleted, and they are recordings of someone's family.
+    """A fabricated credit line often sits in front of genuine audio.
 
     An invented credit often precedes real audio. Matching the prefix alone
     discards the recording to remove the noise; the tail after the prefix has
@@ -226,3 +226,58 @@ def test_a_short_phrase_is_not_all_repetition(text: str) -> None:
     # character n-grams so that "Mmmmmm..." -- a single token -- is still seen.
     assert repeat_share(text) < 0.5
     assert judge_transcript(text, duration_s=20.0).keep is True
+
+
+# --- defects found by pre-publication review -------------------------------
+
+@pytest.mark.parametrize("text", [
+    "字幕由大力中文字幕组提供", "字幕製作 中文字幕组", "翻译由志愿者提供",
+])
+def test_a_cjk_credit_prefix_can_fire(text: str) -> None:
+    """These were unreachable: the tail guard rejected any CJK tail.
+
+    The guard spares real speech following a fabricated Latin credit, but a
+    CJK credit's tail is ALWAYS CJK, so those prefixes could never match --
+    the same "cannot fire" defect this list has had twice before.
+    """
+    assert subtitle_boilerplate(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "Gracias por ver el vídeo", "merci d'avoir regardé", "Subtítulos",
+])
+def test_decomposed_and_composed_input_match_alike(text: str) -> None:
+    """macOS emits NFD routinely, and folding examined each character.
+
+    A standalone combining mark survived untouched, so "vídeo" written as
+    an i followed by a combining accent could not match "video".
+    """
+    import unicodedata
+    assert (subtitle_boilerplate(unicodedata.normalize("NFC", text))
+            is subtitle_boilerplate(unicodedata.normalize("NFD", text)) is True)
+
+
+@pytest.mark.parametrize("text", [
+    "merci d’avoir regardé",   # U+2019, a transcriber's default apostrophe
+    "¡Gracias por ver!",
+    "¿Gracias?",
+])
+def test_typographic_punctuation_does_not_hide_a_signoff(text: str) -> None:
+    assert subtitle_boilerplate(text) is True
+
+
+def test_language_tags_are_compared_case_insensitively() -> None:
+    """A tag arriving as "EN" against expected {"en"} rejected real speech."""
+    assert only_unspoken_languages(["EN"], {"en"}) is False
+    assert only_unspoken_languages(["en"], {"EN"}) is False
+    assert only_unspoken_languages(["NN"], {"en"}) is True
+
+
+def test_duration_is_required_so_the_rate_signal_cannot_be_skipped() -> None:
+    """It defaulted to 0.0, which fails the rate check's own guard.
+
+    A caller omitting it silently got one fewer signal than it thought.
+    """
+    import inspect
+    param = inspect.signature(judge_transcript).parameters["duration_s"]
+    assert param.default is inspect.Parameter.empty

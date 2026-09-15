@@ -477,7 +477,7 @@ For Slack exports, JSON dumps, an internal API archive, EPUB books — write you
 
 `corpus-eval` runs hand-written known-answer queries against the live corpus and reports **recall@K, MRR, and nDCG@K**, plus an aggregate table, a per-source-type breakdown, and `--json`. It's a regression signal — run it after changing chunking, switching embedders, or tweaking retrieval.
 
-**Zero setup, no API key:** `corpus` ships a committed sample corpus (`examples/sample_corpus/` — 20 docs, two source types) and a keyless `hash` embedder (`provider="hash"`) so you can try the whole eval loop with nothing installed and no key on file:
+**Zero setup, no API key:** `corpus` ships a committed sample corpus (`examples/sample_corpus/` — 21 docs, two source types) and a keyless `hash` embedder (`provider="hash"`) so you can try the whole eval loop with nothing installed and no key on file:
 
 ```sh
 uv run corpus-ingest --config examples/sample_corpus/corpus.toml --all

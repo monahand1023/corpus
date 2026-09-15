@@ -113,7 +113,13 @@ DEFAULT_MAX_CHARS_PER_SECOND = 25.0
 DEFAULT_UNSPOKEN_MAX_CHARS = 150
 
 _WHITESPACE = re.compile(r"\s+")
-_PUNCT = re.compile(r"[.,!?;:'\"()\[\]<>/\\|`~@#$%^&*_+=-]|[。！？、，]")
+# Includes the characters transcribers actually emit: U+2019 is Whisper's
+# default apostrophe, and Spanish opens with ¡ and ¿.
+_PUNCT = re.compile(
+    r"[.,!?;:'\"()\[\]<>/\\|`~@#$%^&*_+=-]"
+    r"|[\u2018\u2019\u201c\u201d\u2026\u00a1\u00bf]"
+    r"|[。！？、，「」・～]"
+)
 # What may follow a credit prefix: a name, a studio, "the Amara.org
 # community". Anything longer, or anything in a script the prefix's language
 # does not use, is real speech that happens to sit behind an invented credit.
@@ -139,6 +145,10 @@ def _normalise(text: str) -> str:
     "realises". Comparing raw strings meant entries in the list could never
     match the output they were written for.
     """
+    # NFC first. Folding examines each character, so a standalone combining
+    # mark -- which is what NFD produces, and what macOS emits routinely --
+    # slipped through untouched and "vídeo" could not match "video".
+    text = unicodedata.normalize("NFC", text)
     out = []
     for ch in text:
         # Fold accents on LATIN letters only. Decomposing everything and
@@ -178,19 +188,25 @@ def subtitle_boilerplate(
         if not norm.startswith(head):
             continue
         # What follows a credit prefix is a name, nothing more. Requiring that
-        # keeps real speech that merely begins with an invented credit:
-        # "Субтитры сделал DimaTorzok これは本物の音声です。" is a hallucinated
-        # prefix in front of a genuine recording their family, and discarding the
-        # whole transcript loses the recording to save the noise.
+        # keeps real speech that merely begins with an invented credit: a
+        # fabricated credit line often precedes genuine audio, and matching
+        # the prefix alone discards the recording to remove the noise.
         tail = norm[len(head):].strip()
-        if len(tail) <= _CREDIT_TAIL_MAX_CHARS and not _UNSPACED_SCRIPT.search(tail):
+        if len(tail) > _CREDIT_TAIL_MAX_CHARS:
+            continue
+        # The script guard exists to spare real speech that follows a
+        # fabricated Latin-script credit. A CJK credit's tail is ALWAYS CJK,
+        # so applying it there made those prefixes unreachable -- the same
+        # "cannot fire" defect this list has had twice. Judge the tail against
+        # the script the PREFIX is written in.
+        if _UNSPACED_SCRIPT.search(head) or not _UNSPACED_SCRIPT.search(tail):
             return True
     return False
 
 
 # Fewest units needed before a repetition ratio means anything. With one unit
-# the ratio is 1.0 by construction -- "Happy birthday everyone" scored a perfect
-# 1.00 and any long-enough three-word transcript was rejected as degenerate.
+# the ratio is 1.0 by construction, so any three-word transcript scored a
+# perfect 1.00 and a long-enough one was rejected as degenerate.
 _MIN_UNITS_FOR_RATIO = 4
 
 
@@ -227,8 +243,9 @@ def only_unspoken_languages(
     material. `expected` is the caller's to supply; an archive's languages are
     a property of its people, not of this library.
     """
-    found = {lg for lg in (detected or []) if lg and lg != "?"}
-    return bool(found) and not (found & set(expected))
+    found = {lg.lower() for lg in (detected or []) if lg and lg != "?"}
+    allowed = {lg.lower() for lg in expected}
+    return bool(found) and not (found & allowed)
 
 
 def impossible_speech_rate(
@@ -257,7 +274,7 @@ class TranscriptVerdict:
 def judge_transcript(
     text: str,
     *,
-    duration_s: float = 0.0,
+    duration_s: float,
     languages: list[str] | None = None,
     expected_languages: set[str] | frozenset[str] | None = None,
     max_repeat_share: float = 0.9,
@@ -265,6 +282,10 @@ def judge_transcript(
     unspoken_max_chars: int = DEFAULT_UNSPOKEN_MAX_CHARS,
 ) -> TranscriptVerdict:
     """Apply every signal. Returns why it was rejected, or keep=True.
+
+    `duration_s` is required rather than defaulting to zero: a default of 0.0
+    fails the rate check's own guard, so callers that omitted it silently got
+    one fewer signal than they thought.
 
     `max_repeat_share` is deliberately high. Lower thresholds delete real
     recordings: at 0.6 a reference archive lost a clip of a child repeating one

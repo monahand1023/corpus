@@ -33,11 +33,12 @@ def test_mixed_script_keeps_latin_intact() -> None:
 
 # --- CJK runs glued to Latin or digits, with no space between. ---
 # `unicode61` counts Han and kana as letters, so an unseparated `Public会議室`
-# is ONE token, `Public会議`, and the run's leading bigram is unreachable. Real
-# text is full of these: `BLDG10/11会議室`, `4階Meeting M会議室`. Measured on a
-# large archive, a small share of the chunks containing 会議 were invisible to
-# BM25 for exactly this reason, and the loss is silent -- the index reports a
-# successful build either way.
+# is ONE token, `Public会議`, and the run's leading bigram is unreachable.
+# Mixed Latin-and-CJK strings are common in real Japanese business text --
+# building codes, room names, floor numbers glued to kanji. A small but real
+# share of chunks containing 会議 were invisible to BM25 for exactly this
+# reason, and the loss is silent: the index reports a successful build either
+# way.
 def test_cjk_run_is_separated_from_a_preceding_latin_word() -> None:
     assert normalize_for_fts("Public会議室") == "Public 会議 議室"
 
