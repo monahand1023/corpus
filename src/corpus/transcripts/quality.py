@@ -348,6 +348,36 @@ def _strip_credit_line(text: str, prefixes: tuple[str, ...]) -> str:
     return text if best is None else text[:best].strip()
 
 
+@cache
+def _any_tail_pattern(phrases: frozenset[str]) -> re.Pattern[str]:
+    """One alternation matching ANY sign-off at the end.
+
+    A cheap reject. Running each phrase's own pattern over every chunk of a
+    large index is ~34 anchored scans per chunk, which made a whole-index audit
+    too slow to be worth running -- and a check nobody runs catches nothing.
+    """
+    body = "|".join(
+        r"[\s\W]*".join(_accent_tolerant(token) for token in phrase.split())
+        for phrase in phrases
+    )
+    return re.compile(rf"(?:{body})[\s\W]*$", re.IGNORECASE)
+
+
+@cache
+def _any_credit_pattern(prefixes: tuple[str, ...]) -> re.Pattern[str]:
+    """One alternation matching ANY credit prefix, anywhere.
+
+    Deliberately looser than the real rule, which also requires a short
+    name-like tail: this only has to avoid rejecting text the full pass would
+    have changed.
+    """
+    body = "|".join(
+        r"[\s\W]*".join(_accent_tolerant(token) for token in prefix.split())
+        for prefix in prefixes
+    )
+    return re.compile(rf"(?:{body})", re.IGNORECASE)
+
+
 def strip_caption_tail(
     text: str,
     *,
@@ -370,19 +400,29 @@ def strip_caption_tail(
     if not text.strip():
         return text
     phrases = tails if tails is not None else CAPTION_SIGNOFF_TAILS
+    heads = (
+        credit_prefixes if credit_prefixes is not None else SUBTITLE_CREDIT_PREFIXES
+    )
     # NFD so an accent is a separate combining mark the patterns can treat
     # as optional; recomposed to NFC on the way out so callers never see
     # decomposed text.
     out = unicodedata.normalize("NFD", text)
+    # Nothing to remove: return the input UNCHANGED rather than a normalised,
+    # whitespace-collapsed copy. Callers compare the result against the input
+    # to decide whether a sign-off was present, so returning a cosmetically
+    # different string for clean text would report contamination that is not
+    # there.
+    if not (
+        (phrases and _any_tail_pattern(frozenset(phrases)).search(out))
+        or (heads and _any_credit_pattern(tuple(heads)).search(out))
+    ):
+        return text
     # Longest first: "gracias por ver el video" must win over "gracias por ver",
     # which would otherwise leave "el video" stranded.
     for phrase in sorted(phrases, key=len, reverse=True):
         stripped = _tail_pattern(phrase).sub("", out)
         if stripped != out:
             out = stripped
-    heads = (
-        credit_prefixes if credit_prefixes is not None else SUBTITLE_CREDIT_PREFIXES
-    )
     out = _strip_credit_line(out, heads)
     out = _WHITESPACE.sub(" ", out).strip()
     out = unicodedata.normalize("NFC", out)

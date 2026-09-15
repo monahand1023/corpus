@@ -129,6 +129,42 @@ class JsonFilesChunker:
         return [text[i : i + MAX_CHUNK_CHARS] for i in range(0, len(text), MAX_CHUNK_CHARS)]
 ```
 
+### If your source is transcribed audio or video
+
+Speech-to-text output needs one extra step in the chunker, and it is easy to
+miss because nothing fails without it.
+
+A model trained on audio paired with scraped subtitles reproduces caption
+boilerplate over silence -- "Thanks for watching", "ご視聴ありがとうございました",
+"Субтитры создавал ...". If you chunk per transcribed window, that text
+becomes a chunk, embeds, ranks, and comes back as an answer.
+
+```python
+from corpus.transcripts import strip_caption_tail, subtitle_boilerplate
+
+# Cut a sign-off off the END of each window BEFORE judging the window.
+segments = [{**s, "text": strip_caption_tail(s.get("text") or "")} for s in segments]
+kept = [s for s in segments if s["text"] and not subtitle_boilerplate(s["text"])]
+```
+
+The two calls do different jobs and you want both. `subtitle_boilerplate` asks
+"is this window ENTIRELY a caption artefact?" and drops it.
+`strip_caption_tail` handles the commoner shape -- a sign-off glued to the end
+of real speech -- by cutting the tail and keeping the speech. Do not use the
+first to drop text that merely CONTAINS boilerplate: measured on a real
+archive that deletes 12.3% of it, genuine recordings included.
+
+Strip at index time, not in your source database. The database is the
+evidence; the index is the derived artefact, and it is the one that should be
+clean. A rule change then needs only a re-ingest, which re-embeds just the
+chunks whose content actually changed -- never a re-transcription.
+
+Afterwards, check it worked:
+
+```sh
+corpus-survey index-quality --db data/corpus.db --source-type <your source>
+```
+
 ## 3. Register it
 
 Edit `src/corpus/connectors/registry.py`:

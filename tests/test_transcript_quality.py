@@ -427,3 +427,20 @@ def test_returned_text_is_recomposed_not_decomposed() -> None:
     out = strip_caption_tail("ご飯を食べた ご視聴ありがとうございました")
     assert out == unicodedata.normalize("NFC", out)
     assert "ご飯" in out
+
+
+def test_text_with_no_sign_off_is_returned_byte_identical() -> None:
+    """Callers detect contamination by comparing output against input.
+
+    An earlier version normalised and collapsed whitespace on the way out even
+    when it removed nothing, so clean text came back cosmetically different --
+    and an index audit comparing the two would report contamination that was
+    not there.
+    """
+    for untouched in [
+        "already   collapsed\ttext with  gaps",
+        "Thank you.",
+        "We went to the park and fed the ducks.",
+        "  leading and trailing  ",
+    ]:
+        assert strip_caption_tail(untouched) == untouched
