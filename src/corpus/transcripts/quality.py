@@ -53,6 +53,24 @@ SUBTITLE_BOILERPLATE: frozenset[str] = frozenset({
     "感谢观看", "字幕製作", "ご視聴ありがとうございました", "ご視聴ありがとうございます",
     "チャンネル登録お願いします", "시청해주셔서 감사합니다", "구독과 좋아요 부탁드립니다",
     "abone ol",
+    # Sign-offs in more languages. A whole transcript that is only "gracias"
+    # or "merci" is a thirty-second clip that produced one word -- invention,
+    # not a person thanking someone.
+    "danke", "danke fur zuschauen", "vielen dank", "gracias", "gracias por ver",
+    "gracias por ver el video", "merci", "merci d avoir regarde", "obrigado",
+    "obrigada", "obrigado por assistir", "grazie", "grazie per la visione",
+    "dank je wel", "bedankt voor het kijken", "spasibo", "спасибо за просмотр",
+    "subtitulos", "gracias por su atencion",
+    # Non-speech annotations the model emits instead of text, and bare
+    # interjections that carry nothing findable on their own.
+    "applause", "music", "silence", "foreign", "laughter", "inaudible",
+    "background noise", "no audio", "blank audio",
+    "hmm", "mm", "mmm", "uh", "um", "oh", "ah", "eh", "ok", "okay",
+    "yeah", "yes", "no", "so", "the", "you", "oh my god",
+    # CJK sign-offs, filler and non-speech annotations.
+    "ありがとうございました", "ありがとうございます", "おやすみなさい", "音楽", "拍手",
+    "字幕", "字幕由amara org社群提供", "谢谢", "谢谢观看", "請不吝點贊",
+    "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目", "terima kasih banyak", "спасибо", "감사합니다", "구독과 좋아요",
 })
 
 # PREFIXES: credit lines that end in a name, studio or community, so the full

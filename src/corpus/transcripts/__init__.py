@@ -15,6 +15,8 @@ What works is judging the text.
 """
 
 from corpus.transcripts.quality import (
+    SUBTITLE_BOILERPLATE,
+    SUBTITLE_CREDIT_PREFIXES,
     TranscriptVerdict,
     impossible_speech_rate,
     judge_transcript,
@@ -24,6 +26,8 @@ from corpus.transcripts.quality import (
 )
 
 __all__ = [
+    "SUBTITLE_BOILERPLATE",
+    "SUBTITLE_CREDIT_PREFIXES",
     "TranscriptVerdict",
     "impossible_speech_rate",
     "judge_transcript",
