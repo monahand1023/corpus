@@ -25,7 +25,9 @@ flowchart LR
     MCP --> CC["Claude Code"]
 ```
 
-Point it at any directory of markdown / PDF / HTML / text files and get:
+Point it at any directory of **text-bearing documents** — markdown, PDF,
+HTML, plain text, Word, PowerPoint, Excel/CSV, RTF, zip archives, Apple
+Contacts, Outlook `.olm` — and get:
 
 - Semantic + BM25 hybrid search with auto-tuned fusion weights
 - Source-diversity-aware retrieval (no single doc floods top-K)
@@ -598,6 +600,22 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 - **Embedding is not local, for real retrieval.** Storage, the vector + full-text index, hybrid search, and the optional reranker all run on your machine — but turning text into vectors for actual semantic search requires the **Voyage or Gemini API** (an API key + network at ingest and query time). The only built-in offline embedder, `provider="hash"` (see [Eval](#eval)), is a keyless lexical-overlap substrate for eval/CI reproducibility, not a semantic-quality model — for real retrieval, the text you ingest and your queries are sent to whichever provider you pick. If that's a dealbreaker, this isn't the tool.
 - **Not built for huge corpora.** Vector search is a brute-force scan (sqlite-vec `vec0`), fast to roughly **100K chunks**. Beyond that you'd want ANN/HNSW indexing, which isn't included.
 - **No OCR.** Scanned or image-only PDFs produce no text — OCR them first.
+- **No audio, video, or image content.** There is no transcription and no
+  captioning. Point it at a folder of `.mp4`, `.mov`, `.m4a`, `.jpg` or
+  `.heic` and those files are reported as a gap and skipped — `corpus-survey
+  census` and `corpus-index` both list them explicitly before ingesting
+  anything, so you find out up front rather than after a run. `.mp3` is the
+  one partial exception and it is not what it looks like: the `music`
+  connector reads ID3 **tags** to answer "what albums do I have", and never
+  touches the audio.
+
+  What IS here is the part that judges transcription output once you have it
+  elsewhere — `corpus.transcripts` holds the hallucination filters
+  (caption-boilerplate matching, repetition, impossible speech rate) derived
+  from a real real archive. Running a speech-to-text model and
+  wiring its output in is a connector you would write; see
+  [docs/adding_a_source.md](docs/adding_a_source.md), which has a section on
+  exactly that case.
 - **No live sync.** No file watcher and no real-time/incremental indexing daemon — you re-run `corpus-ingest` when content changes.
 - **Not an LLM or chatbot.** `corpus` only *retrieves* — it finds and returns the relevant chunks. The answering/reasoning is done by whatever model consumes them (e.g. Claude via the MCP server).
 - **Python 3.12+ only** (tested on 3.12, 3.13, and 3.14).
