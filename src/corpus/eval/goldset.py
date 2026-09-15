@@ -45,6 +45,10 @@ ROUND_SIZES = frozenset({50, 100, 128, 200, 250, 256, 300, 400, 500, 512, 1000, 
 # short enough to catch a query pasted out of the answer.
 _ECHO_RUN_WORDS = 3
 
+# How much of the query has to be lifted before it counts as copied. Below
+# this, an overlap is almost always a proper noun the query could not avoid.
+_ECHO_MIN_SHARE = 0.4
+
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
@@ -181,39 +185,73 @@ def _word_runs(text: str, size: int) -> set[tuple[str, ...]]:
     return {tuple(words[i : i + size]) for i in range(len(words) - size + 1)}
 
 
+def _longest_shared_run(query: str, content: str) -> list[str]:
+    """The longest run of consecutive query words appearing in `content`."""
+    q_words = [w.casefold() for w in _WORD.findall(query)]
+    c_words = [w.casefold() for w in _WORD.findall(content)]
+    if not q_words or not c_words:
+        return []
+    c_runs: dict[int, set[tuple[str, ...]]] = {}
+    best: list[str] = []
+    for size in range(len(q_words), _ECHO_RUN_WORDS - 1, -1):
+        if size not in c_runs:
+            c_runs[size] = {
+                tuple(c_words[i : i + size]) for i in range(len(c_words) - size + 1)
+            }
+        for i in range(len(q_words) - size + 1):
+            candidate = tuple(q_words[i : i + size])
+            if candidate in c_runs[size]:
+                return list(candidate)
+    return best
+
+
 def _query_echoes_answer(
     queries: Sequence[Any], documents: dict[str, str] | None
 ) -> Iterable[GoldFinding]:
     """A query lifted from its own answer tests string matching, not retrieval.
 
-    The whole point of paraphrasing a gold query away from the target's wording
-    is that a query sharing the answer's phrasing is answered by BM25 whatever
-    the embedder does, so the score says nothing about semantic retrieval.
+    Reported as a SHARE of the query, not as a bare overlap, because a bare
+    overlap cannot tell a copied phrase from an unavoidable name. An archive of
+    work documents is full of proper nouns -- product codenames, project names,
+    internal processes -- and there is no way to ask about the Zephyr transfer
+    network without saying "Zephyr". Flagging those produced 21 warnings on one
+    archive and 17 on another, nearly all unavoidable, which is how an audit
+    teaches people to ignore it.
+
+    Measured on the two known-real cases and several known-unavoidable ones,
+    copied phrases covered 50-60% of their query and entity names 20-23%, so
+    the threshold sits between them.
     """
     if not documents:
         return
     for query in queries:
-        runs = _word_runs(_text_of(query), _ECHO_RUN_WORDS)
-        if not runs:
+        text = _text_of(query)
+        q_len = len(_WORD.findall(text))
+        if q_len < _ECHO_RUN_WORDS:
             continue
         for key in _expected(query):
             content = documents.get(key)
             if not content:
                 continue
-            shared = runs & _word_runs(content, _ECHO_RUN_WORDS)
-            if shared:
-                phrase = " ".join(next(iter(shared)))
-                yield GoldFinding(
-                    query=_text_of(query),
-                    kind="query-echoes-answer",
-                    detail=(
-                        f"the phrase {phrase!r} appears verbatim in an expected "
-                        "document, so BM25 answers this regardless of the "
-                        "embedder -- paraphrase the query away from the source"
-                    ),
-                    severity="warning",
-                )
-                break
+            run = _longest_shared_run(text, content)
+            if not run:
+                continue
+            share = len(run) / q_len
+            if share < _ECHO_MIN_SHARE:
+                continue
+            phrase = " ".join(run)
+            yield GoldFinding(
+                query=text,
+                kind="query-echoes-answer",
+                detail=(
+                    f"{len(run)} of {q_len} query words ({share:.0%}) appear "
+                    f"verbatim in an expected document as {phrase!r}, so BM25 "
+                    "answers this regardless of the embedder -- paraphrase the "
+                    "query away from the source"
+                ),
+                severity="warning",
+            )
+            break
 
 
 def audit_queries(

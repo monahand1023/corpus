@@ -233,3 +233,54 @@ def test_report_findings_signals_whether_anything_was_an_error() -> None:
     assert report_findings([warn], stream=io.StringIO()) is False
     assert report_findings([warn, err], stream=io.StringIO()) is True
     assert report_findings([], stream=io.StringIO()) is False
+
+
+# --- echo detection has to tell a copied phrase from an unavoidable name ----
+# An archive of work documents is full of proper nouns -- product codenames,
+# project names, internal processes -- and there is no way to ask about the
+# Zephyr transfer network without saying "Zephyr". Flagging those produced 21
+# warnings on one archive and 17 on another, nearly all unavoidable, which is
+# how an audit teaches people to ignore it.
+
+
+def test_a_proper_noun_inside_a_longer_question_is_not_an_echo() -> None:
+    # The real shape: the document discusses the same subject in its own words
+    # and shares only the name. Measured on the live archive this overlap was
+    # 3 of 15 query words.
+    findings = audit_queries(
+        [Q("Describe the failure of Zephyr to support the Depot B launch and the "
+           "root causes found", ["doc"])],
+        documents={
+            "doc": "Post-incident review. Capacity in the Zephyr to Depot B lane "
+                   "was provisioned against a forecast that did not hold, and "
+                   "the correction arrived after peak."
+        },
+    )
+    assert "query-echoes-answer" not in _kinds(findings)
+
+
+def test_a_majority_copied_query_is_still_an_echo() -> None:
+    findings = audit_queries(
+        [Q("the weekly bulletin from our congregation", ["doc"])],
+        documents={"doc": "This week's news from our congregation follows."},
+    )
+    assert "query-echoes-answer" in _kinds(findings)
+
+
+def test_the_finding_states_the_share_so_the_call_can_be_judged() -> None:
+    findings = audit_queries(
+        [Q("measuring 160cc against one cup", ["doc"])],
+        documents={"doc": "She is measuring 160cc against one cup in the kitchen."},
+    )
+    echo = next(f for f in findings if f.kind == "query-echoes-answer")
+    assert "%" in echo.detail and "query words" in echo.detail
+
+
+def test_the_longest_shared_run_is_the_one_reported() -> None:
+    # A short incidental overlap must not mask a long copied one.
+    findings = audit_queries(
+        [Q("the quick brown fox jumped over the lazy dog", ["doc"])],
+        documents={"doc": "the quick brown fox jumped over the lazy dog entirely"},
+    )
+    echo = next(f for f in findings if f.kind == "query-echoes-answer")
+    assert "9 of 9" in echo.detail
