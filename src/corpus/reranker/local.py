@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class RerankerUnavailableError(ImportError):
+    """The optional re-ranker extra is not installed."""
+
+
 # Cross-encoders truncate long inputs anyway; keep the pair text bounded so a
 # huge chunk doesn't dominate the batch.
 _MAX_RERANK_CHARS = 4000
@@ -88,7 +93,19 @@ class BGEReranker:
             self._model_name,
             self._device,
         )
-        from sentence_transformers import CrossEncoder
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError as exc:  # pragma: no cover - exercised by the message test
+            # The reranker is an optional extra (~2GB of torch and friends), so
+            # a consumer that never asked for it will not have it. Saying which
+            # extra to install is the difference between a one-line fix and
+            # reading a traceback out of the middle of an eval run.
+            raise RerankerUnavailableError(
+                "the local re-ranker needs the 'reranker' extra, which is not "
+                "installed. Add it with:  uv add 'corpus-rag[reranker]'  (or "
+                "pip install 'corpus-rag[reranker]'). It pulls ~2GB of torch "
+                "and sentence-transformers, which is why it is opt-in."
+            ) from exc
 
         self._model = CrossEncoder(self._model_name, device=self._device)
 
