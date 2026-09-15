@@ -11,6 +11,7 @@ every layer here was added after a defect slipped through the layer above it.
 | Judge | `corpus-judge` | Is the generated answer any good? | Cost; it is the only layer that bills |
 | Index scan | `corpus-survey index-quality` | Did junk get indexed? | Anything that is not a transcription artefact |
 | Gold audit | (runs inside `corpus-eval`) | Is the answer key itself broken? | Whether the queries are the right ones |
+| Instruments | `corpus-doctor` | Can any of the above be trusted? | The archive itself |
 
 Run the first two on every change. Run the third when retrieval, chunking, or
 the embedder changes. Run the fourth when tuning, not as a gate.
@@ -246,6 +247,47 @@ These sets are small (n=8 for three of them), and the same config re-run on
 the work archive moved by 0.017 MRR between runs. They are big enough to catch
 a regression and to tell these shapes apart; only the large moves above should
 be acted on.
+
+## Layer 0 — `corpus-doctor`: can the numbers be trusted?
+
+```sh
+corpus-doctor --config corpus.toml --query-log data/queries.jsonl
+corpus-doctor --query-log a/data/queries.jsonl --query-log b/data/queries.jsonl
+```
+
+Every other check answers a question about the archive. This one answers a
+question about the instruments, and it exists because four separate
+contaminations of those instruments were found in one week -- each by accident,
+while doing something else:
+
+1. The smoke test's own probe was being written to the query log.
+2. One archive's eval measured `top_k=5` while its server served 15, so every
+   figure ever reported for it described a configuration nobody ran.
+3. Six defects in gold-set answer keys, each looking exactly like a broken
+   retriever.
+4. A consumer's TEST SUITE wrote to its repo's real query log: 276 entries
+   that were 180 copies of `"q"` and assorted fixtures.
+
+Each was fixed durably. *Finding* them was not — it depended on someone
+noticing. Every one of them inflated a number upward, which is the direction
+that gets acted on.
+
+The query-log checks are the part that did not exist before: an entry matching
+the project's own probe is an error, so is one matching a test fixture, and a
+single query making up more than a quarter of a log is reported even when the
+string is unrecognised. A thin log is reported as *unusable*, not as evidence
+of low use -- logging that was never exercised is indistinguishable from
+logging that works and shows nothing.
+
+Given two or more logs it also reports **cross-archive demand**: how many real
+queries were asked of more than one archive. That is the measurement behind
+"should these be one server or several", and it is worth stating that this
+number was unobtainable until the logs were cleaned, because the pollution
+appeared in every archive and would have shown near-total shared demand.
+
+A check whose inputs are missing reports SKIPPED and is counted separately.
+A summary reading "4/4 clean" when three of them never ran is the same failure
+this command exists to catch.
 
 ## Layer 4 — `corpus-judge`: is the answer good?
 
