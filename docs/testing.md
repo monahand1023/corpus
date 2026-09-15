@@ -222,11 +222,33 @@ archive has by far the most lexical overlap (17 of 31 queries share a
 three-word run with their own answer) AND gains the most from re-ranking. The
 hypothesis was written before that measurement came back, and it was wrong.
 
-BM25's contribution is a separate question with its own per-archive answer. It
-earns its place on the work archive. On mail, where the gold queries are
-deliberately paraphrased, turning it OFF improved MRR from 0.342 to 0.429 for
-free. On photos, hybrid and vector-only are identical to three decimal places
--- BM25 contributes nothing to photo metadata at all.
+BM25's contribution is a separate question, and answering it from a
+paraphrased gold set alone is a trap. Paraphrased queries share no terms with
+their answers, so BM25 has nothing to match and vector-only wins close to by
+construction. On mail that read as a free win -- MRR 0.342 to 0.429 -- and it
+was nearly applied.
+
+The check is a KEYWORD TWIN SET: the same answer keys, queried with the
+archive's own vocabulary, which is how people search their own material half
+the time. It reverses the mail conclusion and confirms the photo one:
+
+| archive | query style | hybrid | vector-only |
+|---|---|---|---|
+| mail | paraphrased (n=8) | MRR 0.342 | **0.429** |
+| mail | keyword (n=6) | **MRR 1.000** | 0.917 |
+| photos | paraphrased (n=8) | MRR 0.479 | 0.479 (identical) |
+| photos | keyword (n=6) | MRR 0.917 | **1.000** |
+
+On mail the trade is symmetric, so BM25 stays. On photos it earns nothing on
+either style -- the chunks are short metadata records whose every field label
+("Title:", "Date:", "Album:") repeats across all 245,795 of them, which is
+close to the worst case for term-frequency scoring.
+
+Note what the identical photo row is NOT: the full-text index is populated and
+matches those place names fine (648 rows for one of them). The paraphrased
+queries simply never contain them. "Both configs scored the same" meant "this
+set cannot tell them apart", not "this component does nothing" -- and it was
+briefly written down as the latter.
 
 **Sweep the pool size before accepting the default.** Latency is linear in
 how many candidates the cross-encoder re-scores, and the library default of 30
