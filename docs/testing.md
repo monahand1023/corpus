@@ -188,48 +188,55 @@ reasoning would have produced.
 
 Four archives, each at the `top_k` its own server uses:
 
-| archive | config | recall | MRR | nDCG |
-|---|---|---|---|---|
-| work tickets/docs (n=31) | hybrid | 0.935 | 0.866 | 0.795 |
-| | vector-only | 0.903 | 0.817 | 0.748 |
-| mail (n=8) | hybrid | 0.875 | 0.342 | 0.217 |
-| | vector-only | 0.875 | 0.429 | 0.236 |
-| | hybrid+rerank | 0.875 | **0.416** | **0.377** |
-| transcripts (n=8) | hybrid | 0.625 | 0.442 | 0.486 |
-| | vector-only | 0.500 | 0.275 | 0.331 |
-| | hybrid+rerank | **0.375** | 0.250 | 0.283 |
-| photos (n=8) | hybrid | 0.625 | 0.479 | 0.256 |
-| | vector-only | 0.625 | 0.479 | 0.256 |
-| | hybrid+rerank | 0.625 | **0.321** | 0.266 |
+| archive | content | config | recall | MRR | nDCG |
+|---|---|---|---|---|---|
+| work tickets/docs (n=31) | prose | hybrid | 0.935 | 0.849 | 0.790 |
+| | | vector-only | 0.903 | 0.801 | 0.742 |
+| | | **hybrid+rerank** | **0.968** | **0.887** | **0.824** |
+| mail (n=8) | prose | hybrid | 0.875 | 0.342 | 0.217 |
+| | | vector-only | 0.875 | 0.429 | 0.236 |
+| | | **hybrid+rerank** | 0.875 | 0.416 | **0.377** |
+| photos (n=8) | metadata lines | hybrid | 0.625 | 0.479 | 0.256 |
+| | | vector-only | 0.625 | 0.479 | 0.256 |
+| | | hybrid+rerank | 0.625 | **0.321** | 0.266 |
+| transcripts (n=8) | ASR fragments | hybrid | 0.625 | 0.442 | 0.486 |
+| | | vector-only | 0.500 | 0.275 | 0.331 |
+| | | hybrid+rerank | **0.375** | 0.250 | 0.283 |
 
-Re-ranking helped one archive and hurt two. On transcripts it cut recall from
-0.625 to 0.375 -- a cross-encoder can only reorder the candidate pool, so
-losing recall means it actively pushed correct answers below the cut. Short,
-noisy, code-switched transcript fragments are not what a cross-encoder trained
-on clean question/passage pairs expects. On photos it cost a third of MRR.
+**What separates the two halves is the CONTENT, not the queries.** A
+cross-encoder is trained on (question, passage) pairs where the passage is
+coherent natural language. The two archives it helps are prose -- tickets,
+documents, email bodies. The two it hurts are not: photo metadata is
+`Title: / Date: / Album:` key-value lines, and ASR output is short,
+code-switched, sometimes degenerate speech fragments. Neither is a passage,
+and scoring them as one is worse than the cheap similarity it replaces.
 
-BM25's contribution splits the same way. It earns its place on the work
-archive, where queries use the archive's own vocabulary. On mail, where the
-gold queries are deliberately paraphrased, turning it OFF improved MRR from
-0.342 to 0.429 for free. On photos, hybrid and vector-only are identical to
-three decimal places -- BM25 contributes nothing to photo metadata.
+On transcripts it cut recall from 0.625 to 0.375. A cross-encoder can only
+reorder the candidate pool, so LOSING recall means it actively pushed correct
+answers below the cut. On photos it cost a third of the MRR.
 
-**The gold-set audit predicts which case an archive is in.** The work
-archive's queries share a three-word run with their own answers 17 times out
-of 31; the personal archives' queries are paraphrased away from theirs. An
-archive whose users type its vocabulary wants BM25 and gains little from a
-cross-encoder. An archive whose users describe what they half-remember wants
-the opposite.
+An earlier draft of this section claimed the gold-set audit's echo check
+predicted which way an archive would go -- that an archive whose queries share
+wording with their answers would gain little from a cross-encoder. The work
+archive has by far the most lexical overlap (17 of 31 queries share a
+three-word run with their own answer) AND gains the most from re-ranking. The
+hypothesis was written before that measurement came back, and it was wrong.
+
+BM25's contribution is a separate question with its own per-archive answer. It
+earns its place on the work archive. On mail, where the gold queries are
+deliberately paraphrased, turning it OFF improved MRR from 0.342 to 0.429 for
+free. On photos, hybrid and vector-only are identical to three decimal places
+-- BM25 contributes nothing to photo metadata at all.
 
 So: measure per archive, and re-measure after changing the embedder or the
 chunker. A blanket "turn on re-ranking" would have quietly degraded two of
-these four. Note also the cost -- ~390ms per pair on CPU, several seconds per
-query at the default pool size (see `reranker/local.py`) -- which the nDCG
-gain has to justify.
+these four. Weigh the cost too -- ~390ms per pair on CPU, several seconds per
+query at the default pool size (see `reranker/local.py`).
 
-These sets are small (n=8 for three of them). They are big enough to catch a
-regression and to tell these shapes apart; a few points between runs is noise,
-and only the large moves above should be acted on.
+These sets are small (n=8 for three of them), and the same config re-run on
+the work archive moved by 0.017 MRR between runs. They are big enough to catch
+a regression and to tell these shapes apart; only the large moves above should
+be acted on.
 
 ## Layer 4 — `corpus-judge`: is the answer good?
 
