@@ -228,10 +228,27 @@ deliberately paraphrased, turning it OFF improved MRR from 0.342 to 0.429 for
 free. On photos, hybrid and vector-only are identical to three decimal places
 -- BM25 contributes nothing to photo metadata at all.
 
+**Sweep the pool size before accepting the default.** Latency is linear in
+how many candidates the cross-encoder re-scores, and the library default of 30
+was not the best setting on the one archive where re-ranking helped most:
+
+| pool | recall | MRR | nDCG | latency |
+|---|---|---|---|---|
+| off | 0.935 | 0.849 | 0.790 | 0.18s |
+| 8 | 0.935 | 0.887 | 0.818 | 2.3s |
+| **15** | **0.968** | **0.903** | **0.831** | 4.3s |
+| 30 | 0.968 | 0.887 | 0.824 | 8.6s |
+
+A pool of 15 beat 30 on all three metrics at half the cost. Re-scoring more
+candidates is not monotonically better -- a bigger pool gives the
+cross-encoder more chances to promote something plausible-but-wrong above the
+right answer. `corpus-eval --rerank-pool-size` exists for this sweep; it takes
+three runs.
+
 So: measure per archive, and re-measure after changing the embedder or the
 chunker. A blanket "turn on re-ranking" would have quietly degraded two of
-these four. Weigh the cost too -- ~390ms per pair on CPU, several seconds per
-query at the default pool size (see `reranker/local.py`).
+these four, and accepting the default pool would have paid double for a worse
+result on the one it helped.
 
 These sets are small (n=8 for three of them), and the same config re-run on
 the work archive moved by 0.017 MRR between runs. They are big enough to catch
