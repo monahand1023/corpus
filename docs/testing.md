@@ -186,69 +186,31 @@ configs and prints a metric x config table. This is what the baselines are
 for, and the answer turned out to be archive-specific in a way no amount of
 reasoning would have produced.
 
-Four archives, each at the `top_k` its own server uses:
+Five archives, each at the `top_k` its own server uses:
 
-| archive | content | config | recall | MRR | nDCG |
-|---|---|---|---|---|---|
-| work tickets/docs (n=31) | prose | hybrid | 0.935 | 0.849 | 0.790 |
-| | | vector-only | 0.903 | 0.801 | 0.742 |
-| | | **hybrid+rerank** | **0.968** | **0.887** | **0.824** |
-| mail (n=8) | prose | hybrid | 0.875 | 0.342 | 0.217 |
-| | | vector-only | 0.875 | 0.429 | 0.236 |
-| | | **hybrid+rerank** | 0.875 | 0.416 | **0.377** |
-| photos (n=8) | metadata lines | hybrid | 0.625 | 0.479 | 0.256 |
-| | | vector-only | 0.625 | 0.479 | 0.256 |
-| | | hybrid+rerank | 0.625 | **0.321** | 0.266 |
-| transcripts (n=8) | ASR fragments | hybrid | 0.625 | 0.442 | 0.486 |
-| | | vector-only | 0.500 | 0.275 | 0.331 |
-| | | hybrid+rerank | **0.375** | 0.250 | 0.283 |
+| archive | content | baseline recall/MRR/nDCG | with re-rank | verdict |
+|---|---|---|---|---|
+| tickets/PRs/wiki (n=31) | prose | 0.935 / 0.866 / 0.818 | **0.968 / 0.903 / 0.831** | ENABLED |
+| docs/email/attachments (n=39) | prose | 0.821 / 0.632 / 0.616 | 0.744 / 0.586 / 0.577 | no |
+| mail (n=8) | prose | 0.875 / 0.342 / 0.217 | 0.875 / 0.416 / 0.377 | mixed; not enabled |
+| photos (n=8) | metadata lines | 0.625 / 0.479 / 0.256 | 0.625 / 0.321 / 0.266 | no |
+| transcripts (n=8) | ASR fragments | 0.625 / 0.442 / 0.486 | 0.375 / 0.250 / 0.283 | no |
 
-**What separates the two halves is the CONTENT, not the queries.** A
-cross-encoder is trained on (question, passage) pairs where the passage is
-coherent natural language. The two archives it helps are prose -- tickets,
-documents, email bodies. The two it hurts are not: photo metadata is
-`Title: / Date: / Album:` key-value lines, and ASR output is short,
-code-switched, sometimes degenerate speech fragments. Neither is a passage,
-and scoring them as one is worse than the cheap similarity it replaces.
+**Re-ranking helped one archive out of five.** On two it cost recall outright
+-- 0.625 to 0.375 on transcripts, 0.821 to 0.744 on the document archive. A
+cross-encoder can only reorder the candidate pool, so LOSING recall means it
+actively pushed correct answers below the cut.
 
-On transcripts it cut recall from 0.625 to 0.375. A cross-encoder can only
-reorder the candidate pool, so LOSING recall means it actively pushed correct
-answers below the cut. On photos it cost a third of the MRR.
+Two predictors were tried and both failed. The first was query style: the gold
+set audit shows the tickets archive shares wording with its own answers far
+more than the others, and the guess was that lexical overlap would leave a
+cross-encoder little to add -- but that archive is the one it helps. The
+second was content type: prose versus not, which survived exactly as long as
+it took to measure a second prose archive, where re-ranking cost 0.077 recall.
 
-An earlier draft of this section claimed the gold-set audit's echo check
-predicted which way an archive would go -- that an archive whose queries share
-wording with their answers would gain little from a cross-encoder. The work
-archive has by far the most lexical overlap (17 of 31 queries share a
-three-word run with their own answer) AND gains the most from re-ranking. The
-hypothesis was written before that measurement came back, and it was wrong.
-
-BM25's contribution is a separate question, and answering it from a
-paraphrased gold set alone is a trap. Paraphrased queries share no terms with
-their answers, so BM25 has nothing to match and vector-only wins close to by
-construction. On mail that read as a free win -- MRR 0.342 to 0.429 -- and it
-was nearly applied.
-
-The check is a KEYWORD TWIN SET: the same answer keys, queried with the
-archive's own vocabulary, which is how people search their own material half
-the time. It reverses the mail conclusion and confirms the photo one:
-
-| archive | query style | hybrid | vector-only |
-|---|---|---|---|
-| mail | paraphrased (n=8) | MRR 0.342 | **0.429** |
-| mail | keyword (n=6) | **MRR 1.000** | 0.917 |
-| photos | paraphrased (n=8) | MRR 0.479 | 0.479 (identical) |
-| photos | keyword (n=6) | MRR 0.917 | **1.000** |
-
-On mail the trade is symmetric, so BM25 stays. On photos it earns nothing on
-either style -- the chunks are short metadata records whose every field label
-("Title:", "Date:", "Album:") repeats across all 245,795 of them, which is
-close to the worst case for term-frequency scoring.
-
-Note what the identical photo row is NOT: the full-text index is populated and
-matches those place names fine (648 rows for one of them). The paraphrased
-queries simply never contain them. "Both configs scored the same" meant "this
-set cannot tell them apart", not "this component does nothing" -- and it was
-briefly written down as the latter.
+The honest position is that there is no cheap predictor here, and the prior
+should be skeptical rather than hopeful. `--compare --rerank` costs a few
+minutes per archive and is the only thing that has been right so far.
 
 **Sweep the pool size before accepting the default.** Latency is linear in
 how many candidates the cross-encoder re-scores, and the library default of 30
