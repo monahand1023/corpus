@@ -83,6 +83,7 @@ corpus-list = "corpus.cli.list_sources:main"
 corpus-reset = "corpus.cli.reset:main"
 corpus-survey = "corpus.cli.survey:main"
 corpus-index = "corpus.cli.index:main"
+corpus-smoke = "corpus.cli.smoke:main"
 
 [build-system]
 requires = ["hatchling"]
