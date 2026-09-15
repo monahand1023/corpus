@@ -444,3 +444,34 @@ def test_text_with_no_sign_off_is_returned_byte_identical() -> None:
         "  leading and trailing  ",
     ]:
         assert strip_caption_tail(untouched) == untouched
+
+
+def test_the_fast_screen_never_hides_a_phrase_from_the_real_match() -> None:
+    """The screen is an optimisation, so it must only ever reject text the
+    full pass would have left alone.
+
+    A screen that rejects something the real rule would have changed is the
+    worst kind of bug here: it is invisible, it silently stops the filter
+    firing for one phrase, and the phrase list has already had two rounds of
+    entries that could not fire at all.
+    """
+    preamble = "We were talking about the weekend and then. "
+    for phrase in CAPTION_SIGNOFF_TAILS:
+        text = preamble + phrase
+        assert strip_caption_tail(text) != text, f"screened out: {phrase!r}"
+
+
+def test_the_fast_screen_passes_every_credit_prefix() -> None:
+    from corpus.transcripts.quality import SUBTITLE_CREDIT_PREFIXES
+
+    for prefix in SUBTITLE_CREDIT_PREFIXES:
+        text = f"Some ordinary speech here. {prefix} Someone"
+        assert strip_caption_tail(text) != text, f"screened out: {prefix!r}"
+
+
+def test_a_sign_off_survives_screening_at_the_end_of_a_long_chunk() -> None:
+    # Only the tail is screened, so a long chunk must not hide its own ending.
+    long_text = "We walked down to the water and talked about the trip. " * 90
+    cleaned = strip_caption_tail(long_text + " ご視聴ありがとうございました")
+    assert cleaned.endswith("about the trip.")
+    assert strip_caption_tail(long_text) == long_text

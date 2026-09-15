@@ -288,6 +288,15 @@ _COMBINING = "̀-゙ͯ-゚"
 # rather than to the speech before it. Without this, cutting the sign-off off
 # "...por favor ¡Suscríbete al canal" left a lone "¡" behind.
 _OPENING_PUNCT = "¡¿"
+# How much of the end to screen for a possible sign-off. Comfortably longer
+# than the longest phrase (79 characters) and than the longest credit prefix
+# plus the name tail it permits, with room for the punctuation and accents
+# that normalisation strips from the stored forms but not from real text.
+_SCREEN_WINDOW_CHARS = 512
+_MARK_RANGE = frozenset(
+    [chr(c) for c in range(0x0300, 0x0370)] + [chr(0x3099), chr(0x309A)]
+)
+_IS_MARK = _MARK_RANGE.__contains__
 
 
 def _accent_tolerant(token: str) -> str:
@@ -348,34 +357,37 @@ def _strip_credit_line(text: str, prefixes: tuple[str, ...]) -> str:
     return text if best is None else text[:best].strip()
 
 
-@cache
-def _any_tail_pattern(phrases: frozenset[str]) -> re.Pattern[str]:
-    """One alternation matching ANY sign-off at the end.
+def _without_marks(decomposed: str) -> str:
+    """Drop combining marks from NFD text. Used on BOTH sides of the screen."""
+    return "".join(ch for ch in decomposed if ch not in _MARK_RANGE)
 
-    A cheap reject. Running each phrase's own pattern over every chunk of a
-    large index is ~34 anchored scans per chunk, which made a whole-index audit
-    too slow to be worth running -- and a check nobody runs catches nothing.
-    """
-    body = "|".join(
-        r"[\s\W]*".join(_accent_tolerant(token) for token in phrase.split())
-        for phrase in phrases
-    )
-    return re.compile(rf"(?:{body})[\s\W]*$", re.IGNORECASE)
+
+def _fold_for_screen(text: str) -> str:
+    return _without_marks(unicodedata.normalize("NFD", text)).casefold()
 
 
 @cache
-def _any_credit_pattern(prefixes: tuple[str, ...]) -> re.Pattern[str]:
-    """One alternation matching ANY credit prefix, anywhere.
+def _screen_anchors(phrases: frozenset[str], prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    """The longest word of each phrase, folded, as a cheap literal to look for.
 
-    Deliberately looser than the real rule, which also requires a short
-    name-like tail: this only has to avoid rejecting text the full pass would
-    have changed.
+    A regex alternation over ~70 phrases was the whole cost of screening: an
+    accent-tolerant one puts a character class after every character and
+    backtracks across all of them at every position, and even a literal one
+    scales with the window. A plain `in` test uses CPython's substring search,
+    which is roughly two orders of magnitude faster here.
+
+    Taking the LONGEST word keeps the anchor selective -- "suscribete" rather
+    than "y", "watching" rather than "for" -- and an anchor can only ever make
+    the screen accept text the full pass then declines to change. It cannot
+    make it reject text the full pass would have changed, which is the only
+    property a screen has to have.
     """
-    body = "|".join(
-        r"[\s\W]*".join(_accent_tolerant(token) for token in prefix.split())
-        for prefix in prefixes
-    )
-    return re.compile(rf"(?:{body})", re.IGNORECASE)
+    anchors = set()
+    for phrase in (*phrases, *prefixes):
+        folded = _fold_for_screen(phrase)
+        words = folded.split() or [folded]
+        anchors.add(max(words, key=len))
+    return tuple(anchors)
 
 
 def strip_caption_tail(
@@ -412,11 +424,21 @@ def strip_caption_tail(
     # to decide whether a sign-off was present, so returning a cosmetically
     # different string for clean text would report contamination that is not
     # there.
-    if not (
-        (phrases and _any_tail_pattern(frozenset(phrases)).search(out))
-        or (heads and _any_credit_pattern(tuple(heads)).search(out))
-    ):
+    # Only the END of the text can matter, so only the end is screened.
+    # Both rules are tail-bounded: a sign-off has to finish the text, and a
+    # credit line counts only when at most _CREDIT_TAIL_MAX_CHARS of name
+    # follow it. The longest phrase and the longest prefix plus that tail both
+    # fit inside the window with room to spare, so nothing the full pass would
+    # act on can start before it. Without this, screening a 2 GB index means
+    # scanning every character of every chunk to decide it ends in "ducks".
+    # Normalising only the window matters as much as searching only the
+    # window: NFD over a whole 5,000-character chunk cost more than the search
+    # it was preparing for.
+    window = _fold_for_screen(text[-_SCREEN_WINDOW_CHARS:])
+    anchors = _screen_anchors(frozenset(phrases), tuple(heads))
+    if not any(anchor in window for anchor in anchors):
         return text
+    out = unicodedata.normalize("NFD", text)
     # Longest first: "gracias por ver el video" must win over "gracias por ver",
     # which would otherwise leave "el video" stranded.
     for phrase in sorted(phrases, key=len, reverse=True):
