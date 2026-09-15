@@ -164,3 +164,72 @@ def test_errors_sort_before_warnings() -> None:
     queries = [Q("empty", []), Q("stale", ["gone"])]
     findings = audit_queries(queries, lookup=_indexed("other"))
     assert findings[0].severity == "error"
+
+
+# --- the index-reading helpers ---------------------------------------------
+# These live in the library, not in a CLI, because the private archives run
+# their own forked eval CLIs. A check only half the deployments run is a check
+# only half the deployments get.
+
+
+def _index(tmp_path, rows):
+    import sqlite3
+
+    path = tmp_path / "index.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE chunks (id TEXT PRIMARY KEY, source_key TEXT, content TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, source_key, content) VALUES (?,?,?)",
+        [(str(i), k, c) for i, (k, c) in enumerate(rows)],
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_sqlite_lookup_reports_only_keys_that_exist(tmp_path) -> None:
+    from corpus.eval.goldset import sqlite_lookup
+
+    db = _index(tmp_path, [("a", "text a"), ("b", "text b")])
+    assert sqlite_lookup(db)(["a", "b", "missing"]) == {"a", "b"}
+
+
+def test_sqlite_lookup_batches_past_the_sqlite_variable_limit(tmp_path) -> None:
+    # SQLite caps host parameters per statement, so a 1,456-key answer set has
+    # to be chunked. Getting this wrong fails only on the biggest sets, which
+    # are exactly the ones a truncation bug already makes suspicious.
+    from corpus.eval.goldset import sqlite_lookup
+
+    keys = [f"k{i}" for i in range(1500)]
+    db = _index(tmp_path, [(k, "x") for k in keys])
+    assert sqlite_lookup(db)(keys) == set(keys)
+
+
+def test_sqlite_lookup_treats_an_unreadable_index_as_all_present(tmp_path) -> None:
+    # An audit that cannot read the index must not manufacture findings about
+    # it -- reporting every key as missing would fail every query loudly.
+    from corpus.eval.goldset import sqlite_lookup
+
+    assert sqlite_lookup(tmp_path / "nope.db")(["a"]) == {"a"}
+
+
+def test_sqlite_documents_samples_rather_than_reading_whole_answer_sets(tmp_path) -> None:
+    from corpus.eval.goldset import sqlite_documents
+
+    db = _index(tmp_path, [(f"k{i}", f"body {i}") for i in range(100)])
+    q = Q("anything", [f"k{i}" for i in range(100)])
+    assert len(sqlite_documents(db, [q], sample_per_query=5)) == 5
+
+
+def test_report_findings_signals_whether_anything_was_an_error() -> None:
+    import io
+
+    from corpus.eval.goldset import GoldFinding, report_findings
+
+    warn = GoldFinding("q", "kind", "detail", "warning")
+    err = GoldFinding("q", "kind", "detail", "error")
+    assert report_findings([warn], stream=io.StringIO()) is False
+    assert report_findings([warn, err], stream=io.StringIO()) is True
+    assert report_findings([], stream=io.StringIO()) is False

@@ -29,8 +29,10 @@ retriever that cannot find things.
 from __future__ import annotations
 
 import re
+import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 # Sizes that look chosen by a person rather than produced by data. An answer
@@ -234,3 +236,97 @@ def audit_queries(
         *_query_echoes_answer(queries, documents),
     ]
     return sorted(findings, key=lambda f: 0 if f.severity == "error" else 1)
+
+
+# --- reading an index, for the checks that need one -------------------------
+# These live here rather than in a CLI so every deployment gets the same audit
+# from the same code. The private archives run their own forked eval CLIs and
+# import `corpus.eval.metrics` for exactly this reason; the audit travels the
+# same way, and a check that only half the archives run is a check that only
+# half the archives get.
+
+# Enough keys per query to catch a query copied out of its own answer, without
+# reading a 1,456-document answer set to do it.
+ECHO_SAMPLE_PER_QUERY = 25
+
+_KEY_BATCH = 500
+
+
+def sqlite_lookup(db_path: Path | str) -> _KeyLookup:
+    """A callable reporting which of `keys` exist in a corpus-schema index.
+
+    Read-only and batched, so an answer set of any size costs one query per 500
+    keys and cannot hold a long transaction against a database a server is
+    serving. On any SQLite error it reports every key as present: an audit that
+    cannot read the index must not manufacture findings about it.
+    """
+
+    def lookup(keys: Sequence[str]) -> set[str]:
+        found: set[str] = set()
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return set(keys)
+        try:
+            for start in range(0, len(keys), _KEY_BATCH):
+                batch = list(keys[start : start + _KEY_BATCH])
+                marks = ",".join("?" * len(batch))
+                rows = conn.execute(
+                    f"SELECT DISTINCT source_key FROM chunks WHERE source_key IN ({marks})",
+                    batch,
+                ).fetchall()
+                found.update(row[0] for row in rows)
+        except sqlite3.Error:
+            return set(keys)
+        finally:
+            conn.close()
+        return found
+
+    return lookup
+
+
+def sqlite_documents(
+    db_path: Path | str,
+    queries: Sequence[Any],
+    *,
+    sample_per_query: int = ECHO_SAMPLE_PER_QUERY,
+) -> dict[str, str]:
+    """Text for a sample of each query's expected keys, for the echo check."""
+    wanted: list[str] = []
+    for query in queries:
+        keys = list(getattr(query, "expected_keys", None) or [])
+        wanted.extend(keys[:sample_per_query])
+    if not wanted:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        for start in range(0, len(wanted), _KEY_BATCH):
+            batch = wanted[start : start + _KEY_BATCH]
+            marks = ",".join("?" * len(batch))
+            for key, content in conn.execute(
+                f"SELECT source_key, content FROM chunks WHERE source_key IN ({marks})",
+                batch,
+            ):
+                out.setdefault(key, content or "")
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return out
+
+
+def report_findings(findings: Sequence[GoldFinding], *, stream: Any) -> bool:
+    """Print an audit report. Returns True if any finding is an error.
+
+    Shared so every deployment's eval says the same thing in the same shape.
+    """
+    if findings:
+        print(f"\nGold set audit: {len(findings)} finding(s)", file=stream)
+        for finding in findings:
+            print(finding.render(), file=stream)
+        print("", file=stream)
+    return any(f.severity == "error" for f in findings)

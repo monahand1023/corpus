@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import sqlite3
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,7 +24,12 @@ from corpus.cli._common import load_config_or_exit
 from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
-from corpus.eval.goldset import audit_queries
+from corpus.eval.goldset import (
+    audit_queries,
+    report_findings,
+    sqlite_documents,
+    sqlite_lookup,
+)
 from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_query
 from corpus.retriever import Retriever
 
@@ -39,65 +43,6 @@ class QueryRecord:
     note: str
     is_negative: bool
     score: QueryScore | None
-
-
-# Enough keys per query to catch a query copied out of its own answer,
-# without reading a 1,456-document answer set to do it.
-_ECHO_SAMPLE_PER_QUERY = 25
-
-
-def _indexed_keys(db_path: str | Path) -> Any:
-    """A callable reporting which of `keys` exist in the index.
-
-    Read-only and parameterised in batches, so an answer set of any size costs
-    one query per 500 keys and cannot lock the database against a live server.
-    """
-
-    def lookup(keys: Sequence[str]) -> set[str]:
-        found: set[str] = set()
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            for start in range(0, len(keys), 500):
-                batch = list(keys[start : start + 500])
-                marks = ",".join("?" * len(batch))
-                rows = conn.execute(
-                    f"SELECT DISTINCT source_key FROM chunks WHERE source_key IN ({marks})",
-                    batch,
-                ).fetchall()
-                found.update(r[0] for r in rows)
-        except sqlite3.Error:
-            return set(keys)  # cannot check; do not manufacture findings
-        finally:
-            conn.close()
-        return found
-
-    return lookup
-
-
-def _expected_documents(db_path: str | Path, queries: Sequence[Any]) -> dict[str, str]:
-    """Text for a sample of each query's expected keys, for the echo check."""
-    wanted: list[str] = []
-    for query in queries:
-        keys = list(getattr(query, "expected_keys", None) or [])
-        wanted.extend(keys[:_ECHO_SAMPLE_PER_QUERY])
-    if not wanted:
-        return {}
-    out: dict[str, str] = {}
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        for start in range(0, len(wanted), 500):
-            batch = wanted[start : start + 500]
-            marks = ",".join("?" * len(batch))
-            for key, content in conn.execute(
-                f"SELECT source_key, content FROM chunks WHERE source_key IN ({marks})",
-                batch,
-            ):
-                out.setdefault(key, content or "")
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-    return out
 
 
 def _load_queries(path: Path) -> list[Any]:
@@ -371,15 +316,10 @@ def main() -> int:
 
     findings = audit_queries(
         queries,
-        lookup=_indexed_keys(config.db_path),
-        documents=_expected_documents(config.db_path, queries),
+        lookup=sqlite_lookup(config.db_path),
+        documents=sqlite_documents(config.db_path, queries),
     )
-    if findings:
-        print(f"\nGold set audit: {len(findings)} finding(s)", file=sys.stderr)
-        for finding in findings:
-            print(finding.render(), file=sys.stderr)
-        print("", file=sys.stderr)
-    if any(f.severity == "error" for f in findings) and not args.allow_gold_issues:
+    if report_findings(findings, stream=sys.stderr) and not args.allow_gold_issues:
         print(
             "Refusing to run: the answer key is broken, so the metrics would "
             "describe the key rather than the retriever. Fix it, or pass "
