@@ -19,8 +19,9 @@ Two distinct defects, because they are fixed differently:
 
 Both are invisible from outside: the index reports a successful build, search
 returns results, and nobody notices that some of the results are text no
-person ever said. Measured on one 45,092-chunk transcript archive, the second
-defect accounted for 580 chunks across 354 documents.
+person ever said. Measured on one 45,147-chunk transcript archive: 586 glued
+tails plus 4 whole-chunk sign-offs, across 361 documents. Fixing it at
+ingest and re-running left 1.
 """
 
 from __future__ import annotations

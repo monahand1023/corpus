@@ -206,11 +206,15 @@ retriever:
 Only the second kind is a retriever problem. Had the first been taken at face
 value, the fix would have been tuning applied to a system that was working.
 
-The same investigation turned up something no unit test could see: 618 indexed
-chunks across 389 documents contained subtitle boilerplate *embedded inside*
-otherwise-real speech (the figure `corpus-survey index-quality` now reports;
-hand-written `LIKE` patterns had estimated 596, which is exactly why the
-measurement belongs in a command rather than in someone's shell history). The whole-text boilerplate filter is working exactly as
+The same investigation turned up something no unit test could see: 590 indexed
+chunks across 361 documents contained subtitle boilerplate *embedded inside*
+otherwise-real speech. Fixing it at ingest and re-running left 1.
+
+That figure moved three times before it settled — hand-written `LIKE`
+patterns said 596, a first cut of the scan said 618, and a faster version of
+it said 5,585 because it mistook its own normalisation for contamination.
+A number that takes three attempts to get right is exactly the kind that
+belongs in a tested command rather than in someone's shell history. The whole-text boilerplate filter is working exactly as
 designed — it drops text that is *entirely* boilerplate, and deliberately does
 not drop a transcript merely for containing some, because that measurably
 deletes real content (see [transcript_quality.md](transcript_quality.md)).
