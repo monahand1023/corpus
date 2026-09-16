@@ -102,6 +102,11 @@ class OrphanScan:
     coverage: Coverage
     force_pushes: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
+    # Force-push tips whose commit listing the remote would not give us.
+    # NOT the same as a tip with no orphaned commits: this is "I could not
+    # look", and a caller that folds it into the clean case reproduces the
+    # very defect this module was written for.
+    unreadable: list[str] = field(default_factory=list)
     detail: str = ""
 
 
@@ -150,13 +155,21 @@ def orphaned_commits(repo: str, *, run: Runner = _gh) -> OrphanScan:
             before.append(str(payload["before"]))
 
     commits: list[str] = []
+    unreadable: list[str] = []
     for tip in before:
         code, body = run(["api", f"repos/{repo}/commits?sha={tip}&per_page=100"])
         if code != 0:
+            # A rate limit, a permissions error, a network blip. This walk
+            # skipped it silently until a test asked what happens then --
+            # the force-push was still counted as examined, so a rewrite
+            # nobody could read reported the same as a rewrite with nothing
+            # in it.
+            unreadable.append(tip)
             continue
         try:
             rows = json.loads(body or "[]")
         except json.JSONDecodeError:
+            unreadable.append(tip)
             continue
         commits.extend(str(r["sha"]) for r in rows if isinstance(r, dict) and "sha" in r)
 
@@ -165,6 +178,7 @@ def orphaned_commits(repo: str, *, run: Runner = _gh) -> OrphanScan:
         coverage=Coverage(len(commits), "orphaned commits"),
         force_pushes=before,
         commits=commits,
+        unreadable=unreadable,
     )
 
 

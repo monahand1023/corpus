@@ -107,6 +107,51 @@ def test_no_force_push_means_nothing_to_walk() -> None:
     assert scan.commits == []
 
 
+def test_a_force_push_whose_commits_cannot_be_listed_is_not_reported_as_walked() -> None:
+    """Two `continue`s in the walk skipped a force-push whose commit listing
+    the API refused (rate limit, permissions) or returned unparseably -- and
+    the scan still claimed to have walked it.
+
+    That is the exact distinction this module exists for, inside the module
+    itself: "I could not look" reported as "I looked and it was clean".
+    """
+    def fake_gh(args: list[str]) -> tuple[int, str]:
+        joined = " ".join(args)
+        if "events" in joined:
+            return 0, ('[{"payload": {"forced": true, "before": "aaa1111"}},'
+                       ' {"payload": {"forced": true, "before": "bbb2222"}}]')
+        if "aaa1111" in joined:
+            return 0, '[{"sha": "dead0001"}]'
+        return 1, "HTTP 403: rate limit exceeded"
+
+    scan = orphaned_commits("owner/repo", run=fake_gh)
+
+    assert scan.force_pushes == ["aaa1111", "bbb2222"]
+    assert scan.unreadable == ["bbb2222"], "a skipped force-push was not reported"
+    assert scan.commits == ["dead0001"]
+
+
+def test_an_unreadable_commit_listing_is_not_silently_dropped() -> None:
+    def fake_gh(args: list[str]) -> tuple[int, str]:
+        if "events" in " ".join(args):
+            return 0, '[{"payload": {"forced": true, "before": "aaa1111"}}]'
+        return 0, "<html>an error page, not JSON</html>"
+
+    scan = orphaned_commits("owner/repo", run=fake_gh)
+    assert scan.unreadable == ["aaa1111"]
+
+
+def test_a_fully_walked_scan_reports_nothing_unreadable() -> None:
+    """The negative control: `unreadable` must not be a field that is always
+    populated, or the check above would pass on any implementation."""
+    def fake_gh(args: list[str]) -> tuple[int, str]:
+        if "events" in " ".join(args):
+            return 0, '[{"payload": {"forced": true, "before": "aaa1111"}}]'
+        return 0, '[{"sha": "dead0001"}]'
+
+    assert orphaned_commits("owner/repo", run=fake_gh).unreadable == []
+
+
 def test_an_unavailable_remote_is_reported_not_treated_as_clean() -> None:
     """`gh` missing, unauthenticated, or offline is an UNKNOWN, not a pass.
 
@@ -137,6 +182,33 @@ def _repo(tmp_path, messages, patterns=None):
     if patterns is not None:
         (r / ".git" / "private-name-patterns").write_text("\n".join(patterns) + "\n")
     return r
+
+
+def test_the_command_fails_when_a_force_push_could_not_be_walked(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """NOT CHECKED is not a pass. A rewrite whose commits the remote would
+    not list must count as a failure, or the exit code says "safe to
+    publish" about a surface nobody read."""
+    import corpus.cli.publish_check as mod
+    from corpus.publish_check import OrphanScan
+    from corpus.verify import Coverage
+
+    repo = _repo(tmp_path, ["fix: something ordinary"], patterns=["zzsecretzz"])
+    monkeypatch.setattr(
+        mod, "orphaned_commits",
+        lambda slug, **kw: OrphanScan(
+            available=True,
+            coverage=Coverage(0, "orphaned commits"),
+            force_pushes=["aaa1111", "bbb2222"],
+            unreadable=["bbb2222"],
+        ),
+    )
+    code = mod.main_argv([str(repo), "--repo", "owner/name"])
+    out = capsys.readouterr().out
+    assert "NOT CHECKED" in out or "FAIL" in out
+    assert "bbb2222" in out, "the operator was not told which rewrite went unread"
+    assert code != 0
 
 
 def test_the_command_fails_when_there_is_no_denylist(tmp_path, capsys) -> None:

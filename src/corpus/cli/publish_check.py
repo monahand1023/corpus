@@ -113,6 +113,20 @@ def main_argv(argv: list[str]) -> int:
             orphans = orphaned_commits(slug)
             if not orphans.available:
                 print(f"orphaned objects  [NOT CHECKED] {orphans.detail}")
+            elif orphans.unreadable:
+                # A rewrite the remote would not enumerate. Counting it as
+                # walked is the defect this whole command was written for --
+                # "I could not look" presented as "I looked and it was clean".
+                print(
+                    f"orphaned objects  [NOT CHECKED] {len(orphans.unreadable)} "
+                    f"of {len(orphans.force_pushes)} force-push(es) could not be "
+                    "listed"
+                )
+                for tip in orphans.unreadable[:5]:
+                    print(f"                  {tip}")
+                print("                  Retry (rate limit?) or walk these by "
+                      "hand before publishing.")
+                failures += 1
             elif not orphans.force_pushes:
                 # "None found" is NOT "none ever happened". The events API
                 # retains roughly 90 days; the force-push that caused this
