@@ -159,11 +159,28 @@ class Margin:
         return self.percent is not None and self.percent < TIGHT_MARGIN_PERCENT
 
     def describe(self) -> str:
+        """Headroom, stated against what was actually measured.
+
+        It says "kept material", never "real data". The distinction is not
+        pedantry -- it was a live misreading. corpus-doctor reported
+        "looping share: 0.7% headroom ... real data reaches 0.844444", and
+        that 0.844444 was a Whisper decode loop: the same Japanese sentence
+        thirteen times over a video of a child in a playroom. Junk the
+        ceiling was too permissive to catch, described as the material the
+        ceiling exists to protect.
+
+        The action that invites -- raise the ceiling, there is no room -- is
+        exactly backwards. A threshold that is too permissive ALWAYS looks
+        tight, because its own failures are in the sample it is measured
+        against. The check cannot tell real from junk, so it must not claim
+        to; the person reading it can, given the evidence.
+        """
         if self.percent is None:
             return f"{self.label}: observed nothing, so there is no margin to report"
         return (
             f"{self.label}: {self.percent:.1f}% headroom "
-            f"(threshold {self.threshold:g}, real data reaches {self.observed_max:g})"
+            f"(threshold {self.threshold:g}, kept material reaches "
+            f"{self.observed_max:g})"
         )
 
 

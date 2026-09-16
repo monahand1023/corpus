@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from corpus.eval.query_log_audit import (
@@ -432,7 +432,8 @@ def _check_threshold_margins(sidecar: str | None) -> bool:
     try:
         with store.open_store(sidecar, read_only=True) as conn:
             rows = conn.execute(
-                "SELECT text, duration_s FROM transcripts WHERE duration_s > 1.0"
+                "SELECT text, duration_s, path FROM transcripts "
+                "WHERE duration_s > 1.0"
             ).fetchall()
     except Exception as exc:
         print(f"  SKIPPED (could not read: {type(exc).__name__})")
@@ -444,38 +445,58 @@ def _check_threshold_margins(sidecar: str | None) -> bool:
 
     # Only thresholds whose crossing DELETES something are worth reporting:
     # the margin that matters is the one protecting real material.
+    def _worst(
+        score: Callable[[str], float] | None,
+        eligible: Callable[[str, float], bool],
+    ) -> tuple[float, str, str]:
+        """Highest-scoring row, with the evidence attached.
+
+        The score alone gets read backwards. A threshold that is too
+        PERMISSIVE always looks tight, because the junk it failed to catch is
+        sitting in the sample it is measured against -- which is exactly what
+        happened: "looping share: 0.7% headroom" was five copies of a decode
+        loop, and the obvious action it suggested (raise the ceiling) was the
+        opposite of right. So the nearest row's name and text come too.
+        """
+        best = (0.0, "", "")
+        for text, duration, path in rows:
+            if not eligible(text or "", duration):
+                continue
+            # `score=None` means chars-per-second, which needs the duration
+            # and so cannot be expressed as a function of the text alone.
+            value = score(text or "") if score else len(text or "") / duration
+            if value > best[0]:
+                best = (value, path or "", (text or "")[:60].replace("\n", " "))
+        return best
+
     measured = (
-        (
-            "max chars/sec",
-            quality.DEFAULT_MAX_CHARS_PER_SECOND,
-            max(len(t) / d for t, d in rows),
-        ),
-        (
-            "looping share",
-            quality.DEFAULT_MAX_LOOPING_SHARE,
-            max(quality.looping_share(t) for t, _ in rows),
-        ),
-        (
-            # Measured only on text the filter actually evaluates. This rule
-            # is guarded by `len(text) > 40`, and ignoring that guard reported
-            # a crossed threshold for "Ah! Ah! Ah! Ah!" -- a real exclamation
-            # the guard exists to protect. A margin against data the rule
-            # never sees is not a margin.
-            "repeat share",
-            0.9,
-            max((quality.repeat_share(t) for t, _ in rows if len(t) > 40),
-                default=0.0),
-        ),
+        ("max chars/sec", quality.DEFAULT_MAX_CHARS_PER_SECOND,
+         _worst(None, lambda t, d: True)),
+        ("looping share", quality.DEFAULT_MAX_LOOPING_SHARE,
+         _worst(quality.looping_share, lambda t, d: True)),
+        # Measured only on text the filter actually evaluates. This rule is
+        # guarded by `len(text) > 40`, and ignoring that guard reported a
+        # crossed threshold for "Ah! Ah! Ah! Ah!" -- a real exclamation the
+        # guard exists to protect. A margin against data the rule never sees
+        # is not a margin.
+        ("repeat share", 0.9,
+         _worst(quality.repeat_share, lambda t, d: len(t) > 40)),
     )
+
     tight = 0
-    for label, threshold, observed in measured:
+    for label, threshold, (observed, path, excerpt) in measured:
         m = margin(threshold=threshold, observed_max=observed, label=label)
         mark = "[ warn ]" if m.tight else "[  ok  ]"
         print(f"  {mark} {m.describe()}")
+        if m.tight and path:
+            name = Path(path).name
+            print(f"           nearest: {name}")
+            print(f"           {excerpt!r}")
         tight += m.tight
     if tight:
-        print("           A tight margin is not a defect -- it is a number to")
-        print("           look at. Real data drifts; thresholds do not.")
+        print("           Look at the text above before moving anything. A")
+        print("           permissive threshold always LOOKS tight: the junk it")
+        print("           failed to catch is in the sample it is measured on.")
     return True
 
 

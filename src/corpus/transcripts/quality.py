@@ -27,6 +27,7 @@ __all__ = [
     "CAPTION_SIGNOFF_TAILS",
     "DEFAULT_MAX_CHARS_PER_SECOND",
     "DEFAULT_MAX_LOOPING_SHARE",
+    "DEFAULT_MAX_WINDOW_LOOPING_SHARE",
     "DEFAULT_UNSPOKEN_MAX_CHARS",
     "SUBTITLE_BOILERPLATE",
     "SUBTITLE_CREDIT_PREFIXES",
@@ -645,6 +646,25 @@ _MIN_UNITS_FOR_RATIO = 4
 # ("at 0.6 a reference archive lost a clip of a child repeating one word").
 # A threshold validated on a sample is not validated on the population.
 DEFAULT_MAX_LOOPING_SHARE = 0.85
+
+# The SAME measure, applied per WINDOW, wants the opposite setting -- and for
+# a while one value served both, which is how 25 pure decode loops ended up
+# indexed on a live archive.
+#
+# A window is ~30 seconds. If most of it is repeated it is a loop, and
+# dropping it costs ONE CHUNK while the rest of the recording survives: that
+# is the mechanism for a looping window inside genuine footage. Rejecting a
+# whole TRANSCRIPT deletes the recording, so that side must stay permissive.
+# Raising the shared value to 0.85 to protect whole recordings therefore
+# loosened the window filter by the same amount, silently, and loops at
+# 0.75-0.84 stopped being caught by either check.
+#
+# 0.6 is where the window filter sat before the transcript ceiling was
+# raised, and it was never the setting that deleted anything: a dropped
+# window is not a deleted recording. The floor of `_MIN_UNITS_FOR_LOOPING`
+# still protects short real repeats -- "Papa! Papa! Papa! Papa!" is 4 units
+# and is not measured at all.
+DEFAULT_MAX_WINDOW_LOOPING_SHARE = 0.6
 
 
 def _character_units(text: str) -> list[str]:

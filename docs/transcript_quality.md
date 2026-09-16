@@ -258,6 +258,38 @@ loop sat at 33–111, so the floor is **24 units**.
 Keep both. Neither subsumes the other: one unit hammered, versus a phrase
 looped.
 
+#### One threshold cannot serve both scopes
+
+The same measure runs per-**window** and per-**transcript**, and the two want
+opposite settings:
+
+| scope | wants | because a rejection costs |
+|---|---|---|
+| window (~30s) | **strict** | one chunk. The rest of the recording survives. |
+| whole transcript | **permissive** | the entire recording, real speech included. |
+
+For a while one value served both. Raising it from 0.6 to 0.85 to stop whole
+family recordings being deleted therefore loosened the window filter by
+exactly the same amount — silently, because nothing in the change named the
+window scope at all.
+
+Measured on the live archive afterwards: **25 transcripts scoring 0.80–0.8444
+are pure Whisper decode loops** — one Japanese sentence thirteen times over a
+video of a child in a playroom — sitting in the index as searchable text,
+because at 0.85 neither check fires on them. The `corpus-doctor` margin
+report made it look like the opposite problem: "looping share: 0.7% headroom,
+kept material reaches 0.844444" invites raising the ceiling, when the 0.844444
+*was the junk*.
+
+**A threshold that is too permissive always looks tight**, because its own
+failures are in the sample it is measured against. That is why the margin
+check now prints the nearest recording's text beside the number.
+
+So `DEFAULT_MAX_WINDOW_LOOPING_SHARE` (0.6) is now separate from
+`DEFAULT_MAX_LOOPING_SHARE` (0.85). Measured against the live archive, the
+split deletes **nothing** — no transcript scores above 0.85 — and changes only
+which windows inside 184 recordings become chunks.
+
 Repetition is measured with character n-grams for scripts without word spaces.
 Splitting on whitespace makes a wall of identical Khmer or Japanese syllables a
 single token, scoring zero repetition — the failure mode is invisible unless

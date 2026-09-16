@@ -440,3 +440,41 @@ def test_an_empty_index_cannot_report_clean_duplication(tmp_path, capsys) -> Non
     _check_duplicate_content(_index(tmp_path, []))
     out = capsys.readouterr().out
     assert "examined nothing" in out or "SKIPPED" in out
+
+
+# --- a margin has to show what it measured ------------------------------------
+
+
+def test_a_tight_margin_shows_the_text_it_measured(tmp_path, capsys):
+    """A number alone gets read the wrong way round.
+
+    Live: "looping share: 0.7% headroom ... reaches 0.844444" was five copies
+    of a decode loop, not material worth protecting. The right action was to
+    look at the recordings, and nothing in the output pointed at them.
+    """
+    import sqlite3
+
+    from corpus.cli.doctor import _check_threshold_margins
+
+    db = tmp_path / "t.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE transcripts (path TEXT, text TEXT, duration_s REAL)"
+    )
+    loop = "こんばんは。ただいま準備しております。" * 13
+    conn.execute(
+        "INSERT INTO transcripts VALUES (?, ?, ?)",
+        ("/media/clip-0042.MOV", loop, 60.0),
+    )
+    conn.execute(
+        "INSERT INTO transcripts VALUES (?, ?, ?)",
+        ("/media/ordinary.mov", "A normal sentence about a birthday party.", 12.0),
+    )
+    conn.commit()
+    conn.close()
+
+    _check_threshold_margins(str(db))
+    out = capsys.readouterr().out
+
+    assert "real data" not in out, "the check still called its sample real"
+    assert "playroom" in out, "the nearest recording was not named"
