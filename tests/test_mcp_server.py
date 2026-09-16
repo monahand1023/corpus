@@ -150,7 +150,14 @@ class TestSearchKnowledge:
         assert "[1] notes:doc-1 d=0.1230" in out
         assert "Title: Doc A" in out
         assert "hello world" in out
-        retriever.query.assert_called_once_with("hello", 5, None)
+        # The diversity cap rides along from corpus.toml. It used to be
+        # omitted entirely -- the call was positional, so a documented setting
+        # could not reach the retriever and every MCP search used the
+        # hardcoded default.
+        retriever.query.assert_called_once_with(
+            "hello", 5, None,
+            max_per_source_type=config.retriever.max_per_source_type,
+        )
 
     def test_empty_results_message(self):
         store, embedder, retriever, config = _make_mocks()

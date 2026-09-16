@@ -81,6 +81,10 @@ def main() -> int:
             filter_sources=args.sources,
             hybrid=not args.no_hybrid,
             rerank=args.rerank,
+            # Documented in configuration.md, the README and
+            # corpus.toml.example -- and read by nobody, so setting it had no
+            # effect and every result silently used the hardcoded default.
+            max_per_source_type=config.retriever.max_per_source_type,
         )
         if not result.chunks:
             print("(no results)")

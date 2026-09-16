@@ -159,7 +159,7 @@ async def search_knowledge(
         filter_sources = [source_types]
     else:
         filter_sources = [str(s) for s in source_types]
-    store, _, retriever, _ = _init()
+    store, _, retriever, cfg = _init()
     if filter_sources:
         # A source type that does not exist returns nothing and is
         # indistinguishable from a genuine miss, so a typo or a guessed name
@@ -176,7 +176,16 @@ async def search_knowledge(
             )
     with QueryTimer() as timer:
         result = await asyncio.to_thread(
-            retriever.query, query, top_k, filter_sources
+            retriever.query,
+            query,
+            top_k,
+            filter_sources,
+            # Documented in configuration.md, the README and
+            # corpus.toml.example -- and read by nobody. This call passed its
+            # arguments positionally, so the cap could not arrive at all and
+            # every MCP search used the hardcoded default however corpus.toml
+            # was written. This is the path that actually serves Claude.
+            max_per_source_type=cfg.retriever.max_per_source_type,
         )
     chunks = result.chunks
     _record(
