@@ -33,11 +33,50 @@ if [ ! -f "$PATTERNS" ]; then
     exit 0
 fi
 
+# Positive control: prove grep can match at all. A broken or missing grep
+# would otherwise report every history clean, forever.
+if ! printf 'canary\n' | grep -qiE 'canary'; then
+    echo "" >&2
+    echo "  PUSH BLOCKED: grep did not match a string that must match, so" >&2
+    echo "  the private-name check cannot be trusted on this machine." >&2
+    echo "" >&2
+    exit 1
+fi
+
 # Strip comments and blanks into a plain pattern file grep can read.
 ACTIVE="$(mktemp)"
 trap 'rm -f "$ACTIVE"' EXIT
 grep -v '^[[:space:]]*#' "$PATTERNS" | grep -v '^[[:space:]]*$' > "$ACTIVE"
 [ -s "$ACTIVE" ] || exit 0
+
+# `grep` exits 0 on a match, 1 on no match, and 2 ON AN ERROR. The `if` below
+# used to treat 1 and 2 alike, so an invalid regex read as "clean" and the
+# push went through. With -f PATTERNFILE one bad line fails the WHOLE file,
+# so a single typo disabled every pattern at once.
+#
+# Compiled here against empty input, before any commit is examined: a valid
+# pattern file exits 1 (no match), a broken one exits 2. Fail CLOSED -- the
+# operator must not be left believing a denylist with a hole in it covers
+# them.
+printf '' | grep -qiEf "$ACTIVE" 2>/dev/null
+if [ "$?" -ge 2 ]; then
+    echo "" >&2
+    echo "  ################################################################" >&2
+    echo "  #         PUSH BLOCKED: a private-name pattern is broken       #" >&2
+    echo "  ################################################################" >&2
+    echo "" >&2
+    echo "  $PATTERNS" >&2
+    echo "  contains a line that is not a valid POSIX extended regular" >&2
+    echo "  expression. grep rejects the whole file, so NO pattern is being" >&2
+    echo "  checked -- not the broken one, and not the others." >&2
+    echo "" >&2
+    echo "  (The patterns are not printed here -- a pattern IS a private" >&2
+    echo "   name.) Run this to see which line grep rejects:" >&2
+    echo "" >&2
+    echo "    printf '' | grep -qiEf \"\$(git rev-parse --git-dir)/private-name-patterns\"" >&2
+    echo "" >&2
+    exit 1
+fi
 
 FOUND=0
 while read -r _local_ref local_sha _remote_ref remote_sha; do
@@ -51,7 +90,16 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     fi
 
     for sha in $(git rev-list "$RANGE" 2>/dev/null); do
-        if git log -1 --format='%B' "$sha" | grep -qiEf "$ACTIVE"; then
+        git log -1 --format='%B' "$sha" | grep -qiEf "$ACTIVE"
+        RC=$?
+        if [ "$RC" -ge 2 ]; then
+            echo "" >&2
+            echo "  PUSH BLOCKED: the private-name scan errored on $sha," >&2
+            echo "  so this history was NOT checked." >&2
+            echo "" >&2
+            exit 1
+        fi
+        if [ "$RC" -eq 0 ]; then
             if [ "$FOUND" -eq 0 ]; then
                 echo "" >&2
                 echo "  ################################################################" >&2
@@ -59,9 +107,14 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
                 echo "  ################################################################" >&2
                 echo "" >&2
             fi
-            # The subject only. Printing the match would put the private
-            # string into terminal scrollback and CI logs.
-            echo "    $(git log -1 --format='%h %s' "$sha" | cut -c1-72)" >&2
+            # The SHA and date ONLY. The subject was printed here until a
+            # test ran the hook and found the obvious: the reason this fired
+            # is that the private name is IN the subject, so echoing it put
+            # the string into exactly the terminal scrollback and CI logs
+            # this hook exists to keep it out of. The SHA identifies the
+            # commit unambiguously; `git show` it locally, where the string
+            # already is.
+            echo "    $(git log -1 --format='%h  %ad' --date=short "$sha")" >&2
             FOUND=1
         fi
     done

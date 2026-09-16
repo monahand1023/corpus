@@ -210,3 +210,38 @@ def test_every_declared_section_is_read_from_the_toml() -> None:
     missing = [d for d in declared if d not in read and d != "db_path"]
 
     assert not missing, f"declared on CorpusConfig but never read from TOML: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# [[references]] patterns are regexes, and were never validated as such
+# ---------------------------------------------------------------------------
+
+
+def test_an_invalid_reference_regex_is_a_config_error_not_a_later_traceback(
+    tmp_path,
+) -> None:
+    """`ReferencePattern.pattern` is compiled lazily, by whichever command
+    happens to call `compiled_references()` first. A typo in corpus.toml
+    therefore surfaced as a raw `re.error` traceback at CLI startup -- and in
+    the MCP server, as a process that dies before saying anything, which the
+    client reports only as "server failed to start"."""
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text(
+        '[corpus]\ndb_path = "x.db"\n\n'
+        '[[references]]\npattern = "TICKET-[0-9"\nsource_type = "jira"\n'
+    )
+    with pytest.raises(ConfigError) as exc:
+        CorpusConfig.load(cfg)
+    assert "TICKET-[0-9" in str(exc.value)
+
+
+def test_a_valid_reference_regex_still_loads(tmp_path) -> None:
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text(
+        '[corpus]\ndb_path = "x.db"\n\n'
+        '[[references]]\npattern = "TICKET-[0-9]+"\nsource_type = "jira"\n'
+    )
+    loaded = CorpusConfig.load(cfg)
+    pattern, source_type = loaded.compiled_references()[0]
+    assert pattern.search("see TICKET-42")
+    assert source_type == "jira"

@@ -20,6 +20,13 @@
 # which is inside .git/ and therefore can never be committed.
 #
 # One POSIX extended-regex pattern per line; blank lines and #comments ignored.
+#
+# WHY THE EXIT CODES ARE CHECKED BY NUMBER. `grep` exits 0 on a match, 1 on no
+# match, and 2 ON AN ERROR -- an invalid regex among the patterns, for
+# instance. `if grep -q ...; then` treats 1 and 2 alike, so a typo'd pattern
+# silently stopped checking and the commit went through. With stderr sent to
+# /dev/null it did so without printing anything at all. A guard that cannot
+# fire must never be indistinguishable from a guard that found nothing.
 
 MSG_FILE="$1"
 PATTERNS="$(git rev-parse --git-dir)/private-name-patterns"
@@ -33,16 +40,66 @@ if [ ! -f "$PATTERNS" ]; then
     exit 0
 fi
 
+# Positive control: prove grep can match at all before believing a clean
+# result from it. A missing or broken grep would otherwise report every
+# message clean, forever.
+if ! printf 'canary\n' | grep -qiE 'canary'; then
+    echo "" >&2
+    echo "  COMMIT BLOCKED: grep did not match a string that must match," >&2
+    echo "  so the private-name check cannot be trusted on this machine." >&2
+    echo "" >&2
+    exit 1
+fi
+
 # Strip comments/blanks, then test the message against each pattern.
-HITS=""
+# Patterns are counted, never echoed: the pattern IS the private name.
+HITS=0
+BROKEN=""
+LINE=0
 while IFS= read -r pat; do
+    LINE=$((LINE + 1))
     case "$pat" in ''|\#*) continue ;; esac
-    if grep -qiE "$pat" "$MSG_FILE" 2>/dev/null; then
-        HITS="$HITS $pat"
+
+    # Compile check first, against empty input: a valid pattern exits 1
+    # (no match), an invalid one exits 2.
+    printf '' | grep -qiE "$pat" 2>/dev/null
+    if [ "$?" -ge 2 ]; then
+        BROKEN="$BROKEN $LINE"
+        continue
+    fi
+
+    grep -qiE "$pat" "$MSG_FILE" 2>/dev/null
+    RC=$?
+    if [ "$RC" -eq 0 ]; then
+        HITS=$((HITS + 1))
+    elif [ "$RC" -ge 2 ]; then
+        BROKEN="$BROKEN $LINE"
     fi
 done < "$PATTERNS"
 
-if [ -n "$HITS" ]; then
+# Fail CLOSED on a pattern that cannot run. Letting the rest proceed would
+# leave the operator believing they are covered by a denylist with a hole in
+# it, which is the failure this whole hook exists to prevent.
+if [ -n "$BROKEN" ]; then
+    echo "" >&2
+    echo "  ################################################################" >&2
+    echo "  #        COMMIT BLOCKED: a private-name pattern is broken      #" >&2
+    echo "  ################################################################" >&2
+    echo "" >&2
+    echo "  These lines of $PATTERNS" >&2
+    echo "  are not valid POSIX extended regular expressions, so they check" >&2
+    echo "  NOTHING:" >&2
+    echo "" >&2
+    echo "    line(s):$BROKEN" >&2
+    echo "" >&2
+    echo "  (The patterns themselves are not printed -- a pattern IS a" >&2
+    echo "   private name.) Fix them and commit again. Until then no" >&2
+    echo "   commit message is being checked." >&2
+    echo "" >&2
+    exit 1
+fi
+
+if [ "$HITS" -gt 0 ]; then
     echo "" >&2
     echo "  ################################################################" >&2
     echo "  #            COMMIT BLOCKED: private name in message           #" >&2

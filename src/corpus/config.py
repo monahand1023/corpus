@@ -12,7 +12,7 @@ import re
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from corpus.types import SOURCE_TYPE_PATTERN
 
@@ -225,6 +225,26 @@ class ReferencePattern(BaseModel):
     pattern: str
     source_type: str = Field(pattern=SOURCE_TYPE_PATTERN)
     description: str | None = None
+
+    @field_validator("pattern")
+    @classmethod
+    def _must_be_a_valid_regex(cls, value: str) -> str:
+        """Compile once at load, so a typo is a config error.
+
+        `compile()` is otherwise called lazily by whichever command reaches
+        `compiled_references()` first, which turned a bad pattern into a raw
+        `re.error` traceback at CLI startup -- and in the MCP server into a
+        process that dies before printing anything, which the client reports
+        only as "server failed to start".
+        """
+        try:
+            re.compile(value)
+        except re.error as exc:
+            raise ValueError(
+                f"[[references]] pattern {value!r} is not a valid regular "
+                f"expression: {exc}"
+            ) from exc
+        return value
 
     def compile(self) -> re.Pattern[str]:
         return re.compile(self.pattern)

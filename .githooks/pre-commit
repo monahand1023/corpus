@@ -52,6 +52,20 @@
 # commit from ANY path, so they are matched with no such anchor.
 pattern='\.db(-shm|-wal)?$|^corpus\.toml$|(^|/)\.env$'
 
+# Positive control: prove the matcher fires on something it MUST match before
+# believing a clean result from it. `grep` exits 0 on a match, 1 on no match
+# and 2 on an error, and `if grep -q ...; then` treats 1 and 2 alike -- so a
+# grep that cannot run reports every staged path clean, forever, and the
+# hook's silence is indistinguishable from its approval. The pattern here is
+# a literal rather than user data, so this guards the tool, not the input;
+# the sibling commit-msg and pre-push hooks additionally validate the
+# patterns they resolve at runtime from outside the worktree.
+if ! printf 'data/corpus.db\n' | grep -Eqi "$pattern"; then
+  echo "COMMIT BLOCKED — the staged-path matcher did not match a path it must" >&2
+  echo "match, so this check cannot be trusted on this machine." >&2
+  exit 1
+fi
+
 tmp=$(mktemp) || exit 1
 trap 'rm -f "$tmp"' EXIT
 git diff --cached --name-status --no-renames -z > "$tmp"
