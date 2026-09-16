@@ -16,6 +16,20 @@ from typing import Protocol, runtime_checkable
 class Embedder(Protocol):
     total_tokens_used: int
 
+    # False when the provider returns no usage figure, so `total_tokens_used`
+    # stays at 0 whatever the run did. Without this a Gemini-backed ingest
+    # printed "tokens billed: 0" for half a million chunks -- "not measured"
+    # rendered identically to "measured, and it was nothing".
+    #
+    # Declared here so mypy checks it, but READ with a default elsewhere
+    # (`getattr(embedder, "counts_tokens", True)`): a backend that omits it is
+    # assumed to count, because the flag exists to declare an ABSENCE of
+    # measurement and a missing declaration must not create one silently.
+    # Note this does tighten `isinstance(x, Embedder)`, which checks attribute
+    # names -- nothing in corpus uses it, and the getattr is what the pipeline
+    # actually depends on.
+    counts_tokens: bool = True
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float] | None]:
         """Returns parallel list of embeddings. Empty inputs map to None.
 

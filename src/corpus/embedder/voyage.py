@@ -74,6 +74,7 @@ class VoyageEmbedder:
         self._client = voyageai.Client(api_key=key, max_retries=max_retries, timeout=timeout)
         self._model = model
         self.total_tokens_used = 0
+        self.counts_tokens = True
         # None until first use; False if the tokenizer is unavailable here.
         self._tokenizer_ok: bool | None = None
         # Rolling window of (monotonic_ts, tokens) for proactive TPM throttling.

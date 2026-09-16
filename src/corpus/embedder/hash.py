@@ -33,6 +33,7 @@ class HashEmbedder:
             raise ValueError(f"HashEmbedder dim must be positive, got {dim}")
         self._dim = dim
         self.total_tokens_used = 0
+        self.counts_tokens = True
 
     def _embed_one(self, text: str) -> list[float]:
         vec = [0.0] * self._dim

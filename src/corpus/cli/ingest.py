@@ -23,6 +23,21 @@ from corpus.util.autodetect import detect_sources
 EXIT_ANOMALY = 3
 
 
+def _print_tokens(*, tokens_used: int, counted: bool) -> None:
+    """Report embedding spend, distinguishing "none" from "not measured".
+
+    A provider that returns no usage figure leaves the counter at 0 forever.
+    Printing that as `tokens billed: 0` says the run was free, whatever it
+    actually embedded -- and says it identically for a run that genuinely
+    embedded nothing because every chunk was unchanged, which is a real and
+    useful thing to be able to see.
+    """
+    if counted:
+        print(f"  tokens billed:    {tokens_used:,}")
+    else:
+        print("  tokens billed:    not reported by this embedding provider")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest a configured source")
     parser.add_argument(
@@ -188,7 +203,7 @@ def main() -> int:
             else:
                 print(f"  files unreadable: {r.files_failed:,}")
                 print("  orphans deleted:  0  (pruning SKIPPED — see warnings above)")
-            print(f"  tokens billed:    {r.tokens_used:,}")
+            _print_tokens(tokens_used=r.tokens_used, counted=r.tokens_counted)
             print(f"  elapsed:          {r.elapsed_seconds:.1f}s")
             print()
         if exit_code == EXIT_ANOMALY:

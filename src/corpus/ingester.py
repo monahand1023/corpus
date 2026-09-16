@@ -120,6 +120,9 @@ class IngestResult:
     orphans_deleted: int
     tokens_used: int
     elapsed_seconds: float
+    # False when the embedder reports no usage, so `tokens_used` is an
+    # absence rather than a zero. See Embedder.counts_tokens.
+    tokens_counted: bool = True
     files_failed: int = 0
     pruning_performed: bool = True
     files_skipped: int = 0
@@ -497,6 +500,7 @@ class Ingester:
             chunks_skipped=chunks_skipped,
             orphans_deleted=orphans,
             tokens_used=self._embedder.total_tokens_used - tokens_before,
+            tokens_counted=getattr(self._embedder, "counts_tokens", True),
             elapsed_seconds=time.monotonic() - start,
             files_failed=failed_files,
             pruning_performed=prune,

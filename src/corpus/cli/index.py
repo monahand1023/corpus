@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 
 from corpus.cli._common import configure_logging, load_config_or_exit
+from corpus.cli.ingest import _print_tokens
 from corpus.config import DEFAULT_CONFIG_PATH
 from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester, IngestResult
@@ -280,7 +281,7 @@ def _print_ingest_result(name: str, r: IngestResult) -> int:
             "  orphans deleted:  0  (pruning SKIPPED — re-run `corpus-ingest "
             f"--source {name} --prune-anyway` once you've looked at the unreadable files)"
         )
-    print(f"  tokens billed:    {r.tokens_used:,}")
+    _print_tokens(tokens_used=r.tokens_used, counted=r.tokens_counted)
     print(f"  elapsed:          {r.elapsed_seconds:.1f}s")
     print()
     return exit_bit

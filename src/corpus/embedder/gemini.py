@@ -58,7 +58,11 @@ class GeminiEmbedder:
         self._client = genai.Client(api_key=key)
         self._model = model
         self._dim = dim  # None = use model's native dim
-        self.total_tokens_used = 0  # Gemini API doesn't return per-call usage; we don't pretend
+        # The Gemini API returns no per-call usage, so this counter can
+        # never move. `counts_tokens=False` is what keeps the CLI from
+        # printing that unmoved 0 as if it were a measurement.
+        self.total_tokens_used = 0
+        self.counts_tokens = False
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float] | None]:
         return self._embed_with_task_type(list(texts), task_type="RETRIEVAL_DOCUMENT")
