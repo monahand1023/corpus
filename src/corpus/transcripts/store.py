@@ -245,6 +245,33 @@ def clear_failure(conn: sqlite3.Connection, path: str) -> None:
     conn.execute("DELETE FROM failures WHERE path = ?", (path,))
 
 
+def clear_settled_failures(conn: sqlite3.Connection, *, policy: str) -> int:
+    """Drop `failures` rows for files that already have a verdict. Returns how many.
+
+    Clearing on write is not enough, and that gap was live. A file that failed
+    once and was later given a verdict is SETTLED: `already_done` skips it, so
+    the run never processes it again and never reaches its stale row. A real
+    sidecar held 94 such rows -- for files since recorded as having no audio
+    track -- which no amount of re-running would ever have cleaned up.
+
+    So this is a sweep, run at the start of a pass rather than as a side
+    effect of processing one. A repair someone has to remember is a repair
+    that does not happen.
+
+    Scoped to the CURRENT policy for `no_text`, because a verdict recorded
+    under superseded rules is going to be retried -- that file is not settled,
+    and its failure row is still the most recent thing known about it.
+    """
+    cur = conn.execute(
+        """DELETE FROM failures
+            WHERE path IN (SELECT path FROM transcripts)
+               OR path IN (SELECT path FROM no_text WHERE policy = ?)""",
+        (policy,),
+    )
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
 def save_no_text(
     conn: sqlite3.Connection,
     path: str,

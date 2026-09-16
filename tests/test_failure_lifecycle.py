@@ -144,3 +144,62 @@ def test_a_real_crash_is_still_displayed_as_an_error(tmp_path):
         on_progress=lambda i, n, p, outcome: marks.append(outcome),
     )
     assert marks == [None], "a crash stopped being visible as one"
+
+
+# --- rows that will never be revisited -----------------------------------------
+
+
+def test_failure_rows_for_already_settled_files_are_swept_on_startup(tmp_path):
+    """Clearing on write is not enough. A file that failed once and was later
+    given a verdict is SETTLED -- `already_done` skips it, so it is never
+    processed again and its stale failure row is never reached.
+
+    That is exactly the live state: 94 rows for files that had since been
+    recorded as `no_audio_stream`, which the run will now never revisit. The
+    repair has to be a sweep, not a side effect of processing.
+    """
+    db = tmp_path / "t.db"
+    policy = store.policy_fingerprint(Settings().as_policy("test-model"))
+    with store.open_store(db) as conn:
+        store.save_failure(conn, "/settled-no-text.mov", "old crash")
+        store.save_failure(conn, "/settled-transcript.mov", "old crash")
+        store.save_failure(conn, "/still-broken.mov", "genuinely broken")
+        store.save_no_text(
+            conn, "/settled-no-text.mov", duration_s=1.0,
+            reason="no_audio_stream", policy=policy,
+        )
+        store.save_transcript(
+            conn,
+            store.Transcript(
+                path="/settled-transcript.mov", text="real speech", windows=[],
+                duration_s=1.0, model="test-model", policy=policy,
+            ),
+        )
+        assert conn.execute("SELECT count(*) FROM failures").fetchone()[0] == 3
+
+        swept = store.clear_settled_failures(conn, policy=policy)
+        assert swept == 2
+        rows = [r[0] for r in conn.execute("SELECT path FROM failures")]
+        assert rows == ["/still-broken.mov"], (
+            "a genuinely broken file lost its row, or a settled one kept it"
+        )
+
+
+def test_the_sweep_runs_as_part_of_a_normal_pass(tmp_path):
+    """It has to be automatic. A repair someone must remember is a repair
+    that does not happen."""
+    (tmp_path / "x.mov").write_bytes(b"x")
+    db = tmp_path / "t.db"
+    policy = store.policy_fingerprint(Settings().as_policy("test-model"))
+    with store.open_store(db) as conn:
+        store.save_failure(conn, "/gone.mov", "old crash")
+        store.save_no_text(
+            conn, "/gone.mov", duration_s=1.0, reason="silence", policy=policy
+        )
+
+    transcribe_directory(
+        tmp_path, db, _Backend(), settings=Settings(),
+        transcribe=lambda p, b, *, settings=None: _outcome(reason="silence"),
+    )
+    with store.open_store(db, read_only=True) as conn:
+        assert conn.execute("SELECT count(*) FROM failures").fetchone()[0] == 0

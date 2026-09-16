@@ -491,6 +491,12 @@ def transcribe_directory(
             conn, policy=policy, settings=settings,
             paths={str(f) for f in files}, model_name=model_name,
         )
+        # Sweep failure rows for files that already have a verdict. They can
+        # never be reached by processing, because `already_done` skips them.
+        swept = store.clear_settled_failures(conn, policy=policy)
+        if swept:
+            logger.info("cleared %d stale failure row(s)", swept)
+
         done = store.already_done(conn, policy=policy)
         todo = [p for p in files if str(p) not in done]
         stats.skipped_done = len(files) - len(todo)
