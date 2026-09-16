@@ -408,7 +408,19 @@ sidecar database that is then a source like any other:
 corpus-transcribe ~/Videos --dry-run     # how much audio, how long, what's left
 corpus-transcribe ~/Videos               # do it (safe to interrupt)
 corpus-transcribe ~/Videos --limit 20    # sample the quality first
+corpus-transcribe ~/Videos --min-seconds 15   # skip the Live Photo clips
 ```
+
+**`--min-seconds` is worth knowing about before you point this at a phone's
+video folder.** Measured on a real archive of a real photo library:
+**81% are under four seconds** — the clip Apple stores beside each Live
+Photo. Transcribing them is ~46,800 files and ~33 hours of room tone, and it
+floods the index with near-empty text that dilutes every search. The plain
+dry run cannot warn you, because total hours cannot show that four fifths of
+them are four seconds long.
+
+A file whose duration `ffprobe` cannot read is KEPT, never skipped: a failed
+probe is not evidence that a recording is short.
 
 ### After a quality threshold changes
 

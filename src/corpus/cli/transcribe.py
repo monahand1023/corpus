@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from corpus.cli._common import configure_logging
 from corpus.survey.format import human_count
 from corpus.transcripts.pipeline import Settings
-from corpus.transcripts.run import find_media, transcribe_directory
+from corpus.transcripts.run import find_media, partition_by_duration, transcribe_directory
 
 DEFAULT_DB = "data/transcripts.db"
 
@@ -37,8 +37,32 @@ def _humanise_hours(seconds: float) -> str:
     return f"{hours:.1f} h"
 
 
+def _duration_probe() -> Callable[[Path], float | None]:
+    """ffprobe-backed duration lookup, or a no-op when ffprobe is missing.
+
+    Returning None for everything is the safe degradation: `partition_by_duration`
+    keeps a file whose duration it cannot read, so a missing ffprobe means the
+    floor simply does not apply rather than silently dropping the archive.
+    """
+    import shutil
+
+    from corpus.survey.media import DEFAULT_FFPROBE_TIMEOUT_SECONDS, _probe_duration_seconds
+
+    binary = shutil.which("ffprobe")
+    if binary is None:
+        return lambda _path: None
+    return lambda path: _probe_duration_seconds(
+        path, binary, DEFAULT_FFPROBE_TIMEOUT_SECONDS
+    )
+
+
 def _dry_run(
-    root: Path, db: Path, excludes: Sequence[str], rate: float, settings: Settings
+    root: Path,
+    db: Path,
+    excludes: Sequence[str],
+    rate: float,
+    settings: Settings,
+    min_seconds: float = 0.0,
 ) -> int:
     """Price the run without transcribing anything.
 
@@ -63,12 +87,38 @@ def _dry_run(
     files = list(find_media(root, excludes=excludes))
     print(f"corpus-transcribe: {root}")
     print(f"  media files found : {human_count(len(files))}")
+    # When a floor is set, every file has just been probed, so the exact
+    # duration of what WILL run is known -- better than the sampled estimate
+    # below, and it must not contradict the line above it. Printing "204
+    # skipped" and then quoting hours for all 857 is worse than printing no
+    # number at all: the dry run is the one warning before hours of compute.
+    measured_hours: float | None = None
+    if min_seconds > 0 and files:
+        probe = _duration_probe()
+        durations = {f: probe(f) for f in files}
+        files, too_short = partition_by_duration(
+            files, min_seconds=min_seconds, probe=lambda f: durations.get(f)
+        )
+        print(
+            f"  under {min_seconds:g}s          : {human_count(len(too_short))} "
+            "skipped (a duration that cannot be read counts as long enough)"
+        )
+        known = [d for f in files if (d := durations.get(f)) is not None]
+        # Only when EVERY surviving file has a known duration. A partial sum
+        # would understate the run, and understating it is the direction that
+        # costs someone an unexpected night of compute.
+        if known and len(known) == len(files):
+            measured_hours = sum(known) / 3600.0
     if not files:
         print("\n  Nothing to transcribe. `corpus-survey census` shows what IS here.")
         return 1
 
-    survey = run_media_survey(root, excludes=tuple(excludes), rate=rate)
-    hours = survey.estimated_total_hours
+    if measured_hours is not None:
+        # Exact, not sampled: the floor already required probing every file.
+        hours: float | None = measured_hours
+    else:
+        survey = run_media_survey(root, excludes=tuple(excludes), rate=rate)
+        hours = survey.estimated_total_hours
     if hours is None:
         print(
             "  duration          : unknown (ffprobe unavailable, so length "
@@ -187,6 +237,19 @@ def main_argv(argv: list[str]) -> int:
         help="Skip paths matching this pattern (repeatable)",
     )
     parser.add_argument(
+        "--min-seconds",
+        type=float,
+        default=0.0,
+        metavar="N",
+        help=(
+            "Skip recordings shorter than N seconds. Measured on a real "
+            "archive of a real photo library: 81%% are under four "
+            "seconds -- the clip Apple stores beside each Live Photo -- which "
+            "is ~46,800 files and ~33 hours of room tone. A file whose "
+            "duration cannot be read is KEPT, never skipped."
+        ),
+    )
+    parser.add_argument(
         "--rate", type=float, default=15.0,
         help="Assumed speed as a multiple of realtime, for the estimate only",
     )
@@ -231,7 +294,7 @@ def main_argv(argv: list[str]) -> int:
 
     settings = Settings(expected_languages=frozenset(args.languages))
     if args.dry_run:
-        return _dry_run(root, db, args.excludes, args.rate, settings)
+        return _dry_run(root, db, args.excludes, args.rate, settings, args.min_seconds)
     if args.refilter:
         return _refilter(db, settings)
 
@@ -276,9 +339,23 @@ def main_argv(argv: list[str]) -> int:
             print("  Nothing to redo.")
             return 0
     else:
-        total = len(list(find_media(root, excludes=args.excludes)))
+        found = list(find_media(root, excludes=args.excludes))
         print(f"corpus-transcribe: {root} -> {db}")
-        print(f"  {human_count(total)} media file(s); already-done files are skipped\n")
+        if args.min_seconds > 0:
+            found, too_short = partition_by_duration(
+                found, min_seconds=args.min_seconds, probe=_duration_probe()
+            )
+            # Pass the survivors as the explicit work list, so the floor is
+            # applied BEFORE decoding -- which is the cost it exists to avoid.
+            only = found
+            print(
+                f"  {human_count(len(too_short))} file(s) under "
+                f"{args.min_seconds:g}s skipped before decoding"
+            )
+        print(
+            f"  {human_count(len(found))} media file(s); already-done files "
+            "are skipped\n"
+        )
 
     def progress(index: int, todo: int, path: Path, outcome: object) -> None:
         mark = "ok " if getattr(outcome, "produced_text", False) else "-- "

@@ -305,6 +305,47 @@ def refilter_stored(
     return stats
 
 
+def below_duration_floor(duration_s: float | None, min_seconds: float) -> bool:
+    """Whether a recording is too short to be worth transcribing.
+
+    An UNKNOWN duration is never below the floor. ffprobe failing is not
+    evidence that a recording is short, and skipping on an unknown would
+    silently drop real speech -- the failure mode every threshold in this
+    project is tuned against.
+    """
+    if min_seconds <= 0 or duration_s is None:
+        return False
+    return duration_s < min_seconds
+
+
+def partition_by_duration(
+    paths: Sequence[Path],
+    *,
+    min_seconds: float,
+    probe: Callable[[Path], float | None],
+) -> tuple[list[Path], list[Path]]:
+    """Split `paths` into (long enough, too short).
+
+    WHY A FLOOR EXISTS AT ALL. Measured on a real archive of 58,024
+    photo-library videos: 81% are under four seconds -- the clip Apple stores
+    beside each Live Photo. Transcribing them adds ~46,800 files for ~33 hours
+    of ambience and floods the index with near-empty text that dilutes every
+    search. The dry run cannot warn about it either: it reports total hours,
+    which cannot show that four fifths of them are four seconds long.
+
+    Probing is skipped entirely when there is no floor. It costs a subprocess
+    per file, and paying for 58,000 of them to decide nothing is the kind of
+    cost that gets a feature switched off.
+    """
+    if min_seconds <= 0:
+        return list(paths), []
+    keep: list[Path] = []
+    skip: list[Path] = []
+    for path in paths:
+        (skip if below_duration_floor(probe(path), min_seconds) else keep).append(path)
+    return keep, skip
+
+
 def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
     """Files the current policy invalidated, read from the STORE.
 
