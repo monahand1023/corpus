@@ -40,6 +40,7 @@ keep their full text rather than being dropped.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import logging
 import re
@@ -280,6 +281,26 @@ class OlmConnector:
         if not archives:
             logger.warning("%s: no .olm archives under %s", self.source_type, self._root)
 
+        # Near-duplicate skip, as ten other connectors already do -- and an
+        # Outlook archive is the format where the same message appears most:
+        # once in its folder, once in Deleted Items, once in a mirrored PST
+        # export. Measured on a live archive, 2,381 chunks (77% of everything
+        # losslessly removable across its filesystem sources) were duplicate
+        # messages inside ONE olm source.
+        #
+        # Some duplicated a message in a DIFFERENT folder and some duplicated
+        # one in the SAME folder, which is why excluding a folder could not
+        # fix it: the copy to keep was often inside the folder to drop.
+        #
+        # The header rides in the body (From/To/Date + text), so this covers
+        # participants and date too -- two one-line replies saying "Sounds
+        # good" from different people stay distinct.
+        #
+        # Scoped to one load() and keyed on the FIRST member seen in sorted
+        # order, so the survivor is deterministic. A run that kept a different
+        # copy each time would churn chunk ids and re-embed the archive.
+        seen: dict[str, str] = {}
+
         for archive_path in archives:
             try:
                 archive = zipfile.ZipFile(archive_path)
@@ -311,11 +332,44 @@ class OlmConnector:
                         self.failed_files += 1
                         continue
                     if document is not None:
+                        fp = _message_digest(document)
+                        if fp in seen:
+                            logger.debug(
+                                "%s: skipping near-duplicate '%s' (matches '%s')",
+                                self.source_type,
+                                document.source_key,
+                                seen[fp],
+                            )
+                            self.skipped_files += 1
+                            continue
+                        seen[fp] = document.source_key
                         yield document
                     if index % 20_000 == 0:
                         logger.info(
                             "%s: %d/%d messages", self.source_type, index, len(members)
                         )
+
+
+def _message_digest(document: SourceDocument) -> str:
+    """EXACT hash of subject + body. Deliberately not `util.dedup.fingerprint`.
+
+    That helper strips dates and URLs before hashing, which is right for a
+    document re-exported with a new timestamp and WRONG for mail, where the
+    date is the content. Measured on a real archive before this was caught:
+    it collapsed 53 salon booking confirmations -- same template, same
+    sender, bookings in 2014 and 2015 with a different reservation URL each
+    -- into one, because the only things telling them apart were the two
+    fields it removes. 52 real appointments would have left the index.
+
+    Subject is included because it is real content and is what the reader
+    sees as the title; the body already carries From/To/Date. With an exact
+    hash the largest duplicate group on that archive is 4, every member
+    sharing a date: the same message in the direct store, in Deleted Items,
+    and in two PST exports.
+    """
+    return hashlib.sha256(
+        f"{document.title}\n{document.raw.get('body', '')}".encode()
+    ).hexdigest()[:32]
 
 
 def build(cfg: Any) -> OlmConnector:

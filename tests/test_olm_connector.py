@@ -95,15 +95,41 @@ def test_the_direct_copy_is_the_one_kept(tmp_path: Path) -> None:
 
 
 def test_mirror_can_be_included_deliberately(tmp_path: Path) -> None:
+    """What the flag is for, per the module docstring: the mirror is NOT an
+    exact copy, and including it reaches messages the direct tree lacks.
+
+    It yields the UNION, not the sum -- an identical copy is collapsed by the
+    near-duplicate skip, so turning the flag off buys coverage without
+    paying to embed the same message twice.
+    """
     _archive(
         tmp_path,
         {
             f"{MESSAGE_ROOT}archive PST/Inbox/message_1.xml": _message(),
             f"{MESSAGE_ROOT}{MIRROR_PREFIX}archive PST/Inbox/message_1.xml": _message(),
+            f"{MESSAGE_ROOT}{MIRROR_PREFIX}archive PST/Inbox/message_2.xml": _message(
+                body="Only the mirror has this one."
+            ),
         },
     )
 
-    assert len(_load(tmp_path, skip_mirror_tree=False)) == 2
+    keys = {d.source_key for d in _load(tmp_path, skip_mirror_tree=False)}
+    assert len(keys) == 2, "an identical copy was indexed twice"
+    assert any("message_2" in k for k in keys), "a mirror-only message was lost"
+
+
+def test_the_mirror_only_message_is_absent_when_the_mirror_is_skipped(tmp_path: Path) -> None:
+    """The negative control for the test above."""
+    _archive(
+        tmp_path,
+        {
+            f"{MESSAGE_ROOT}archive PST/Inbox/message_1.xml": _message(),
+            f"{MESSAGE_ROOT}{MIRROR_PREFIX}archive PST/Inbox/message_2.xml": _message(
+                body="Only the mirror has this one."
+            ),
+        },
+    )
+    assert len(_load(tmp_path)) == 1
 
 
 # --- bodies are escaped HTML, not text -------------------------------------
@@ -221,11 +247,14 @@ def test_no_folder_filter_means_every_folder(tmp_path: Path) -> None:
     _archive(
         tmp_path,
         {
-            f"{MESSAGE_ROOT}a/f1/message_1.xml": _message(),
-            f"{MESSAGE_ROOT}b/f2/message_1.xml": _message(),
+            f"{MESSAGE_ROOT}a/f1/message_1.xml": _message(body="From folder one."),
+            f"{MESSAGE_ROOT}b/f2/message_1.xml": _message(body="From folder two."),
         },
     )
 
+    # Distinct bodies on purpose: identical ones are collapsed by the
+    # near-duplicate skip, which would make this pass whether or not the
+    # second folder was ever walked.
     assert len(_load(tmp_path)) == 2
 
 
