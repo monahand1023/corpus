@@ -654,3 +654,21 @@ def test_the_looping_threshold_is_in_the_policy_fingerprint() -> None:
     assert "max_looping_share" in Settings().as_policy("m")
     loose = Settings(max_looping_share=0.95).as_policy("m")
     assert loose != Settings().as_policy("m")
+
+
+def test_a_repeated_signoff_is_removed_completely() -> None:
+    # Single-pass stripping left one copy behind, because each pass only
+    # removes what is at the END. Found in a live index: two chunks reading
+    # "Please subscribe. Please subscribe." after the filter had run.
+    assert strip_caption_tail("Please subscribe. Please subscribe.") == ""
+    assert strip_caption_tail("Thanks for watching. Thanks for watching this video.") == ""
+
+
+def test_repeated_stripping_still_stops_at_real_speech() -> None:
+    text = "and then we drove home. Thank you for watching. Thanks for watching."
+    assert strip_caption_tail(text) == "and then we drove home."
+
+
+def test_stripping_reaches_a_fixed_point_without_eating_the_text() -> None:
+    plain = "an ordinary sentence with no sign-off in it at all"
+    assert strip_caption_tail(plain) is plain

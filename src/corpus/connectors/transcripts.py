@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +81,22 @@ def _long_enough(text: str) -> bool:
     return len(text) >= floor
 
 
+def _rescuable(text: str) -> bool:
+    """Junk tests only, WITHOUT the length floor.
+
+    The rescue below exists to restore a window that is merely short, so it
+    must skip `_long_enough` -- but every other reason `worth_indexing` says
+    no still applies. Keeping them in one place is the point: the rescue was
+    written to check boilerplate alone, so when the loop signal arrived it was
+    a hole from the first day. 12 looping chunks reached a live index through
+    it after the loop filter had already been added everywhere else.
+    """
+    return (
+        not subtitle_boilerplate(text)
+        and looping_share(text) < DEFAULT_MAX_LOOPING_SHARE
+    )
+
+
 def worth_indexing(text: str) -> bool:
     """A window worth a chunk: long enough, not boilerplate, not a loop.
 
@@ -97,11 +113,7 @@ def worth_indexing(text: str) -> bool:
     the remaining 163 were single looping windows inside genuine recordings,
     reachable only from here.
     """
-    return (
-        _long_enough(text)
-        and not subtitle_boilerplate(text)
-        and looping_share(text) < DEFAULT_MAX_LOOPING_SHARE
-    )
+    return _long_enough(text) and _rescuable(text)
 
 
 class TranscriptConnector:
@@ -113,6 +125,7 @@ class TranscriptConnector:
         path: Path | str,
         *,
         exclude: Sequence[str] = (),
+        exclude_fn: Callable[[str], bool] | None = None,
     ) -> None:
         self.source_type = source_type
         self._db = Path(path).expanduser()
@@ -122,6 +135,12 @@ class TranscriptConnector:
         # holding rows written under the older ones. Enumeration-time filtering
         # cannot retract those; this can.
         self._exclude = tuple(exclude)
+        # A predicate, for exclusions a substring cannot express -- "media
+        # inside a photo library unless it was opted in", "karaoke backing
+        # tracks". The MECHANISM belongs here because the retraction problem
+        # above is general; the POLICY belongs to the archive, which is why
+        # this is a hook and not a list of rules.
+        self._exclude_fn = exclude_fn
         if not self._db.is_file():
             # Raise rather than yield nothing: an empty enumeration makes the
             # ingester treat every already-indexed transcript as an orphan and
@@ -146,7 +165,9 @@ class TranscriptConnector:
             conn.close()
 
         for row in rows:
-            if any(pattern in row["path"] for pattern in self._exclude):
+            if any(pattern in row["path"] for pattern in self._exclude) or (
+                self._exclude_fn is not None and self._exclude_fn(row["path"])
+            ):
                 self.excluded_files += 1
                 continue
             try:
@@ -217,7 +238,7 @@ class TranscriptChunker:
             # `worth_indexing` exists to remove.
             best = max(segments, key=lambda s: len((s.get("text") or "").strip()))
             text = (best.get("text") or "").strip()
-            if text and not subtitle_boilerplate(text):
+            if text and _rescuable(text):
                 kept = [best]
 
         out: list[Chunk] = []

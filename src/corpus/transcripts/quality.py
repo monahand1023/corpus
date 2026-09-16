@@ -528,6 +528,15 @@ def strip_caption_tail(
         return text
     out = _WHITESPACE.sub(" ", out).strip()
     out = unicodedata.normalize("NFC", out)
+    # A transcriber that emits a sign-off often emits it twice: "Please
+    # subscribe. Please subscribe." left "Please subscribe." behind, because
+    # each pass only removes what is at the END. Recurse to a fixed point.
+    # Bounded by construction -- every pass removes at least one character or
+    # returns its input unchanged, which is the terminating case.
+    if out and out != text:
+        again = strip_caption_tail(out, tails=tails, credit_prefixes=credit_prefixes)
+        if again != out:
+            return again
     # Spanish opens with punctuation, so cutting "gracias por ver el video"
     # off "¡Gracias por ver el video!" leaves a lone "¡". Nothing that
     # normalises away to nothing is speech.

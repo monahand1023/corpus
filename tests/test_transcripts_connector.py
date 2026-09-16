@@ -205,3 +205,61 @@ def test_a_real_window_that_repeats_a_little_is_still_indexed() -> None:
     )
     # Short and repetitive is a person, not a loop -- and below the unit floor.
     assert worth_indexing("Papa! Papa! Papa! Papa! Papa! Papa! Papa!")
+
+
+def test_a_consumer_predicate_retracts_rows_written_under_older_rules(tmp_path) -> None:
+    """Rules tighten while a long run is in flight.
+
+    A 20-hour transcription pass wrote rows under the rules that existed when
+    it started; four karaoke backing tracks came back as gibberish invented
+    over the music. Enumeration-time filtering cannot retract those, because
+    the rows already exist. This can -- and a substring list cannot express
+    the rule, which is why the hook takes a predicate.
+    """
+    db = _db(tmp_path, [
+        {"path": "/w/KARAOKE NIGHT VOL 3.mp3", "text": "gibberish over music",
+         "segments": [_seg(0.0, 30.0, "invented gibberish over backing music")]},
+        {"path": "/w/speech.m4a", "text": "a real recording",
+         "segments": [_seg(0.0, 30.0, LONG_EN)]},
+    ])
+    connector = TranscriptConnector(
+        "transcripts", db, exclude_fn=lambda path: "KARAOKE" in path
+    )
+    assert [d.source_key for d in connector.load()] == ["/w/speech.m4a"]
+    assert connector.excluded_files == 1
+
+
+def test_no_predicate_means_no_extra_exclusion(tmp_path) -> None:
+    db = _db(tmp_path, [
+        {"path": "/w/a.m4a", "text": "a real recording",
+         "segments": [_seg(0.0, 30.0, LONG_EN)]},
+    ])
+    assert len(list(TranscriptConnector("transcripts", db).load())) == 1
+
+
+def test_the_rescue_does_not_reintroduce_a_loop(tmp_path) -> None:
+    """The rescue restores a SHORT window, never a worthless one.
+
+    It checked boilerplate only, so when the loop signal was added everywhere
+    else this stayed a hole: a recording whose every window is a loop had its
+    longest looping window restored as the document. 12 such chunks reached a
+    live index after the loop filter was already in place.
+    """
+    looped = "I am going to draw a small map. " * 9
+    db = _db(tmp_path, [{
+        "path": "/w/loop.m4a", "text": looped,
+        "segments": [_seg(0.0, 30.0, looped), _seg(30.0, 60.0, looped)],
+    }])
+    docs = list(TranscriptConnector("transcripts", db).load())
+    assert TranscriptChunker("transcripts").chunk(docs[0]) == []
+
+
+def test_the_rescue_still_saves_a_genuinely_short_recording(tmp_path) -> None:
+    # The case it exists for: below the length floor, but the whole recording.
+    db = _db(tmp_path, [{
+        "path": "/w/short.m4a", "text": "I love you.",
+        "segments": [_seg(0.0, 3.0, "I love you.")],
+    }])
+    docs = list(TranscriptConnector("transcripts", db).load())
+    chunks = TranscriptChunker("transcripts").chunk(docs[0])
+    assert [c.content for c in chunks] == ["I love you."]
