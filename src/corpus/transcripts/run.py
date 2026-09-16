@@ -21,6 +21,7 @@ omitted from it silently keeps stale answers alive.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -572,51 +573,86 @@ def transcribe_directory(
                     on_progress(index, len(todo), path, None)
                 continue
 
-            stats.seconds_of_audio += outcome.duration_s
-            if outcome.dropped:
-                store.save_dropped_windows(
-                    conn,
-                    str(path),
-                    [
-                        {
-                            "window_start": d.window_start,
-                            "no_speech": d.no_speech,
-                            "avg_logprob": d.avg_logprob,
-                            "text": d.text,
-                            # WHICH rule fired. Computed per window and then
-                            # dropped here, which left the store unable to
-                            # answer whether any filter is dead.
-                            "reason": d.reason,
-                        }
-                        for d in outcome.dropped
-                    ],
-                    policy=policy,
-                )
+            # RECORDING the answer can fail too, and until this was wrapped
+            # one bad value took the whole pass with it: a NaN avg_logprob --
+            # which SQLite cannot store, so a NOT NULL column rejects it --
+            # aborted a live run at file 59 of 2,454. Transcription was
+            # protected per file while the write beside it was not, so one
+            # unstorable window discarded every file after it.
+            try:
+                _record(conn, path, outcome, policy, stats)
+            except Exception as exc:
+                detail = f"could not record result: {type(exc).__name__}: {exc}"
+                stats.failed += 1
+                stats.errors.append((str(path), detail))
+                with contextlib.suppress(Exception):
+                    store.save_failure(conn, str(path), detail)
+                logger.warning("%s for %s", detail, path)
+                if on_progress:
+                    on_progress(index, len(todo), path, None)
+                continue
 
-            # This file now has an answer, so any `failures` row from an
-            # earlier attempt has stopped being true. Clearing it here covers
-            # every verdict below in one place.
-            store.clear_failure(conn, str(path))
-
-            if outcome.transcript is not None:
-                outcome.transcript.policy = policy
-                store.save_transcript(conn, outcome.transcript)
-                stats.transcribed += 1
-            else:
-                # The row that makes a restart cheap. Without it this file is
-                # simply absent, and the next run pays for it again to reach
-                # the same answer.
-                store.save_no_text(
-                    conn,
-                    str(path),
-                    duration_s=outcome.duration_s,
-                    policy=policy,
-                    reason=outcome.empty_reason or "no_text",
-                    rejected_text=outcome.rejected_text,
-                )
-                stats.empty += 1
 
             if on_progress:
                 on_progress(index, len(todo), path, outcome)
 
     return stats
+
+
+
+def _record(
+    conn: sqlite3.Connection,
+    path: Path,
+    outcome: Outcome,
+    policy: str,
+    stats: RunStats,
+) -> None:
+    """Write one file's result to the store.
+
+    Split out of the run loop so the loop can protect it: recording an
+    answer can fail for reasons that have nothing to do with the next
+    file, and a failure here must cost one file rather than the pass.
+    """
+    stats.seconds_of_audio += outcome.duration_s
+    if outcome.dropped:
+        store.save_dropped_windows(
+            conn,
+            str(path),
+            [
+                {
+                    "window_start": d.window_start,
+                    "no_speech": d.no_speech,
+                    "avg_logprob": d.avg_logprob,
+                    "text": d.text,
+                    # WHICH rule fired. Computed per window and then
+                    # dropped here, which left the store unable to
+                    # answer whether any filter is dead.
+                    "reason": d.reason,
+                }
+                for d in outcome.dropped
+            ],
+            policy=policy,
+        )
+
+    # This file now has an answer, so any `failures` row from an
+    # earlier attempt has stopped being true. Clearing it here covers
+    # every verdict below in one place.
+    store.clear_failure(conn, str(path))
+
+    if outcome.transcript is not None:
+        outcome.transcript.policy = policy
+        store.save_transcript(conn, outcome.transcript)
+        stats.transcribed += 1
+    else:
+        # The row that makes a restart cheap. Without it this file is
+        # simply absent, and the next run pays for it again to reach
+        # the same answer.
+        store.save_no_text(
+            conn,
+            str(path),
+            duration_s=outcome.duration_s,
+            policy=policy,
+            reason=outcome.empty_reason or "no_text",
+            rejected_text=outcome.rejected_text,
+        )
+        stats.empty += 1

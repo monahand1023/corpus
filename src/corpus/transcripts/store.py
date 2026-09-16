@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
@@ -304,6 +305,29 @@ def save_failure(conn: sqlite3.Connection, path: str, error: str) -> None:
     conn.commit()
 
 
+# What a non-finite measurement becomes on its way into the table.
+#
+# SQLite HAS NO NaN: inserting one stores NULL, and these columns are NOT
+# NULL, so a NaN `avg_logprob` -- which Whisper produces on degenerate audio
+# -- raised IntegrityError and killed a whole pass at file 59 of 2,454.
+#
+# -1.0 is already what the pipeline writes when the model reported nothing at
+# all, so NaN and "not reported" are indistinguishable here. That is a real
+# loss of detail, accepted because the alternative is a second magic number in
+# a column read only when auditing a discard, and because the values these
+# replace could not be stored at all.
+UNMEASURED = -1.0
+
+
+def _storable(value: Any) -> float:
+    """A float SQLite will actually keep. NaN and infinities become UNMEASURED."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return UNMEASURED
+    return number if math.isfinite(number) else UNMEASURED
+
+
 def save_dropped_windows(
     conn: sqlite3.Connection,
     path: str,
@@ -323,9 +347,9 @@ def save_dropped_windows(
         [
             (
                 path,
-                float(d.get("window_start", 0.0)),
-                float(d.get("no_speech", 0.0)),
-                float(d.get("avg_logprob", 0.0)),
+                _storable(d.get("window_start", 0.0)),
+                _storable(d.get("no_speech", 0.0)),
+                _storable(d.get("avg_logprob", 0.0)),
                 str(d.get("text", "")),
                 # WHICH rule fired. Without it the evidence this table exists
                 # to keep cannot answer the question that matters: is any of
