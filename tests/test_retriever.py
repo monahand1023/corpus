@@ -21,7 +21,7 @@ def fake_embedding(seed: int) -> list[float]:
     return [math.sin((seed + 1) * (i + 1) * 0.001) for i in range(DIM)]
 
 
-def make_chunk(source_type: str, source_key: str, idx: int, content: str) -> Chunk:
+def make_dupe(source_type: str, source_key: str, idx: int, content: str) -> Chunk:
     return Chunk(
         id=chunk_id(source_type, source_key, ChunkKind.HEADER, idx),
         content=content,
@@ -41,11 +41,11 @@ def retriever(tmp_path: Path) -> Retriever:
     store = ChunkStore(tmp_path / "ret.db", embedding_dim=DIM)
     items = []
     for i in range(6):
-        items.append((make_chunk("notes", f"doc-{i}", 0, f"note {i}"), fake_embedding(i)))
+        items.append((make_dupe("notes", f"doc-{i}", 0, f"note {i}"), fake_embedding(i)))
     for i in range(3):
-        items.append((make_chunk("notes", "doc-0", i + 1, f"doc-0 body {i}"), fake_embedding(i + 10)))
+        items.append((make_dupe("notes", "doc-0", i + 1, f"doc-0 body {i}"), fake_embedding(i + 10)))
     for i in range(3):
-        items.append((make_chunk("papers", f"p-{i}", 0, f"paper {i}"), fake_embedding(i + 20)))
+        items.append((make_dupe("papers", f"p-{i}", 0, f"paper {i}"), fake_embedding(i + 20)))
     store.upsert_batch(items)
 
     embedder = MagicMock()
@@ -89,9 +89,9 @@ def test_reference_pattern_drives_expand_context(tmp_path: Path) -> None:
     store = ChunkStore(tmp_path / "ref.db", embedding_dim=DIM)
     items = [
         # Seed mentions TKT-9
-        (make_chunk("tickets", "TKT-1", 0, "depends on TKT-9 to ship"), fake_embedding(1)),
-        (make_chunk("tickets", "TKT-9", 0, "the dependency ticket"), fake_embedding(2)),
-        (make_chunk("tickets", "TKT-5", 0, "unrelated"), fake_embedding(3)),
+        (make_dupe("tickets", "TKT-1", 0, "depends on TKT-9 to ship"), fake_embedding(1)),
+        (make_dupe("tickets", "TKT-9", 0, "the dependency ticket"), fake_embedding(2)),
+        (make_dupe("tickets", "TKT-5", 0, "unrelated"), fake_embedding(3)),
     ]
     store.upsert_batch(items)
     embedder = MagicMock()
@@ -115,8 +115,8 @@ def test_no_reference_patterns_means_no_cross_doc_references(tmp_path: Path) -> 
     """With references=[], expand_context returns siblings + parent only."""
     store = ChunkStore(tmp_path / "noref.db", embedding_dim=DIM)
     items = [
-        (make_chunk("notes", "A", 0, "mentions DOC-9"), fake_embedding(1)),
-        (make_chunk("notes", "DOC-9", 0, "would-be reference"), fake_embedding(2)),
+        (make_dupe("notes", "A", 0, "mentions DOC-9"), fake_embedding(1)),
+        (make_dupe("notes", "DOC-9", 0, "would-be reference"), fake_embedding(2)),
     ]
     store.upsert_batch(items)
     embedder = MagicMock()
@@ -309,9 +309,9 @@ def test_attach_summaries_populates_and_caches_by_source_key(tmp_path: Path) -> 
     (source_type, source_key) so M docs cost M queries regardless of N chunks."""
     store = ChunkStore(tmp_path / "sum.db", embedding_dim=DIM)
     items = [
-        (make_chunk("notes", "doc-A", 0, "A chunk 0"), fake_embedding(0)),
-        (make_chunk("notes", "doc-A", 1, "A chunk 1"), fake_embedding(1)),
-        (make_chunk("notes", "doc-B", 0, "B chunk 0"), fake_embedding(2)),
+        (make_dupe("notes", "doc-A", 0, "A chunk 0"), fake_embedding(0)),
+        (make_dupe("notes", "doc-A", 1, "A chunk 1"), fake_embedding(1)),
+        (make_dupe("notes", "doc-B", 0, "B chunk 0"), fake_embedding(2)),
     ]
     store.upsert_batch(items)
     store.upsert_summary("notes", "doc-A", "summary of A", "h", "model", 1)
@@ -345,7 +345,7 @@ def test_attach_summaries_populates_and_caches_by_source_key(tmp_path: Path) -> 
 def test_rerank_pool_gets_summaries_attached(tmp_path: Path) -> None:
     """query(rerank=True) attaches summaries to the rerank pool before scoring."""
     store = ChunkStore(tmp_path / "rr.db", embedding_dim=DIM)
-    items = [(make_chunk("notes", "doc-A", 0, "A body"), fake_embedding(0))]
+    items = [(make_dupe("notes", "doc-A", 0, "A body"), fake_embedding(0))]
     store.upsert_batch(items)
     store.upsert_summary("notes", "doc-A", "the summary", "h", "model", 1)
 
@@ -392,9 +392,9 @@ def lopsided_retriever(tmp_path: Path) -> Retriever:
     store = ChunkStore(tmp_path / "lop.db", embedding_dim=DIM)
     items = []
     for i in range(200):
-        items.append((make_chunk("photos", f"img-{i}", 0, f"photo {i}"), fake_embedding(i)))
+        items.append((make_dupe("photos", f"img-{i}", 0, f"photo {i}"), fake_embedding(i)))
     for i in range(3):
-        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i + 5000)))
+        items.append((make_dupe("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i + 5000)))
     store.upsert_batch(items)
     embedder = MagicMock()
     embedder.embed_query = MagicMock(return_value=fake_embedding(0))
@@ -423,9 +423,9 @@ def test_top_k_is_filled_despite_cap(lopsided_retriever: Retriever) -> None:
 def test_source_types_lists_distinct_types(tmp_path: Path) -> None:
     store = ChunkStore(tmp_path / "st.db", embedding_dim=DIM)
     store.upsert_batch([
-        (make_chunk("photos", "a", 0, "x"), fake_embedding(1)),
-        (make_chunk("notes", "b", 0, "y"), fake_embedding(2)),
-        (make_chunk("notes", "c", 0, "z"), fake_embedding(3)),
+        (make_dupe("photos", "a", 0, "x"), fake_embedding(1)),
+        (make_dupe("notes", "b", 0, "y"), fake_embedding(2)),
+        (make_dupe("notes", "c", 0, "z"), fake_embedding(3)),
     ])
     assert sorted(store.source_types()) == ["notes", "photos"]
     store.close()
@@ -447,8 +447,8 @@ def test_tie_break_is_deterministic_regardless_of_filter_sources_order(tmp_path:
     store = ChunkStore(tmp_path / "tie.db", embedding_dim=DIM)
     tied_embedding = fake_embedding(0)
     items = [
-        (make_chunk("alpha", "doc", 0, "alpha content"), tied_embedding),
-        (make_chunk("zeta", "doc", 0, "zeta content"), tied_embedding),
+        (make_dupe("alpha", "doc", 0, "alpha content"), tied_embedding),
+        (make_dupe("zeta", "doc", 0, "zeta content"), tied_embedding),
     ]
     store.upsert_batch(items)
     embedder = MagicMock()
@@ -480,9 +480,9 @@ def test_duplicate_filter_sources_do_not_double_fetch_or_change_results(tmp_path
     store = ChunkStore(tmp_path / "dup.db", embedding_dim=DIM)
     items = []
     for i in range(5):
-        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i)))
+        items.append((make_dupe("notes", f"n-{i}", 0, f"note {i}"), fake_embedding(i)))
     for i in range(5):
-        items.append((make_chunk("photos", f"p-{i}", 0, f"photo {i}"), fake_embedding(i + 100)))
+        items.append((make_dupe("photos", f"p-{i}", 0, f"photo {i}"), fake_embedding(i + 100)))
     store.upsert_batch(items)
     embedder = MagicMock()
     embedder.embed_query = MagicMock(return_value=fake_embedding(0))
@@ -534,11 +534,11 @@ def test_fts_search_called_once_not_per_source_type(tmp_path: Path) -> None:
     store = ChunkStore(tmp_path / "fts_calls.db", embedding_dim=DIM)
     items = []
     for i in range(3):
-        items.append((make_chunk("notes", f"n-{i}", 0, f"note {i} about testing"), fake_embedding(i)))
+        items.append((make_dupe("notes", f"n-{i}", 0, f"note {i} about testing"), fake_embedding(i)))
     for i in range(3):
-        items.append((make_chunk("papers", f"p-{i}", 0, f"paper {i} about testing"), fake_embedding(i + 10)))
+        items.append((make_dupe("papers", f"p-{i}", 0, f"paper {i} about testing"), fake_embedding(i + 10)))
     for i in range(3):
-        items.append((make_chunk("photos", f"ph-{i}", 0, f"photo {i} about testing"), fake_embedding(i + 20)))
+        items.append((make_dupe("photos", f"ph-{i}", 0, f"photo {i} about testing"), fake_embedding(i + 20)))
     store.upsert_batch(items)
 
     embedder = MagicMock()
@@ -702,7 +702,12 @@ def test_timeline_with_a_range_that_matches_nothing_returns_empty(tmp_path: Path
 # same truncation bug ended up in three copies.
 
 
-def _stored(source_type: str, source_key: str, content: str = "x") -> StoredChunk:
+def _stored(source_type: str, source_key: str, content: str | None = None) -> StoredChunk:
+    # Distinct by default. This used to default to "x" for every chunk, which
+    # was harmless while dedupe keyed on id alone -- once content became a
+    # dedupe key it collapsed whole fixtures to one result.
+    if content is None:
+        content = f"content of {source_type}:{source_key}"
     return StoredChunk(
         id=chunk_id(source_type, source_key, ChunkKind.HEADER, 0),
         source_type=source_type,
@@ -782,10 +787,10 @@ def skewed(tmp_path: Path) -> Retriever:
     items = []
     # 200 "bulk" chunks packed tightly around the query vector.
     for i in range(200):
-        items.append((make_chunk("bulk", f"b-{i}", 0, f"bulk {i}"), fake_embedding(i)))
+        items.append((make_dupe("bulk", f"b-{i}", 0, f"bulk {i}"), fake_embedding(i)))
     # 3 "rare" chunks further away -- they lose every global top-k race.
     for i in range(3):
-        items.append((make_chunk("rare", f"r-{i}", 0, f"rare {i}"), fake_embedding(5000 + i)))
+        items.append((make_dupe("rare", f"r-{i}", 0, f"rare {i}"), fake_embedding(5000 + i)))
     store.upsert_batch(items)
     embedder = MagicMock()
     embedder.embed_query = MagicMock(return_value=fake_embedding(0))
@@ -808,8 +813,8 @@ def test_the_top_up_does_not_fire_when_every_type_is_represented(tmp_path: Path)
     store = ChunkStore(tmp_path / "even.db", embedding_dim=DIM)
     items = []
     for i in range(10):
-        items.append((make_chunk("a", f"a-{i}", 0, f"a {i}"), fake_embedding(i)))
-        items.append((make_chunk("b", f"b-{i}", 0, f"b {i}"), fake_embedding(i + 50)))
+        items.append((make_dupe("a", f"a-{i}", 0, f"a {i}"), fake_embedding(i)))
+        items.append((make_dupe("b", f"b-{i}", 0, f"b {i}"), fake_embedding(i + 50)))
     store.upsert_batch(items)
     embedder = MagicMock()
     embedder.embed_query = MagicMock(return_value=fake_embedding(0))
@@ -853,3 +858,104 @@ def test_the_pool_never_contains_the_same_chunk_twice(skewed: Retriever) -> None
     vector_list = captured[0]
     ids = [c.id for c in vector_list]
     assert len(ids) == len(set(ids)), "duplicate chunk in the vector candidate list"
+
+
+# --- the same passage must not occupy two result slots -----------------------
+
+
+def _dupe(cid: str, key: str, text: str, distance: float) -> StoredChunk:
+    """A stored chunk with an explicit id, so two documents can share content."""
+    return StoredChunk(
+        id=cid,
+        source_type="notes",
+        source_key=key,
+        content=text,
+        metadata={},
+        title=key,
+        url=None,
+        distance=distance,
+    )
+
+
+def test_identical_content_from_two_documents_takes_one_slot() -> None:
+    """Measured on live archives: 6.5% of one index, 2.8% of another, are
+    passages that also appear under a different document -- a file copied into
+    two folders, a note and its backup, mail received at two addresses.
+
+    Deduping by chunk id alone cannot see it: the ids differ because the
+    documents differ. The passage then spends two slots of a top-k saying the
+    same thing twice.
+    """
+    from corpus.retriever import assemble_results
+
+    fused = [
+        _dupe("1", "live/note.md", "the same paragraph", 0.10),
+        _dupe("2", "backup/note.md", "the same paragraph", 0.11),
+        _dupe("3", "other.md", "a different paragraph", 0.20),
+    ]
+    out = assemble_results(fused, top_k=3)
+    assert [c.id for c in out] == ["1", "3"], [c.id for c in out]
+
+
+def test_the_first_copy_offered_is_the_one_kept() -> None:
+    """`assemble_results` consumes the order it is given; it does not sort.
+
+    Callers hand it a ranked list (build_vector_pool sorts by distance, RRF
+    emits by rank), so in practice the survivor is the best-scoring copy. The
+    first draft of this test asserted score-based selection and failed --
+    worth pinning the real contract rather than the assumed one.
+    """
+    from corpus.retriever import assemble_results
+
+    fused = [
+        _dupe("better", "b.md", "same text", 0.10),
+        _dupe("worse", "a.md", "same text", 0.50),
+    ]
+    assert [c.id for c in assemble_results(fused, top_k=5)] == ["better"]
+
+
+def test_distinct_passages_are_untouched() -> None:
+    from corpus.retriever import assemble_results
+
+    fused = [
+        _dupe("1", "a.md", "first passage", 0.10),
+        _dupe("2", "b.md", "second passage", 0.20),
+    ]
+    assert len(assemble_results(fused, top_k=5)) == 2
+
+
+def test_a_caller_can_still_override_the_content_identity() -> None:
+    # The hook predates this default and one fork relies on it.
+    from corpus.retriever import assemble_results
+
+    fused = [
+        _dupe("1", "a.md", "Text With Case", 0.10),
+        _dupe("2", "b.md", "text with case", 0.20),
+    ]
+    out = assemble_results(fused, top_k=5, content_key=lambda c: c.content.lower())
+    assert len(out) == 1
+
+
+def test_a_timeline_keeps_repeated_text_at_different_dates() -> None:
+    """A timeline's unit is a DATED OCCURRENCE, not a unique passage.
+
+    A recurring report, a daily-log template or a repeated status update is
+    genuinely the same text at two dates, and those are two events. Content
+    dedupe would collapse them -- and worse, because the date filter runs
+    AFTER retrieval, it can discard the RECENT copy in favour of an older one
+    the filter then removes, returning nothing for a topic that has plenty.
+
+    Found because a fixture happened to give old and new chunks identical
+    text; the interaction it exposed is real.
+    """
+    from corpus.retriever import assemble_results
+
+    fused = [
+        _dupe("old", "report-2020.md", "weekly status: all green", 0.10),
+        _dupe("new", "report-2026.md", "weekly status: all green", 0.20),
+    ]
+    # The default collapses them...
+    assert len(assemble_results(fused, top_k=5)) == 1
+    # ...and the timeline's override keeps both, so the date filter can choose.
+    both = assemble_results(fused, top_k=5, content_key=lambda c: c.id)
+    assert [c.id for c in both] == ["old", "new"]

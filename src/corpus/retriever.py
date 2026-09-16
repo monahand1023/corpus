@@ -140,8 +140,9 @@ def assemble_results(
     `reject` drops a chunk outright (domain noise, date/person filters).
     `source_key` overrides the dedupe identity -- one fork keys email by
     thread so a 40-message thread cannot fill the answer. `content_key`
-    adds a second dedupe pass over content itself, collapsing the same text
-    republished across document versions.
+    overrides how identical CONTENT is recognised; content dedupe itself is
+    on by default, because the same passage reaching the answer from two
+    documents is the same passage.
 
     The per-type cap is a PREFERENCE for spread, not a budget on the answer.
     A fixed cap meeting a variable top_k silently truncates, and the
@@ -170,11 +171,22 @@ def assemble_results(
             if key in seen_sources:
                 continue
             seen_sources.add(key)
-        if content_key is not None:
-            ckey = content_key(c)
-            if ckey in seen_content:
-                continue
-            seen_content.add(ckey)
+        # Content dedupe is ON by default. Deduping by chunk id alone cannot
+        # see the same passage arriving from two DOCUMENTS -- the ids differ
+        # because the documents differ -- so it spent two slots of a top_k
+        # saying the same thing twice. Measured on live archives: 6.5% of one
+        # index and 2.8% of another are passages that also appear under
+        # another document (a note and its backup, a file copied into two
+        # folders, mail received at two addresses), and one passage was
+        # reachable from three.
+        #
+        # Candidates arrive best-first, so the copy that survives is the
+        # best-scoring one. A caller that genuinely wants every copy can pass
+        # `content_key=lambda c: c.id`.
+        ckey = content_key(c) if content_key is not None else c.content
+        if ckey in seen_content:
+            continue
+        seen_content.add(ckey)
         if max_per_source_type is not None:
             stype = c.source_type
             if per_type_count.get(stype, 0) >= max_per_source_type:
@@ -246,6 +258,7 @@ class Retriever:
         fts_weight: float | None = None,
         rerank: bool = False,
         rerank_pool_size: int = 30,
+        content_key: Callable[[StoredChunk], Hashable] | None = None,
     ) -> RetrievalResult:
         embedding = self._embedder.embed_query(question)
 
@@ -336,6 +349,7 @@ class Retriever:
                 top_k,
                 dedupe_by_source=dedupe_by_source,
                 max_per_source_type=max_per_source_type,
+                content_key=content_key,
             ),
         )
 
@@ -372,6 +386,15 @@ class Retriever:
                 # every timeline to 3 x (number of types) candidates no matter
                 # what top_k said, which also defeats the widening below.
                 max_per_source_type=None,
+                # No content dedupe either, for the same reason one step on:
+                # a timeline's unit is a DATED OCCURRENCE, not a unique
+                # passage. A recurring report, a daily-log template or a
+                # repeated status update is genuinely the same text at two
+                # dates, and those are two events. Worse, the date filter runs
+                # AFTER retrieval, so deduping first can discard the recent
+                # copy in favour of an older one that the filter then removes
+                # -- returning nothing for a topic that has plenty.
+                content_key=lambda c: c.id,
             )
             candidates = result.chunks
             if since:
