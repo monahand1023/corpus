@@ -11,6 +11,7 @@ import pytest
 
 from corpus.transcripts import (
     CAPTION_SIGNOFF_TAILS,
+    DEFAULT_MAX_CHARS_PER_SECOND,
     SUBTITLE_BOILERPLATE,
     TranscriptVerdict,
     impossible_speech_rate,
@@ -716,3 +717,54 @@ def test_tail_search_before_substitution_leaves_output_identical() -> None:
     head = "and then we drove home and the kids fell asleep in the back. " * 40
     assert strip_caption_tail(head + "Thanks for watching") == head.strip()
     assert strip_caption_tail(head + "Thanks for watching this video.") == head.strip()
+
+
+# ---------------------------------------------------------------------------
+# The speech-rate ceiling, re-measured.
+#
+# Found by the dormancy check: this filter had never fired. It is NOT dead the
+# way repeat_share was -- that sat 3.6x from its threshold and could not be
+# reached. This one is reachable and correctly aimed; the problem is which
+# side the margin is on.
+#
+# The ceiling was set when the fastest genuine content measured 14.7 c/s, a
+# comfortable 70% of headroom. The archive has since grown to 7,186
+# transcripts and real speech now reaches 24.85 c/s -- 0.6% below the ceiling.
+# The threshold never moved. The data did.
+# ---------------------------------------------------------------------------
+
+# Measured across 7,186 real transcripts, 2026-09-16.
+FASTEST_REAL_SPEECH = 24.85
+# The documented decode loop: over a thousand characters from an 11s clip.
+MEASURED_DECODE_LOOP = 59.91
+
+
+def test_the_fastest_real_speech_measured_is_kept_with_room_to_spare() -> None:
+    """A French speaker mid-conversation, at 24.85 characters per second.
+
+    Under the old 25.0 ceiling this survived by 0.6%. One slightly faster
+    speaker, or a denser orthography, and the filter deletes a real recording
+    -- the failure every other threshold here is deliberately tuned to avoid.
+    """
+    duration = 60.0
+    text = "x" * int(FASTEST_REAL_SPEECH * duration)
+    assert impossible_speech_rate(text, duration) is False
+
+
+def test_there_is_real_headroom_above_the_fastest_measured_speech() -> None:
+    # The property that was missing: a margin big enough that ordinary
+    # variation between speakers cannot cross it.
+    assert DEFAULT_MAX_CHARS_PER_SECOND >= FASTEST_REAL_SPEECH * 1.5
+
+
+def test_a_decode_loop_is_still_caught() -> None:
+    """Raising the ceiling must not cost the detection it exists for."""
+    duration = 10.7
+    text = "x" * int(MEASURED_DECODE_LOOP * duration)
+    assert impossible_speech_rate(text, duration) is True
+
+
+def test_the_ceiling_sits_between_the_two_measurements() -> None:
+    # Pins the reasoning, not just the number. If someone re-tightens this,
+    # this test says what the number was chosen against.
+    assert FASTEST_REAL_SPEECH < DEFAULT_MAX_CHARS_PER_SECOND < MEASURED_DECODE_LOOP

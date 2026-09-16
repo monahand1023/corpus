@@ -113,13 +113,36 @@ SUBTITLE_CREDIT_PREFIXES: tuple[str, ...] = (
     "altyazi", "字幕由", "字幕製作", "翻译由",
 )
 
-# Real speech tops out far below this. On the reference archive the fastest
-# genuine content was 14.7 characters per second (a recorded talk) and the
-# 99th percentile was 17.7, while decode loops reached 106 -- over a thousand
-# characters from an eleven-second clip. Scripts that pack more meaning into
-# fewer characters, like Japanese, produce LOWER rates, so one ceiling serves
-# every language.
-DEFAULT_MAX_CHARS_PER_SECOND = 25.0
+# The one threshold here whose margin pointed the WRONG WAY, and a reminder
+# that a number validated once is not validated forever.
+#
+# It was set at 25.0 when the fastest genuine content measured 14.7 characters
+# per second -- 70% of headroom, comfortable. Re-measured 2026-09-16 across
+# 7,186 real transcripts, the archive had grown and real speech now reached
+# **24.85** c/s: a French speaker mid-conversation, surviving by 0.6%. The
+# threshold never moved. The data did, and one slightly faster speaker would
+# have had a real recording deleted -- the failure every other threshold in
+# this module is deliberately tuned to avoid.
+#
+# 40.0 sits between the two things actually measured:
+#
+#     fastest real speech      24.85 c/s   (7,186 transcripts)
+#     THIS CEILING             40.00 c/s   -> 61% above real speech
+#     documented decode loop   59.91 c/s   -> still caught, by 50%
+#
+# Raising it cost no detection: across 879 stored rejections that kept their
+# text, NOT ONE was above even the old 25.0. Loops repeat a phrase at
+# conversational pace, so they are caught by the repetition signals rather
+# than by rate -- this is independent insurance against a different shape of
+# junk, not a redundant second opinion.
+#
+# Scripts that pack more meaning into fewer characters, like Japanese, produce
+# LOWER rates, so one ceiling still serves every language.
+#
+# Found by the dormancy check in `corpus.verify`: this filter had never fired.
+# That looked like the dead-knob defect and was not -- see the tests, which
+# pin what the number was chosen against so it is not silently re-tightened.
+DEFAULT_MAX_CHARS_PER_SECOND = 40.0
 
 # The language signal is trusted only for text short enough to be a sign-off.
 # Transcribers mislabel real speech too: two minutes of English conversation

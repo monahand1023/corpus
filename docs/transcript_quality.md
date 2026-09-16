@@ -154,6 +154,41 @@ that pack more meaning into fewer characters, such as Japanese, produce *lower*
 rates, so one ceiling serves every language. This signal needs no language
 knowledge at all.
 
+
+#### Re-measure it; the data moves even when the number does not
+
+The ceiling was set at **25.0 c/s** when the fastest genuine content in the
+reference archive was **14.7** — 70% of headroom, comfortable. Re-measured
+across **7,186 real transcripts** on 2026-09-16, the archive had grown and
+real speech reached **24.85 c/s**: a French speaker mid-conversation,
+surviving the filter by **0.6%**. One slightly faster talker and it would have
+deleted a real recording, which is the failure every other threshold here is
+deliberately tuned to avoid.
+
+The threshold never moved. **The data did.** A number validated once against a
+sample is not validated forever against a growing one.
+
+It is now **40.0**, sitting between the two things actually measured:
+
+| | c/s | |
+|---|---|---|
+| fastest real speech | 24.85 | 7,186 transcripts |
+| **ceiling** | **40.00** | 61% above real speech |
+| documented decode loop | 59.91 | still caught, by 50% |
+
+Raising it cost no detection. Across **879** stored rejections that kept their
+text, not one exceeded even the old 25.0 — loops repeat a phrase at
+conversational pace, so the repetition signals catch them and the rate check
+never sees them. That makes this independent insurance against a different
+shape of junk, not a redundant second opinion.
+
+**How it surfaced:** the dormancy check reported that this filter had never
+fired. That is the signature of a dead knob — and it was not one. `repeat_share`
+sat 3.6× from its threshold and was structurally unreachable; this one is
+reachable, correctly aimed, and had simply never been crossed. Worth knowing
+that "never fired" has at least two causes, and telling them apart needs a
+measurement, not an inference.
+
 ### 4. Repetition — which is TWO signals, because one shape hides from the other
 
 `repeat_share()` measures the largest share of a transcript taken by **one**
