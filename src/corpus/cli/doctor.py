@@ -40,6 +40,39 @@ from corpus.eval.query_log_audit import (
 )
 
 
+def _resolve_query_logs(args: argparse.Namespace) -> tuple[list[str], str]:
+    """The logs to audit, and -- when there are none -- WHY there are none.
+
+    `--query-log` used to be the only way in, so this check was skipped on
+    every run nobody remembered the flag for. Across five live archives that
+    was every run: the command printed "A skipped check is not a passing one"
+    and then skipped it by default.
+
+    The path comes from `corpus.query_log.configured_log_path`, the same
+    function the server appends through. Resolving it independently here would
+    be worse than not resolving it: the auditor would read a file nothing
+    writes to and pronounce it clean.
+
+    The reason matters as much as the paths. "Logging is disabled in config"
+    and "logging is on but nothing has been served yet" are different
+    problems with different fixes, and neither is "you forgot a flag".
+    """
+    if args.query_log:
+        return list(args.query_log), ""
+    if not args.config:
+        return [], "no --config and no --query-log"
+
+    from corpus.cli._common import load_config_or_exit
+    from corpus.query_log import configured_log_path
+
+    path = configured_log_path(load_config_or_exit(args.config))
+    if path is None:
+        return [], "query logging is OFF in config; set [query_log] enabled = true"
+    if not path.is_file():
+        return [], f"logging is on but {path} does not exist yet -- nothing served"
+    return [str(path)], ""
+
+
 def _check_query_logs(paths: Sequence[str], min_real: int) -> tuple[bool, list[LogReport]]:
     if not paths:
         print("query logs        SKIPPED (none given; pass --query-log)")
@@ -241,11 +274,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ran: dict[str, bool] = {}
     skipped: list[str] = []
 
-    logs_ok, reports = _check_query_logs(args.query_log, args.min_real_queries)
-    if args.query_log:
+    log_paths, log_skip_reason = _resolve_query_logs(args)
+    logs_ok, reports = _check_query_logs(log_paths, args.min_real_queries)
+    if log_paths:
         ran["query logs"] = logs_ok
     else:
-        skipped.append("query logs")
+        skipped.append(f"query logs ({log_skip_reason})")
     _check_cross_archive(reports)
 
     db_path = args.db
@@ -272,8 +306,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if skipped:
         print(
-            "  A skipped check is not a passing one. Pass --config and "
-            "--query-log to run them."
+            "  A skipped check is not a passing one. Each skip above says "
+            "what would make it run."
         )
     if failed:
         print(

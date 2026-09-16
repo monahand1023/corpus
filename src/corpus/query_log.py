@@ -111,3 +111,26 @@ class QueryTimer:
         self.elapsed_ms = (time.monotonic() - self._start) * 1000
 
     elapsed_ms: float = 0.0
+
+def configured_log_path(config: object) -> Path | None:
+    """Where a config says served queries are appended, or None when off.
+
+    THE WRITER AND THE AUDITOR MUST AGREE. This was written twice: the MCP
+    server resolved it to append, and `corpus-doctor` did not resolve it at
+    all, so its query-log check was skipped on every run unless someone passed
+    `--query-log` by hand. An auditor that guessed a different path would be
+    worse still -- it would read a file nothing writes to and report a clean
+    bill of health. One function, used by both.
+
+    Defaults beside the store rather than the cwd: a server's working
+    directory is whatever launched it, and a log that lands somewhere
+    different on each launch is worse than no log.
+    """
+    if config is None or not getattr(config, "query_log", None):
+        return None
+    log = config.query_log  # type: ignore[attr-defined]
+    if not log.enabled:
+        return None
+    if log.path:
+        return Path(log.path)
+    return Path(config.db_path).parent / "queries.jsonl"  # type: ignore[attr-defined]

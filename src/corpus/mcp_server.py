@@ -122,10 +122,9 @@ def _log_path() -> Path | None:
     directory is whatever launched it, and a log that lands somewhere
     different on each launch is worse than no log.
     """
-    cfg = _config
-    if cfg is None or not cfg.query_log.enabled:
-        return None
-    return Path(cfg.query_log.path) if cfg.query_log.path else cfg.db_path.parent / "queries.jsonl"
+    from corpus.query_log import configured_log_path
+
+    return configured_log_path(_config)
 
 
 def _record(
