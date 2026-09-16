@@ -235,7 +235,24 @@ MAX_DEPTH = 1
 #           unsupported-extension bucket (`skipped_files`), same as any
 #           other unregistered type — extract it from the archive first if
 #           you want its audio. Revisit if that tradeoff stops making sense.
-_NON_MEMBER_CONNECTOR_TYPES = frozenset({"zip", "aup3"})
+#   transcripts — `TranscriptConnector` does not read FILES. It reads a
+#           sidecar DATABASE, and its `DEFAULT_GLOBS` entry is marked
+#           "detection pattern only" in the registry for exactly that
+#           reason. Handed a zip's extraction directory it raises
+#           "transcript database not found", which `Ingester.ingest`
+#           treats as a source that cannot be enumerated -- so the WHOLE
+#           zip source is skipped with nothing indexed. Found on a live
+#           archive whose `archives` source had been failing that way,
+#           reported once as an ERROR line and then never again because
+#           every later run failed identically.
+#
+#           This is the cost of deriving the list from the registry: the
+#           derivation stops a connector being FORGOTTEN, and in exchange
+#           a registry entry that must not be recursed into is included
+#           the moment someone adds it. That trade is still the right
+#           one -- forgetting is silent, this was loud -- but it is the
+#           second entry to need adding here.
+_NON_MEMBER_CONNECTOR_TYPES = frozenset({"zip", "aup3", "transcripts"})
 _MEMBER_CONNECTOR_TYPES = tuple(
     t for t in CONNECTOR_REGISTRY if t not in _NON_MEMBER_CONNECTOR_TYPES
 )
