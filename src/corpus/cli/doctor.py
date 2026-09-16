@@ -326,6 +326,79 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
     return True
 
 
+def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool:
+    """Do the stored chunks still match what the chunker would produce?
+
+    A source is ingested, the chunker changes, and nothing re-ingests it. The
+    stored chunks are then whatever an older version made, and NOTHING SAYS
+    SO: search works, every other check passes, the eval is unmoved. On a live
+    archive 24% of one source's chunks had drifted, and the only
+    warning anyone got was an 8.4M-token re-embedding bill.
+
+    Sampled, because chunking a million-chunk archive to answer "is it
+    current?" costs more than the answer is worth. A sample cannot prove a
+    source is clean; it can show that it is not, which is the useful
+    direction.
+    """
+    print("\nchunker drift")
+    if not config_path or not db_path:
+        print("  SKIPPED (needs --config)")
+        return True
+
+    from corpus.config import CorpusConfig
+    from corpus.connectors.discovery import source_excludes
+    from corpus.connectors.registry import build_pipeline
+    from corpus.survey.drift import chunker_drift
+
+    try:
+        config = CorpusConfig.load(config_path)
+    except Exception as exc:
+        print(f"  SKIPPED (could not load config: {type(exc).__name__})")
+        return True
+
+    drifted_sources = []
+    unreachable: list[tuple[str, str]] = []
+    checked = 0
+    for source in config.sources:
+        try:
+            connector, chunker = build_pipeline(source)
+            with source_excludes(source.exclude):
+                report = chunker_drift(
+                    db_path, source.name, connector.load(), chunker, sample=25
+                )
+        except Exception as exc:
+            # An unreachable source -- unmounted volume, missing extra, a
+            # connector type the CONSUMER registers at runtime -- is not
+            # evidence about drift either way. But it has to be NAMED:
+            # "no source could be sampled" is a check that did not run,
+            # reported in words that read like one that found nothing.
+            unreachable.append((source.name, f"{type(exc).__name__}: {exc}"))
+            continue
+        if not report.examined:
+            unreachable.append((source.name, "nothing sampled"))
+            continue
+        checked += 1
+        if report.drifted:
+            drifted_sources.append(report)
+
+    if not checked:
+        print("  SKIPPED: no source could be sampled")
+        for name, why in unreachable[:5]:
+            print(f"           {name}: {why[:100]}")
+        if any("not registered" in why for _n, why in unreachable):
+            print("           Pass --load <module> so the consumer's own "
+                  "connectors are registered first --")
+            print("           the module that DEFINES register(), e.g. "
+                  "--load mail_rag.register")
+        return True
+    if not drifted_sources:
+        print(f"  [  ok  ] {checked} source(s) sampled, all current")
+        return True
+    for report in sorted(drifted_sources, key=lambda r: -r.percent):
+        print(f"  [ warn ] {report.describe()}")
+    return True
+
+
 def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) -> bool:
     """What the last transcription pass could not finish.
 
@@ -426,6 +499,35 @@ def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) 
             f"  [ info ] {len(stale):,} STALE failure row(s): those files have "
             "since been answered"
         )
+    return True
+
+
+def _apply_load(load: str | None) -> bool:
+    """Import a consumer's module and call its `register()`. True on success.
+
+    Applied ONCE, before any check runs. It was wired into the
+    shadowed-components check only, so a consumer's own connector types stayed
+    unregistered for every other check -- and the drift check then reported
+    "no source could be sampled" while advising the reader to pass the flag
+    they had already passed.
+
+    A consumer's connectors are a property of the DEPLOYMENT, not of one
+    check.
+    """
+    if not load:
+        return True
+    import importlib
+
+    try:
+        module = importlib.import_module(load)
+    except Exception as exc:
+        print(f"  could not load {load}: {type(exc).__name__}: {exc}")
+        return False
+    register = getattr(module, "register", None)
+    if not callable(register):
+        print(f"  {load} has no register() to call")
+        return False
+    register()
     return True
 
 
@@ -717,6 +819,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Applied ONCE, before any check runs. A consumer's connectors are a
+    # property of the deployment, not of the one check that used to load them
+    # -- the drift check reported "no source could be sampled" while advising
+    # the reader to pass the flag they had already passed.
+    if args.load and not _apply_load(args.load):
+        print("  (continuing; checks that need those connectors will say so)")
+
     if args.queries is None and Path("tests/eval_queries.py").is_file():
         args.queries = "tests/eval_queries.py"
 
@@ -764,6 +873,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         ("threshold margins", _check_threshold_margins(sidecar), sidecar),
         ("transcribe health", _check_transcribe_health(sidecar), sidecar),
+        (
+            "chunker drift",
+            _check_chunker_drift(args.config, db_path),
+            args.config and db_path,
+        ),
         ("duplicate content", _check_duplicate_content(db_path), db_path),
         (
             "shadowed components",
