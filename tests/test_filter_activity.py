@@ -208,3 +208,84 @@ def test_latest_policy_falls_back_to_no_text_when_nothing_was_kept(
         store.save_no_text(conn, "/w/a.m4a", duration_s=1.0, policy="only",
                            reason="silence")
         assert store.latest_policy(conn) == "only"
+
+
+# --- "too small to judge" must not describe a large archive -------------------
+
+
+def _sidecar_with(tmp_path, rows):
+    """rows: (table, reason, policy) tuples."""
+    import sqlite3
+
+    db = tmp_path / "t.db"
+    conn = sqlite3.connect(db)
+    for table in ("no_text", "dropped_windows"):
+        conn.execute(
+            f"CREATE TABLE {table} (path TEXT, reason TEXT, policy TEXT)"
+        )
+    for table, reason, policy in rows:
+        conn.execute(
+            f"INSERT INTO {table} (path, reason, policy) VALUES (?, ?, ?)",
+            ("p", reason, policy),
+        )
+    conn.commit()
+    return conn
+
+
+def test_verdicts_under_an_older_policy_are_counted_separately(tmp_path):
+    """Live shape: a sidecar holding 3,381 whole-file verdicts reported "2
+    whole-file verdicts -- too small to judge dormancy". Both numbers were
+    right and the sentence was misleading: the archive is large, and the
+    check had scoped itself out of almost all of it after a threshold
+    changed. "Small archive" and "instrument scoped out of a big one" need
+    different answers, and they read identically."""
+    from corpus.transcripts.store import activity_coverage
+
+    conn = _sidecar_with(
+        tmp_path,
+        [("no_text", "no_speech_detected", "old")] * 300
+        + [("no_text", "looping_repetition", "current")] * 2,
+    )
+    cov = activity_coverage(conn, policy="current", table="no_text")
+    assert cov.in_scope == 2
+    assert cov.other_policy == 300
+    assert "policy" in cov.describe().lower()
+    assert "300" in cov.describe()
+
+
+def test_rows_recorded_before_reasons_were_stored_are_named_not_ignored(tmp_path):
+    """`dropped_windows.reason` was added by a migration, so every row written
+    before it is NULL. A live sidecar has 2,548 such rows and the check
+    reported "examined nothing (per-window verdicts)" -- true of the reasons,
+    false of the drops, and the difference is whether the filter is dormant or
+    merely unreadable."""
+    from corpus.transcripts.store import activity_coverage
+
+    conn = _sidecar_with(
+        tmp_path, [("dropped_windows", None, "current")] * 2548
+    )
+    cov = activity_coverage(conn, policy="current", table="dropped_windows")
+    assert cov.in_scope == 0
+    assert cov.unattributed == 2548
+    assert "2,548" in cov.describe()
+    assert "dormant" not in cov.describe().lower(), "an unreadable rule is not a dead one"
+
+
+def test_a_genuinely_empty_sidecar_says_so(tmp_path):
+    from corpus.transcripts.store import activity_coverage
+
+    conn = _sidecar_with(tmp_path, [])
+    cov = activity_coverage(conn, policy="current", table="no_text")
+    assert cov.in_scope == 0 and cov.other_policy == 0 and cov.unattributed == 0
+    assert "no verdicts" in cov.describe().lower()
+
+
+def test_a_well_covered_sidecar_reports_no_caveat(tmp_path):
+    from corpus.transcripts.store import activity_coverage
+
+    conn = _sidecar_with(
+        tmp_path, [("no_text", "no_speech_detected", "current")] * 250
+    )
+    cov = activity_coverage(conn, policy="current", table="no_text")
+    assert cov.in_scope == 250
+    assert cov.describe() == ""

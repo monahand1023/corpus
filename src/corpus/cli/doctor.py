@@ -282,19 +282,23 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
                 "whole-file": (
                     store.filter_activity(conn, policy=scope, table="no_text"),
                     WHOLE_FILE_FILTERS,
+                    store.activity_coverage(conn, policy=scope, table="no_text"),
                 ),
                 "per-window": (
                     store.filter_activity(
                         conn, policy=scope, table="dropped_windows"
                     ),
                     PER_WINDOW_FILTERS,
+                    store.activity_coverage(
+                        conn, policy=scope, table="dropped_windows"
+                    ),
                 ),
             }
     except Exception as exc:
         print(f"  SKIPPED (could not read: {type(exc).__name__})")
         return True
 
-    for label, (activity, known) in populations.items():
+    for label, (activity, known, scoped) in populations.items():
         coverage = Coverage(sum(activity.values()), f"{label} verdicts")
         if coverage.examined < MIN_VERDICTS_FOR_DORMANCY:
             # Zero rejections out of three files is not evidence of anything,
@@ -303,6 +307,13 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
                 f"  [ info ] {coverage.describe()} -- too small to judge "
                 f"dormancy (needs {MIN_VERDICTS_FOR_DORMANCY})"
             )
+            # WHY it is too small. A large archive whose verdicts fell out of
+            # scope when a threshold moved reads identically to a small one,
+            # and the two need opposite responses. Measured live: a sidecar
+            # with 3,381 whole-file verdicts reported "2 -- too small".
+            caveat = scoped.describe()
+            if caveat and scoped.total:
+                print(f"            {caveat}")
             continue
         idle = dormant(activity, known=known, coverage=coverage)
         if not idle:

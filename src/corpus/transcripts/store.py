@@ -447,6 +447,83 @@ def filter_activity(
     return dict(out)
 
 
+@dataclass(frozen=True)
+class ActivityCoverage:
+    """Why a dormancy check has the verdicts it has -- or has none.
+
+    "This archive is small" and "this instrument scoped itself out of a large
+    archive" produce the same empty result and need opposite responses. A live
+    sidecar holding 3,381 whole-file verdicts reported "2 whole-file verdicts
+    -- too small to judge dormancy": both numbers correct, the sentence
+    misleading, because a threshold change had moved the policy fingerprint
+    and left 3,379 verdicts out of scope.
+
+    The third case is its own: `dropped_windows.reason` arrived in a
+    migration, so every row written before it is NULL. 2,548 such rows read as
+    "examined nothing" -- true of the reasons, false of the drops. An
+    unreadable rule is not a dead one.
+    """
+
+    in_scope: int = 0
+    other_policy: int = 0
+    unattributed: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.in_scope + self.other_policy + self.unattributed
+
+    def describe(self) -> str:
+        """The caveat to print, or "" when there is nothing to explain."""
+        if not self.total:
+            return "no verdicts recorded at all"
+        parts = []
+        if self.other_policy:
+            parts.append(
+                f"{self.other_policy:,} more were recorded under a different "
+                "policy (a threshold changed since); re-run to bring them "
+                "into scope"
+            )
+        if self.unattributed:
+            parts.append(
+                f"{self.unattributed:,} carry no reason -- they predate the "
+                "column, so the rule behind them cannot be read"
+            )
+        return "; ".join(parts)
+
+
+def activity_coverage(
+    conn: sqlite3.Connection, *, policy: str | None = None, table: str = "no_text"
+) -> ActivityCoverage:
+    """Split a table's verdicts into in-scope, other-policy and unattributed."""
+    if table not in ("no_text", "dropped_windows"):
+        raise ValueError(f"unknown table: {table}")
+    has_reason = "reason IS NOT NULL AND reason != ''"
+    try:
+        unattributed = conn.execute(
+            f"SELECT count(*) FROM {table} WHERE NOT ({has_reason})"
+        ).fetchone()[0]
+        if policy is None:
+            in_scope = conn.execute(
+                f"SELECT count(*) FROM {table} WHERE {has_reason}"
+            ).fetchone()[0]
+            other = 0
+        else:
+            in_scope = conn.execute(
+                f"SELECT count(*) FROM {table} WHERE {has_reason} AND policy = ?",
+                (policy,),
+            ).fetchone()[0]
+            other = conn.execute(
+                f"SELECT count(*) FROM {table} WHERE {has_reason} AND "
+                "(policy IS NULL OR policy != ?)",
+                (policy,),
+            ).fetchone()[0]
+    except sqlite3.Error:
+        return ActivityCoverage()
+    return ActivityCoverage(
+        in_scope=in_scope, other_policy=other, unattributed=unattributed
+    )
+
+
 def counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Row counts per table, for progress reporting and sanity checks."""
     out: dict[str, int] = {}
