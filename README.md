@@ -279,6 +279,7 @@ corpus-mcp                               # stdio MCP server (Claude spawns it)
 corpus-smoke --config corpus.toml        # does the server actually start and answer?
 corpus-smoke --claude-config ~/.claude.json  # same, for every archive Claude launches
 corpus-doctor --config corpus.toml --query-log data/queries.jsonl  # can the numbers be trusted?
+corpus-doctor --config corpus.toml --load docs_rag.transcripts  # + is a fix being shadowed?
 corpus-survey census ~/Downloads/export  # what's here, and can corpus index it?
 corpus-survey archives ~/Downloads/export        # what's really inside these zips?
 corpus-survey media ~/Downloads/recordings --rate 15  # how many hours, at 15x realtime?

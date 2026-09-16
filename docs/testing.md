@@ -341,6 +341,22 @@ a check that passed:
   commit message stayed retrievable for two months while six audits called it
   clean.
 
+- **`margin(threshold=..., observed_max=...)`** — how much headroom a
+  threshold leaves above the data it must not reject. Reported, never
+  enforced: a threshold may legitimately sit near data it is meant to nearly
+  touch, but it must not sit there unnoticed. Two thresholds were found by
+  hand, by accident, one of them deleting family recordings; there are eleven.
+- **`corpus-doctor --load MODULE`** — names connectors a consumer has
+  registered over the engine's own. Engine fixes do not reach a shadowed
+  connector and nothing says so: one archive silently kept 415 junk chunks
+  after the fix for them had already shipped. `--load` is required because the
+  command runs standalone, so a consumer's overrides are invisible until its
+  registration has actually run.
+
+```sh
+corpus-doctor --config corpus.toml --load docs_rag.transcripts
+```
+
 **The rule worth taking away: NOT CHECKED is not a pass.** Distinguish "I
 looked and it was clean" from "I could not look", and make the second louder.
 

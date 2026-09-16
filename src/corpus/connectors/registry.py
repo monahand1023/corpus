@@ -342,6 +342,16 @@ CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
     "transcripts": _build_transcripts,
 }
 
+# A pristine copy of what the ENGINE provides, taken at import time before any
+# consumer can register over it. Comparing the live registry against this is
+# the only way to see a SHADOWED connector, and a shadowed connector is how
+# engine fixes silently stop arriving: one consumer held a full copy of the
+# transcript connector and registered it over this one, so fixes landed here
+# and did nothing there while every ingest reported success.
+#
+# See `corpus.cli.doctor._check_shadowed_components`.
+_BUILTIN_BUILDERS: dict[str, _ConnectorFactory] = dict(CONNECTOR_REGISTRY)
+
 
 def build_pipeline(cfg: SourceConfig) -> tuple[Any, Any]:
     """Return (connector, chunker) for a configured source."""

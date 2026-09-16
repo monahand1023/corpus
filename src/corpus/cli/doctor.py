@@ -315,6 +315,58 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
     return True
 
 
+def _check_shadowed_components(load: str | None = None) -> bool:
+    """Name any connector a consumer has registered over the engine's own.
+
+    THE FAILURE THIS MAKES VISIBLE. A consumer repository held a full copy of
+    the transcript connector and registered it over the engine's. Engine fixes
+    then stopped reaching that archive, and nothing said so -- every ingest
+    reported success. A loop filter dropped 716 junk chunks in principle and
+    301 in practice, because the half that landed in the engine was shadowed
+    by the copy. It was found by chasing a discrepancy, not by any check.
+
+    Reported, not failed. Overriding a connector is a legitimate thing to do
+    -- supplying archive-specific exclusions, for instance. What is not
+    legitimate is doing it by accident and never being told.
+    """
+    from corpus.connectors.registry import _BUILTIN_BUILDERS, CONNECTOR_REGISTRY
+
+    print("\nshadowed components")
+    if load:
+        # Without this the check cannot see the failure it exists for. This
+        # command runs standalone and never imports a consumer's registration,
+        # so the registry it inspects is pristine -- an archive that DOES
+        # override reports "none overridden", which is the same false clean
+        # result the check was built to eliminate.
+        import importlib
+
+        try:
+            module = importlib.import_module(load)
+            register = getattr(module, "register", None)
+            if callable(register):
+                register()
+            else:
+                print(f"  SKIPPED ({load} has no register() to call)")
+                return True
+        except Exception as exc:
+            print(f"  SKIPPED (could not load {load}: {type(exc).__name__}: {exc})")
+            return True
+
+    shadowed = sorted(
+        name
+        for name, builder in CONNECTOR_REGISTRY.items()
+        if name in _BUILTIN_BUILDERS and builder is not _BUILTIN_BUILDERS[name]
+    )
+    if not shadowed:
+        print(f"  [  ok  ] {len(CONNECTOR_REGISTRY)} connectors, none overridden")
+        return True
+    print(f"  [ warn ] overridden by this deployment: {', '.join(shadowed)}")
+    print("           Engine fixes to these do NOT reach this archive. That is")
+    print("           fine if deliberate -- import the shared piece rather than")
+    print("           copying it, so future fixes arrive on their own.")
+    return True
+
+
 def _check_threshold_margins(sidecar: str | None) -> bool:
     """How close is each threshold to the real data it must not reject?
 
@@ -462,6 +514,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Gold set module to audit (default: tests/eval_queries.py if present)",
     )
     parser.add_argument(
+        "--load",
+        default=None,
+        metavar="MODULE",
+        help="Import MODULE and call its register() before checking for "
+             "shadowed connectors. A consumer's overrides are invisible "
+             "until its registration has run (e.g. --load docs_rag.transcripts)",
+    )
+    parser.add_argument(
         "--transcripts",
         default=None,
         metavar="PATH",
@@ -522,6 +582,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             sidecar,
         ),
         ("threshold margins", _check_threshold_margins(sidecar), sidecar),
+        (
+            "shadowed components",
+            _check_shadowed_components(args.load),
+            True,
+        ),
     ):
         if needs:
             ran[name] = check

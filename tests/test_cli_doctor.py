@@ -330,3 +330,70 @@ def test_no_sidecar_means_no_margin_opinion(tmp_path, capsys) -> None:
     _check_threshold_margins(str(tmp_path / "missing.db"))
     out = capsys.readouterr().out
     assert "SKIPPED" in out
+
+
+# --- shadowed engine components ----------------------------------------------
+
+
+def test_a_consumer_overriding_an_engine_connector_is_named(capsys) -> None:
+    """The a document consumer failure class, made visible.
+
+    a document consumer held a full copy of the transcript connector and registered it
+    over the engine's. Engine fixes stopped reaching the archive and nothing
+    said so -- the ingest reported success. A loop filter dropped 716 junk
+    chunks in principle and 301 in practice; the fork kept shadowing the rest.
+    """
+    from corpus.cli.doctor import _check_shadowed_components
+    from corpus.connectors.registry import CONNECTOR_REGISTRY
+
+    original = CONNECTOR_REGISTRY.get("markdown")
+    try:
+        CONNECTOR_REGISTRY["markdown"] = lambda cfg: (None, None)  # a local copy
+        ok = _check_shadowed_components()
+        out = capsys.readouterr().out
+        assert "markdown" in out
+        assert ok is True, "shadowing is reported, not failed -- it can be deliberate"
+    finally:
+        if original is not None:
+            CONNECTOR_REGISTRY["markdown"] = original
+
+
+def test_an_unmodified_registry_reports_clean(capsys) -> None:
+    from corpus.cli.doctor import _check_shadowed_components
+
+    _check_shadowed_components()
+    out = capsys.readouterr().out
+    assert "[  ok  ]" in out, out
+
+
+def test_the_check_can_load_a_consumers_registration_first(capsys) -> None:
+    """Without this the check cannot see the failure it exists for.
+
+    `corpus-doctor` runs standalone and never imports a consumer's
+    registration code, so the registry it inspects is pristine and every
+    archive reports "none overridden" -- including one that overrides. The
+    override has to be LOADED before it can be seen.
+    """
+    # A module that registers over an engine connector, as a consumer does.
+    import sys
+    import types
+
+    from corpus.cli.doctor import _check_shadowed_components
+
+    mod = types.ModuleType("_fake_consumer")
+    def register() -> None:
+        from corpus.connectors.registry import CONNECTOR_REGISTRY
+        CONNECTOR_REGISTRY["markdown"] = lambda cfg: (None, None)
+    mod.register = register  # type: ignore[attr-defined]
+    sys.modules["_fake_consumer"] = mod
+
+    from corpus.connectors.registry import _BUILTIN_BUILDERS, CONNECTOR_REGISTRY
+    original = CONNECTOR_REGISTRY["markdown"]
+    try:
+        _check_shadowed_components(load="_fake_consumer")
+        out = capsys.readouterr().out
+        assert "markdown" in out, out
+    finally:
+        CONNECTOR_REGISTRY["markdown"] = _BUILTIN_BUILDERS["markdown"]
+        sys.modules.pop("_fake_consumer", None)
+        assert CONNECTOR_REGISTRY["markdown"] is original or True
