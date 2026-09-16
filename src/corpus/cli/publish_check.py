@@ -27,7 +27,9 @@ from corpus.publish_check import (
     load_patterns,
     orphaned_commits,
     reachable_messages,
+    scan_actions_logs,
     scan_commit_messages,
+    scan_published_artifacts,
     surfaces_to_check,
 )
 from corpus.verify import DetectorBroken
@@ -58,6 +60,12 @@ def main_argv(argv: list[str]) -> int:
                         help="Remote slug (default: inferred from origin)")
     parser.add_argument("--no-remote", action="store_true",
                         help="Skip remote checks. Reported as UNCHECKED, not clean.")
+    parser.add_argument("--pypi", default=None, metavar="PROJECT",
+                        help="Also scan everything published to PyPI under this "
+                             "name. A published artifact cannot be retracted.")
+    parser.add_argument("--actions-limit", type=int, default=50,
+                        help="How many CI runs to scan (logs are public and "
+                             "retained ~90 days)")
     args = parser.parse_args(argv)
 
     repo_path = Path(args.path).expanduser().resolve()
@@ -123,6 +131,39 @@ def main_argv(argv: list[str]) -> int:
                 )
                 print("                  Check their MESSAGES; a rewrite does "
                       "not delete them.")
+
+            # CI logs: public on a public repo, retained ~90 days.
+            logs = scan_actions_logs(
+                slug, patterns=patterns, limit=args.actions_limit
+            )
+            if not logs.available:
+                print(f"actions logs      [NOT CHECKED] {logs.detail}")
+            elif logs.coverage.vacuous:
+                print(f"actions logs      [NOT CHECKED] {logs.coverage.describe()}")
+            elif logs.hits:
+                print(
+                    f"actions logs      [ FAIL ] {len(logs.hits)} of "
+                    f"{logs.coverage.describe()} contain a private name"
+                )
+                failures += 1
+            else:
+                print(f"actions logs      [  ok  ] {logs.coverage.describe()}, clean")
+
+    # Published artifacts are the one surface no repository cleanup retracts.
+    if args.pypi:
+        artifacts = scan_published_artifacts(args.pypi, patterns=patterns)
+        if not artifacts.available:
+            print(f"published files   [NOT CHECKED] {artifacts.detail}")
+        elif artifacts.hits:
+            print(
+                f"published files   [ FAIL ] {len(artifacts.hits)} of "
+                f"{artifacts.coverage.describe()} contain a private name"
+            )
+            failures += 1
+        else:
+            print(f"published files   [  ok  ] {artifacts.coverage.describe()}, clean")
+    else:
+        print("published files   [NOT CHECKED] pass --pypi PROJECT to scan them")
 
     print("\nSurfaces a leak survives on (check each before publishing):")
     for surface in surfaces_to_check():

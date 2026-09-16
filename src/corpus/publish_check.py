@@ -168,6 +168,114 @@ def orphaned_commits(repo: str, *, run: Runner = _gh) -> OrphanScan:
     )
 
 
+@dataclass(frozen=True)
+class SurfaceScan:
+    """One surface examined, with what was found and whether it could be read."""
+
+    available: bool
+    coverage: Coverage
+    hits: list[str] = field(default_factory=list)
+    detail: str = ""
+
+
+def _matcher(patterns: Sequence[str], label: str) -> re.Pattern[str]:
+    """A compiled matcher that has PROVED it can fire."""
+    if not patterns:
+        raise DetectorBroken(
+            f"{label}: no private-name patterns loaded, so the matcher cannot "
+            f"fire -- this scan proves nothing. Create .git/{PATTERN_FILE}."
+        )
+    combined = re.compile("|".join(f"(?:{p})" for p in patterns), re.IGNORECASE)
+    self_check(
+        lambda text: bool(combined.search(text)),
+        positive=patterns[0],
+        label=label,
+    )
+    return combined
+
+
+def scan_actions_logs(
+    repo: str, *, patterns: Sequence[str], run: Runner = _gh, limit: int = 50
+) -> SurfaceScan:
+    """Scan CI run logs, which are public on a public repo and retained ~90 days.
+
+    Checked by hand during the incident that motivated this module, which is
+    the problem: the expensive part was not checking it but not knowing it was
+    a surface at all.
+    """
+    matcher = _matcher(patterns, "actions-log matcher")
+    code, out = run(
+        ["run", "list", "--repo", repo, "--limit", str(limit),
+         "--json", "databaseId", "--jq", ".[].databaseId"]
+    )
+    if code != 0:
+        return SurfaceScan(
+            available=False,
+            coverage=Coverage(0, "run logs"),
+            detail=f"could not list runs (exit {code})",
+        )
+
+    ids = [line.strip() for line in (out or "").splitlines() if line.strip()]
+    hits: list[str] = []
+    examined = 0
+    for run_id in ids:
+        code, body = run(["run", "view", run_id, "--repo", repo, "--log"])
+        if code != 0:
+            continue
+        examined += 1
+        if matcher.search(body or ""):
+            hits.append(run_id)
+    return SurfaceScan(
+        available=True, coverage=Coverage(examined, "run logs"), hits=hits
+    )
+
+
+def _fetch_pypi_files(project: str) -> dict[str, bytes]:  # pragma: no cover - network
+    import urllib.request
+
+    with urllib.request.urlopen(
+        f"https://pypi.org/pypi/{project}/json", timeout=60
+    ) as resp:
+        meta = json.loads(resp.read())
+    out: dict[str, bytes] = {}
+    for files in meta.get("releases", {}).values():
+        for entry in files:
+            with urllib.request.urlopen(entry["url"], timeout=120) as artifact:
+                out[entry["filename"]] = artifact.read()
+    return out
+
+
+def scan_published_artifacts(
+    project: str,
+    *,
+    patterns: Sequence[str],
+    fetch: Callable[[str], dict[str, bytes]] = _fetch_pypi_files,
+) -> SurfaceScan:
+    """Scan everything already published to an index.
+
+    A commit MESSAGE cannot reach an sdist, but a generated CHANGELOG can, and
+    a published artifact is the one surface no amount of repository cleanup
+    can retract.
+    """
+    matcher = _matcher(patterns, "artifact matcher")
+    try:
+        files = fetch(project)
+    except Exception as exc:
+        return SurfaceScan(
+            available=False,
+            coverage=Coverage(0, "published files"),
+            detail=f"could not fetch: {type(exc).__name__}: {exc}",
+        )
+    hits = [
+        name
+        for name, blob in files.items()
+        if matcher.search(blob.decode("utf-8", errors="replace"))
+    ]
+    return SurfaceScan(
+        available=True, coverage=Coverage(len(files), "published files"), hits=hits
+    )
+
+
 def reachable_messages(repo_path: Path | str = ".") -> list[str]:
     """Every commit message reachable from HEAD. The local half of the check."""
     proc = subprocess.run(
@@ -201,9 +309,12 @@ def surfaces_to_check() -> Iterable[str]:
 __all__ = [
     "MessageScan",
     "OrphanScan",
+    "SurfaceScan",
     "load_patterns",
     "orphaned_commits",
     "reachable_messages",
+    "scan_actions_logs",
     "scan_commit_messages",
+    "scan_published_artifacts",
     "surfaces_to_check",
 ]

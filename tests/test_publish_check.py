@@ -216,3 +216,66 @@ def test_no_force_push_found_states_the_retention_limit(
 
     assert "90" in out, out
     assert "bounded" in out.lower() or "only covers" in out.lower(), out
+
+
+# --- surfaces that were checked by hand during the incident ------------------
+
+
+def test_actions_logs_are_scanned_for_private_names() -> None:
+    """CI logs are public on a public repo and retained ~90 days.
+
+    Checked by hand during the incident; automated here so it is not
+    rediscovered under pressure next time.
+    """
+    from corpus.publish_check import scan_actions_logs
+
+    def fake_gh(args: list[str]) -> tuple[int, str]:
+        if args[:2] == ["run", "list"]:
+            return 0, "111\n222\n"
+        if "111" in args:
+            return 0, "ordinary build output"
+        return 0, "cloning from acme-internal ..."
+
+    scan = scan_actions_logs("owner/repo", patterns=["acme-internal"], run=fake_gh)
+
+    assert scan.coverage.examined == 2
+    assert scan.hits == ["222"]
+
+
+def test_actions_logs_with_no_runs_is_vacuous_not_clean() -> None:
+    from corpus.publish_check import scan_actions_logs
+
+    scan = scan_actions_logs("owner/repo", patterns=["x"], run=lambda a: (0, ""))
+    assert scan.coverage.vacuous is True
+
+
+def test_an_unavailable_actions_api_is_reported_not_treated_as_clean() -> None:
+    from corpus.publish_check import scan_actions_logs
+
+    scan = scan_actions_logs("o/r", patterns=["x"], run=lambda a: (127, "no gh"))
+    assert scan.available is False
+    assert scan.coverage.vacuous is True
+
+
+def test_published_artifacts_are_scanned() -> None:
+    """A commit message cannot reach PyPI, but a generated CHANGELOG can."""
+    from corpus.publish_check import scan_published_artifacts
+
+    files = {
+        "corpus_rag-0.1.0.tar.gz": b"ordinary source",
+        "corpus_rag-0.2.0.tar.gz": b"CHANGELOG: ported from acme-internal",
+    }
+    scan = scan_published_artifacts(
+        "corpus-rag", patterns=["acme-internal"],
+        fetch=lambda project: files,
+    )
+
+    assert scan.coverage.examined == 2
+    assert scan.hits == ["corpus_rag-0.2.0.tar.gz"]
+
+
+def test_artifact_scan_requires_patterns_like_every_other_matcher() -> None:
+    from corpus.publish_check import scan_published_artifacts
+
+    with pytest.raises(DetectorBroken):
+        scan_published_artifacts("p", patterns=[], fetch=lambda p: {"a": b"x"})
