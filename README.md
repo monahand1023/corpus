@@ -289,6 +289,7 @@ corpus-index ~/Downloads/export          # survey + plan + confirm + ingest, one
 corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothing
 corpus-transcribe ~/Videos --dry-run     # how many hours of speech, and how long it'd take
 corpus-transcribe ~/Videos               # transcribe to a sidecar (resumable)
+corpus-reembed --dry-run                 # change embedding model, keep the paid work
 corpus-publish-check                     # safe to make public? asks the REMOTE too
 corpus-publish-check --pypi corpus-rag   # + scan CI logs and published artifacts
 corpus-contextualize --source notes --dry-run  # estimate Haiku spend for contextual retrieval
