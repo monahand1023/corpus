@@ -286,6 +286,7 @@ corpus-index ~/Downloads/export          # survey + plan + confirm + ingest, one
 corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothing
 corpus-transcribe ~/Videos --dry-run     # how many hours of speech, and how long it'd take
 corpus-transcribe ~/Videos               # transcribe to a sidecar (resumable)
+corpus-publish-check                     # safe to make public? asks the REMOTE too
 ```
 
 ## corpus-index: point it at a folder

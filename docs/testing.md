@@ -306,6 +306,44 @@ A check whose inputs are missing reports SKIPPED and is counted separately.
 A summary reading "4/4 clean" when three of them never ran is the same failure
 this command exists to catch.
 
+## Layer 0.5 — can this check fail?
+
+Every layer above answers "is the thing correct?". This one answers a question
+that turns out to matter more: **could this check have told me if it weren't?**
+
+Four defects found while hardening this project shared one shape -- a check
+that did not run, or ran against the wrong surface, is indistinguishable from
+a check that passed:
+
+| Symptom | What it actually was |
+|---|---|
+| repetition filter never rejected anything | threshold 0.9, real-data maximum 0.250 -- a dead knob |
+| `3/3 checks passed, 1 SKIPPED` | the skipped one never ran on any archive, ever |
+| `1/2 servers healthy` | two of four archives were silently out of scope |
+| `no transcription artefacts` | the scan examined an empty index |
+| six clean privacy audits | all six walked reachable git objects; the leak was unreachable |
+
+`corpus.verify` is the shared answer:
+
+- **`Coverage`** — a check reports what it examined, and examining zero is
+  never a pass. It is falsy when vacuous, so call sites write
+  `if not coverage:` rather than remembering `count == 0`.
+- **`self_check(detector, positive=..., label=...)`** — a detector must fire on
+  a known positive before its "clean" verdict counts. This is not theoretical:
+  22 of 45 entries in an early caption phrase list could never match anything,
+  and the tests passed because they asserted against the list rather than
+  against real model output.
+- **`dormant(counts, known=..., coverage=...)`** — names filters that never
+  fire. Silent below 200 verdicts, and scoped to one policy fingerprint,
+  because a guard that cries wolf gets switched off.
+- **`corpus-publish-check`** — asks the REMOTE. A force-push makes an object
+  unreachable, not absent; no local git command can see one, and that is how a
+  commit message stayed retrievable for two months while six audits called it
+  clean.
+
+**The rule worth taking away: NOT CHECKED is not a pass.** Distinguish "I
+looked and it was clean" from "I could not look", and make the second louder.
+
 ## Layer 4 — `corpus-judge`: is the answer good?
 
 An LLM grades generated answers against retrieved context. The only layer that
