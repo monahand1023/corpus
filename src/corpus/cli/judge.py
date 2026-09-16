@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Any
 
 from corpus._anthropic import make_client
-from corpus.cli._common import load_config_or_exit, load_python_export
+from corpus.cli._common import (
+    load_config_or_exit,
+    load_python_export,
+    open_store_read_only,
+)
 from corpus.credentials import resolve_dotenv
 from corpus.eval.generation import GENERATOR_DEFAULT_MODEL, answer_from_context
 from corpus.eval.judge import JUDGE_DEFAULT_MODEL, aggregate_verdicts, judge_answer
@@ -78,18 +82,11 @@ def _run_validate(args: argparse.Namespace) -> int:
 
 
 def _retriever_from_config(config_path: str | None, rerank: bool = False) -> Any:
-    from corpus.db.sqlite import ChunkStore
     from corpus.embedder.factory import make_embedder
     from corpus.retriever import Retriever
 
     config = load_config_or_exit(config_path)
-    store = ChunkStore(
-        config.db_path,
-        embedding_dim=config.embedder.dim,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    store = open_store_read_only(config)
     embedder = make_embedder(
         provider=config.embedder.provider,
         model=config.embedder.model,

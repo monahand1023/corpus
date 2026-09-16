@@ -36,10 +36,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from corpus.cli._common import load_config_or_exit
+from corpus.cli._common import load_config_or_exit, open_store_read_only
 from corpus.config import CorpusConfig
 from corpus.credentials import resolve_dotenv
-from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.retriever import Retriever
 
@@ -170,13 +169,7 @@ def _run_benchmark(
     runs_per_query: int,
     top_k: int,
 ) -> dict[str, Any]:
-    store = ChunkStore(
-        config.db_path,
-        embedding_dim=dim,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    store = open_store_read_only(config, embedding_dim=dim)
     embedder = make_embedder(provider=provider, model=model, dim=dim)
     retriever = Retriever(
         store=store, embedder=embedder,

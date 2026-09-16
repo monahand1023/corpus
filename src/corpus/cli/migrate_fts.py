@@ -47,6 +47,14 @@ def main() -> int:
     configure_logging(args.verbose)
     config = load_config_or_exit(args.config)
 
+    # A project that has not indexed anything yet has no store to migrate.
+    # Without this the read-only open below raises FileNotFoundError straight
+    # out of the CLI: a traceback for an ordinary mistake, where every other
+    # command that opens the store by path says it in one line.
+    if not config.db_path.exists():
+        print(f"error: database not found: {config.db_path}", file=sys.stderr)
+        return 1
+
     # Read-only first: opening read-write is what would trigger the very
     # migration being reported on, so a dry run must not be able to cause one.
     probe = ChunkStore(

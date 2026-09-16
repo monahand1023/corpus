@@ -23,6 +23,49 @@ def load_config_or_exit(path: Path | str | None) -> CorpusConfig:
         raise SystemExit(1) from e
 
 
+def open_store_read_only(
+    config: CorpusConfig, *, embedding_dim: int | None = None
+) -> Any:
+    """Open the configured store for READING, or exit(1) if there is none.
+
+    Every command that only queries should come through here, because
+    read-write is the wrong default for a reader in two silent ways.
+
+    A MISSING database is CREATED by a read-write open. Point a command at a
+    config whose `db_path` has a typo and it builds an empty store, then
+    reports zero results as a measurement rather than as "there is nothing
+    here" -- `corpus-eval` printing recall 0.000 for a database it just made.
+
+    A STALE index is REBUILT by a read-write open, because
+    `ChunkStore._migrate_fts` migrates a small store from its constructor.
+    That is deliberate for writers and wrong for readers: a benchmark then
+    rewrites the database it is timing, and inspecting a backup destroys the
+    state being inspected.
+
+    `embedding_dim` overrides the configured dim for callers that sweep
+    providers; the store's own dim guard still applies.
+    """
+    from corpus.db.sqlite import ChunkStore
+
+    db_path = Path(config.db_path)
+    if not db_path.exists():
+        print(f"error: database not found: {db_path}", file=sys.stderr)
+        print(
+            "Nothing has been indexed yet, or db_path in corpus.toml points "
+            "somewhere else. Run `corpus-index` first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return ChunkStore(
+        db_path,
+        embedding_dim=config.embedder.dim if embedding_dim is None else embedding_dim,
+        read_only=True,
+        cache_size_mb=config.performance.cache_size_mb,
+        mmap_size_mb=config.performance.mmap_size_mb,
+        temp_store_memory=config.performance.temp_store_memory,
+    )
+
+
 def load_python_export(path: Path, attr: str) -> Any:
     """Load `attr` from a Python file at `path`.
 

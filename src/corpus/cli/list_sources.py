@@ -11,8 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from corpus.cli._common import load_config_or_exit
-from corpus.db.sqlite import ChunkStore
+from corpus.cli._common import load_config_or_exit, open_store_read_only
 
 
 def main() -> int:
@@ -30,13 +29,7 @@ def main() -> int:
     counts: dict[str, int] = {}
     db_exists = Path(config.db_path).exists()
     if db_exists:
-        store = ChunkStore(
-            config.db_path,
-            embedding_dim=config.embedder.dim,
-            cache_size_mb=config.performance.cache_size_mb,
-            mmap_size_mb=config.performance.mmap_size_mb,
-            temp_store_memory=config.performance.temp_store_memory,
-        )
+        store = open_store_read_only(config)
         try:
             counts = store.stats()["by_source"]
         finally:

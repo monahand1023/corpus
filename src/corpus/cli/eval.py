@@ -20,9 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from corpus.cli._common import load_config_or_exit
+from corpus.cli._common import load_config_or_exit, open_store_read_only
 from corpus.credentials import resolve_dotenv
-from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.eval.goldset import (
     audit_queries,
@@ -299,13 +298,7 @@ def main() -> int:
     queries = _load_queries(queries_path)
 
     config = load_config_or_exit(args.config)
-    store = ChunkStore(
-        config.db_path,
-        embedding_dim=config.embedder.dim,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    store = open_store_read_only(config)
     embedder = make_embedder(
         provider=config.embedder.provider,
         model=config.embedder.model,
