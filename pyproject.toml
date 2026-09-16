@@ -95,6 +95,7 @@ corpus-index = "corpus.cli.index:main"
 corpus-smoke = "corpus.cli.smoke:main"
 corpus-doctor = "corpus.cli.doctor:main"
 corpus-transcribe = "corpus.cli.transcribe:main"
+corpus-publish-check = "corpus.cli.publish_check:main"
 
 [build-system]
 requires = ["hatchling"]
