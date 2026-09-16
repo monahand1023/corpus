@@ -75,6 +75,7 @@ from corpus.ingester import Ingester, IngestResult
 from corpus.planner import IndexPlan, MergeResult, build_plan, merge_sources_into_toml
 from corpus.survey.format import human_count, human_size
 from corpus.survey.overlap import run_overlap_survey
+from corpus.util.priority import DEFAULT_NICE, be_nice
 from corpus.util.text_yield import MEASURED_TEXT_YIELD_RATIOS
 
 
@@ -345,6 +346,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show the plan and stop. Never writes corpus.toml, never ingests.",
     )
     parser.add_argument("--config", default=None, help="Path to corpus.toml (default: ./corpus.toml)")
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser
 
@@ -352,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main_argv(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    be_nice(args.nice)
 
     # Resolve credentials now that --config is known (env var > .env beside
     # --config > .env in cwd) — needed before Ingester constructs an embedder.

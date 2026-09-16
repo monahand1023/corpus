@@ -26,6 +26,7 @@ from corpus.cli._common import configure_logging
 from corpus.survey.format import human_count
 from corpus.transcripts.pipeline import Settings
 from corpus.transcripts.run import find_media, partition_by_duration, transcribe_directory
+from corpus.util.priority import DEFAULT_NICE, be_nice
 
 DEFAULT_DB = "data/transcripts.db"
 
@@ -282,8 +283,21 @@ def main_argv(argv: list[str]) -> int:
             "exclude, and those rules live in the archive, not in corpus."
         ),
     )
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
+    be_nice(args.nice)
 
     configure_logging(args.verbose)
     root = Path(args.path).expanduser()

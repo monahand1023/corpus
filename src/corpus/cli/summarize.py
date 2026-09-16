@@ -25,6 +25,7 @@ from corpus.cli._common import (
 )
 from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore, StoredChunk
+from corpus.util.priority import DEFAULT_NICE, be_nice
 
 if TYPE_CHECKING:
     from corpus.summarizer.anthropic_summarizer import SummaryResult
@@ -95,8 +96,21 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--config", default=None)
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+    be_nice(args.nice)
 
     # Resolve credentials now that --config is known (env var > .env beside
     # --config > .env in cwd). See corpus.credentials for the precedence.

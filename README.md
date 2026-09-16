@@ -885,6 +885,23 @@ uv run corpus-init                   # the CLI scripts are also available via `u
 
 The repo includes `examples/sample_corpus/` (synthetic markdown notes) and `examples/corpus.toml.example` (wired to point at it) for try-before-you-config experiments.
 
+### Playing well with others
+
+Every long-running command — `corpus-transcribe`, `corpus-ingest`,
+`corpus-index`, `corpus-contextualize`, `corpus-summarize`, `corpus-reembed` —
+lowers its own scheduling priority to `nice 15` by default.
+
+These are background jobs: nobody is waiting on them, and something
+interactive is probably sharing the machine. `nice 15` costs them almost
+nothing when the box is free (the scheduler still hands them every idle
+cycle) and yields immediately when anything else wants to run. Child
+processes inherit it, so a transcription worker and every `ffmpeg` it spawns
+are covered too.
+
+`--nice 0` leaves priority alone. Note that it cannot be raised again
+afterwards without privileges, which is why this is a flag with a default
+rather than something the commands do unconditionally.
+
 ### Git hooks
 
 `scripts/install-hooks.sh` points this checkout's `core.hooksPath` at the tracked `.githooks/` directory. Three hooks live there:

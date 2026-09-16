@@ -16,6 +16,7 @@ from corpus.connectors.registry import DEFAULT_GLOBS
 from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester
 from corpus.util.autodetect import detect_sources
+from corpus.util.priority import DEFAULT_NICE, be_nice
 
 # Completed, but a guard reported something a human should look at: a yield
 # collapse, a source name reused for a different path, or files newly
@@ -70,8 +71,21 @@ def main() -> int:
         ),
     )
     parser.add_argument("--config", default=None, help="Path to corpus.toml (default: ./corpus.toml)")
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+    be_nice(args.nice)
 
     # Resolve credentials now that --config is known (env var > .env beside
     # --config > .env in cwd). See corpus.credentials for the precedence.

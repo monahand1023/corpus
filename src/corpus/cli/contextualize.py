@@ -31,6 +31,7 @@ from corpus.contextual.contextualizer import (
 from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
+from corpus.util.priority import DEFAULT_NICE, be_nice
 
 
 def _estimate(store: ChunkStore, source: str, min_tokens: int) -> tuple[int, int, int]:
@@ -87,8 +88,21 @@ def main() -> int:
         ),
     )
     parser.add_argument("--config", default=None, help="Path to corpus.toml")
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+    be_nice(args.nice)
 
     resolve_dotenv(args.config)
     configure_logging(args.verbose)
