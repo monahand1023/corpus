@@ -410,6 +410,44 @@ corpus-transcribe ~/Videos               # do it (safe to interrupt)
 corpus-transcribe ~/Videos --limit 20    # sample the quality first
 ```
 
+### After a quality threshold changes
+
+Every rejection setting is hashed into a POLICY FINGERPRINT, so changing one
+invalidates the verdicts it produced and they are redone. On an established
+archive that is a lot of GPU time for what is usually a change to a regex, and
+two flags exist so you pay only for what actually has to be recomputed:
+
+```bash
+corpus-transcribe --db data/transcripts.db --refilter .     # no audio decoded
+corpus-transcribe --db data/transcripts.db --redo-stale .   # only what changed
+```
+
+**`--refilter`** re-applies the current TEXT rules to the per-window text
+already in the sidecar. On one archive a full re-transcribe was 61.7
+GPU-hours by its own recorded timings; the re-filter did 7,227 transcripts in
+seconds, stripping loop windows from 1,108 recordings.
+
+It is equivalent only while the DECODE is unchanged — `window_s`,
+`overlap_s`, the VAD threshold and the model decide which audio becomes which
+window, and none of that can be re-derived from text. A row from another
+model, a row with no stored windows, and a row whose windows are wider than
+`window_s` are each skipped and **counted**, never silently restamped with a
+policy that was not applied.
+
+**`--redo-stale`** re-transcribes exactly the files the current policy
+invalidated, taking the work list from the sidecar instead of walking the
+media roots. After a threshold change that is the right operation: a re-walk
+rediscovers everything the archive deliberately excluded, and those rules
+live in the archive, not in corpus. On one archive whose roots hold ~58,000
+photo-library videos — 81% of them the sub-4-second clip Apple stores beside
+each Live Photo — a blind re-walk would have queued ~46,800 near-empty clips
+for ~33 hours of room tone.
+
+Rejections are included: a `no_text` row is a verdict too, and redoing only
+the transcripts leaves every rejection frozen under rules that no longer
+apply. Paths not on disk are counted and skipped rather than tried, so an
+unmounted external drive does not become thousands of recorded failures.
+
 **Why it is a separate command and not part of `corpus-index`.** Everything
 `corpus-index` does is seconds of I/O. This is hours of local compute, so it
 sits behind its own confirmation and its own dry run rather than happening
