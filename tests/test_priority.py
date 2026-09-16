@@ -26,6 +26,19 @@ import pytest
 from corpus.util.priority import be_nice
 
 
+@pytest.fixture(autouse=True)
+def _fresh_process_state(monkeypatch):
+    """`be_nice` applies once per PROCESS, and pytest is one process.
+
+    Without this, any earlier test that ran a CLI `main()` has already set the
+    flag and every test here reads as "already lowered" -- which is exactly
+    how the ordering failure that prompted the idempotence fix showed up.
+    """
+    import corpus.util.priority as mod
+
+    monkeypatch.setattr(mod, "_applied", False)
+
+
 def test_it_lowers_this_process_priority(monkeypatch):
     calls: list[int] = []
     monkeypatch.setattr(os, "nice", lambda n: calls.append(n) or 0)
@@ -68,15 +81,34 @@ def test_a_refusal_by_the_os_is_not_an_error(monkeypatch):
     assert be_nice(15) is False
 
 
-def test_it_really_works_on_this_platform():
+def test_it_really_works_on_this_platform(monkeypatch):
     """Not a mock. The others prove the wrapper's logic; this proves the
     syscall is actually reachable, which is the only part that can quietly
     stop being true."""
     if not hasattr(os, "nice"):
         pytest.skip("no os.nice on this platform")
     before = os.nice(0)
+    if before >= 19:
+        pytest.skip("already at the niceness cap; nothing left to lower")
     assert be_nice(1) is True
     assert os.nice(0) == before + 1
+
+
+def test_it_only_applies_once_per_process(monkeypatch):
+    """`main()` must be safe to call. It is a function, and a test suite or an
+    embedding application calls several of them in one process -- each one
+    raising niceness by 15 again, so two commands land at 30 and the caller
+    never asked for either.
+
+    Found by the suite: running a CLI test before the real-syscall test above
+    pushed the pytest process far enough that it could not go higher.
+    """
+    calls: list[int] = []
+    monkeypatch.setattr(os, "nice", lambda n: calls.append(n) or 0)
+
+    assert be_nice(15) is True
+    assert be_nice(15) is False, "a second call lowered priority again"
+    assert calls == [15], f"niceness was applied more than once: {calls}"
 
 
 # --- every long job must actually use it --------------------------------------
