@@ -16,6 +16,7 @@ What works is judging the text.
 
 from corpus.transcripts.quality import (
     CAPTION_SIGNOFF_TAILS,
+    DEFAULT_MAX_LOOPING_SHARE,
     SUBTITLE_BOILERPLATE,
     SUBTITLE_CREDIT_PREFIXES,
     TranscriptVerdict,
@@ -39,6 +40,7 @@ from corpus.transcripts.store import (
 
 __all__ = [
     "CAPTION_SIGNOFF_TAILS",
+    "DEFAULT_MAX_LOOPING_SHARE",
     "SCHEMA",
     "SUBTITLE_BOILERPLATE",
     "SUBTITLE_CREDIT_PREFIXES",

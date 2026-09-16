@@ -186,3 +186,22 @@ def test_hms_renders_a_position_a_person_can_use() -> None:
     assert hms(125) == "2:05"
     assert hms(3725) == "1:02:05"
     assert hms(None) is None
+
+
+def test_a_looping_window_inside_a_real_recording_is_not_indexed() -> None:
+    """Measured: 716 loop chunks in a live index, only 553 from bad transcripts.
+
+    The other 163 were single looping windows inside GENUINE recordings, so a
+    whole-transcript judgement could never reach them. Same argument as the
+    boilerplate check beside it, same place to make it.
+    """
+    assert not worth_indexing("I am going to draw a small map. " * 9)
+
+
+def test_a_real_window_that_repeats_a_little_is_still_indexed() -> None:
+    assert worth_indexing(
+        "we drove up to the lake and the kids fed the ducks all afternoon, and "
+        "then the rain started and we had to run back to the car"
+    )
+    # Short and repetitive is a person, not a loop -- and below the unit floor.
+    assert worth_indexing("Papa! Papa! Papa! Papa! Papa! Papa! Papa!")

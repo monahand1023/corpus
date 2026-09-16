@@ -47,7 +47,12 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from corpus.transcripts import strip_caption_tail, subtitle_boilerplate
+from corpus.transcripts import (
+    DEFAULT_MAX_LOOPING_SHARE,
+    looping_share,
+    strip_caption_tail,
+    subtitle_boilerplate,
+)
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.hash import chunk_id, sha256
 from corpus.util.tokens import estimate_tokens
@@ -77,16 +82,26 @@ def _long_enough(text: str) -> bool:
 
 
 def worth_indexing(text: str) -> bool:
-    """A window worth a chunk: long enough, and not pure caption boilerplate.
+    """A window worth a chunk: long enough, not boilerplate, not a loop.
 
-    The boilerplate check is per-WINDOW, not per-transcript. A recording can be
-    entirely real and still contain one window where the model emitted nothing
-    but "Terima kasih telah menonton", and that window becomes a chunk of its
-    own, indexed and searchable. 86 such chunks were found in a live index
-    after whole-transcript filtering had already run: the transcripts were
-    genuine, only those windows were not.
+    Every check here is per-WINDOW, not per-transcript, and that is the point.
+    A recording can be entirely real and still contain one window where the
+    model emitted nothing but "Terima kasih telah menonton", and that window
+    becomes a chunk of its own, indexed and searchable. 86 such chunks were
+    found in a live index after whole-transcript filtering had already run:
+    the transcripts were genuine, only those windows were not.
+
+    The loop check is here for the identical reason and was measured the same
+    way. In one live index 716 chunks were the model looping, but only 553 of
+    them belonged to transcripts a whole-transcript judgement would reject --
+    the remaining 163 were single looping windows inside genuine recordings,
+    reachable only from here.
     """
-    return _long_enough(text) and not subtitle_boilerplate(text)
+    return (
+        _long_enough(text)
+        and not subtitle_boilerplate(text)
+        and looping_share(text) < DEFAULT_MAX_LOOPING_SHARE
+    )
 
 
 class TranscriptConnector:
