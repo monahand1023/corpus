@@ -326,6 +326,109 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
     return True
 
 
+def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) -> bool:
+    """What the last transcription pass could not finish.
+
+    The sidecar's `failures` table is where a pass records every file it gave
+    up on, and nothing read it. The doctor -- whose whole job is "are the
+    instruments trustworthy?" -- covered `no_text`, `dropped_windows`,
+    `transcripts` and the query log, and not this one.
+
+    Live on one archive, all recorded and none surfaced: 94 failure rows for
+    files that had since been given a proper verdict, a file that timed out
+    three passes running, and timeouts at all. The point is not that any of
+    them is catastrophic. It is that the pass RECORDED each one and the tool
+    that exists to read the record did not read it.
+
+    Reported, never failing. A timeout is usually about the run rather than
+    the file, and a check that fails the build on something ambiguous gets
+    switched off -- taking the real signal with it.
+    """
+    print("\ntranscribe health")
+    if not sidecar or not Path(sidecar).expanduser().is_file():
+        print("  SKIPPED (no transcript sidecar; pass --transcripts PATH)")
+        return True
+
+    from corpus.transcripts import store
+
+    try:
+        with store.open_store(sidecar, read_only=True) as conn:
+            scope = policy if policy is not None else store.latest_policy(conn)
+            # `attempts` arrives via a column migration, and migrations only
+            # run on a READ-WRITE open. This command is a read-only
+            # diagnostic, so on a sidecar written by an older version the
+            # column is simply absent -- and asking for it raised
+            # OperationalError, which this function then reported as SKIPPED.
+            # A diagnostic that needs a migration to have happened cannot
+            # diagnose the state it most needs to: the one before anyone
+            # upgraded.
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(failures)")}
+            if "attempts" in columns:
+                failures = conn.execute(
+                    "SELECT path, error, attempts FROM failures"
+                    " ORDER BY attempts DESC"
+                ).fetchall()
+            else:
+                failures = [
+                    (r[0], r[1], 1)
+                    for r in conn.execute("SELECT path, error FROM failures")
+                ]
+            settled = {r[0] for r in conn.execute("SELECT path FROM transcripts")}
+            settled |= {
+                r[0]
+                for r in conn.execute(
+                    "SELECT path FROM no_text WHERE policy IS ?", (scope,)
+                )
+            }
+            gave_up = conn.execute(
+                "SELECT path FROM no_text WHERE reason = 'repeatedly_timed_out'"
+            ).fetchall()
+    except Exception as exc:
+        print(f"  SKIPPED (could not read: {type(exc).__name__})")
+        return True
+
+    stale = [r for r in failures if r[0] in settled]
+    live = [r for r in failures if r[0] not in settled]
+    timeouts = [r for r in live if "timed out" in (r[1] or "").lower()]
+
+    if not failures and not gave_up:
+        print(f"  [  ok  ] no unfinished files recorded ({len(settled):,} settled)")
+        return True
+
+    if timeouts:
+        # Phrased with the same words the run's own log uses, so someone
+        # grepping for one finds the other.
+        print(
+            f"  [ warn ] {len(timeouts):,} file(s) timed out (hit their deadline "
+            "and were cut off)"
+        )
+        for path, _error, attempts in timeouts[:5]:
+            tries = f" ({attempts}x)" if (attempts or 1) > 1 else ""
+            print(f"           {Path(path).name[:64]}{tries}")
+    other = [r for r in live if r not in timeouts]
+    if other:
+        print(f"  [ warn ] {len(other):,} file(s) failed for other reasons")
+        for path, error, _attempts in other[:3]:
+            print(f"           {Path(path).name[:48]}: {(error or '')[:60]}")
+    if gave_up:
+        print(
+            f"  [ warn ] {len(gave_up):,} file(s) GAVE UP after repeated timeouts "
+            "and are no longer retried"
+        )
+        for (path,) in gave_up[:5]:
+            print(f"           {Path(path).name[:64]}")
+        print("           They carry a policy fingerprint, so a rule change "
+              "brings them back.")
+    if stale:
+        # Not failures. Rows for files that were later given a verdict, which
+        # a normal pass now sweeps -- if these persist, no pass has run since.
+        print(
+            f"  [ info ] {len(stale):,} STALE failure row(s): those files have "
+            "since been answered"
+        )
+    return True
+
+
 def _check_shadowed_components(load: str | None = None) -> bool:
     """Name any connector a consumer has registered over the engine's own.
 
@@ -660,6 +763,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sidecar,
         ),
         ("threshold margins", _check_threshold_margins(sidecar), sidecar),
+        ("transcribe health", _check_transcribe_health(sidecar), sidecar),
         ("duplicate content", _check_duplicate_content(db_path), db_path),
         (
             "shadowed components",
