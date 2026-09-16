@@ -161,3 +161,25 @@ def test_resolution_does_not_apply_to_the_continuous_metrics():
 def test_resolution_is_ignored_when_the_query_count_is_unknown():
     spread = MetricSpread(metric="recall_at_k", values=[0.875] * 5)
     assert gate_verdict(floor=0.850, spread=spread).flaky is False
+
+
+def test_exactly_one_query_of_headroom_is_not_reported_as_tight():
+    """A floor set exactly one query below the measurement is the intended
+    shape, and floating point called it TIGHT.
+
+    16/24 = 0.6666666666666666, floor 0.625, headroom 0.04166666666666663,
+    resolution 1/24 = 0.041666666666666664. The headroom is smaller by
+    3.5e-17 -- an artefact of binary floats, not a property of the gate -- so
+    a bare `<` flagged a correctly-set floor on a real archive.
+    """
+    spread = MetricSpread(metric="recall_at_k", values=[16 / 24] * 3)
+    verdict = gate_verdict(floor=0.625, spread=spread, n_queries=24)
+    assert verdict.passed is True
+    assert verdict.tight is False, "a float epsilon was reported as a tight gate"
+
+
+def test_genuinely_less_than_one_query_of_headroom_is_still_tight():
+    """The negative control: the tolerance must not swallow a real case."""
+    spread = MetricSpread(metric="recall_at_k", values=[16 / 24] * 3)
+    verdict = gate_verdict(floor=0.65, spread=spread, n_queries=24)
+    assert verdict.tight is True

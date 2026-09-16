@@ -197,7 +197,11 @@ def gate_verdict(
         tight = False
     else:
         flaky = noise > 0.0 and headroom < NOISE_SAFETY_FACTOR * noise
-        tight = resolution > 0.0 and headroom < resolution
+        # The tolerance is not slack, it is arithmetic. A floor set exactly
+        # one query below the measurement is the INTENDED shape, and in binary
+        # floats 16/24 - 0.625 comes out 3.5e-17 smaller than 1/24 -- so a
+        # bare `<` flagged a correctly-set gate on a real archive.
+        tight = resolution > 0.0 and headroom < resolution * (1 - 1e-9)
 
     return GateVerdict(
         metric=spread.metric,
