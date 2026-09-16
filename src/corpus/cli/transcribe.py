@@ -24,6 +24,7 @@ from pathlib import Path
 
 from corpus.cli._common import configure_logging
 from corpus.survey.format import human_count
+from corpus.survey.walk import WalkStats
 from corpus.transcripts.pipeline import Settings
 from corpus.transcripts.run import find_media, partition_by_duration, transcribe_directory
 from corpus.util.priority import DEFAULT_NICE, be_nice
@@ -57,6 +58,35 @@ def _duration_probe() -> Callable[[Path], float | None]:
     )
 
 
+def _report_withheld(stats: WalkStats) -> None:
+    """Say what the walk refused to open, and how to open it.
+
+    A `.photoslibrary` is pruned from every walk by default, which is right
+    for indexing -- the bundle is Apple's SQLite, plists and derivatives --
+    and wrong here, because `originals/` inside it is the home video. On a
+    reference archive that is ~8,100 clips of 15 seconds or more.
+
+    Printing "0 media files found" for a folder holding a photo library is
+    the same failure this pipeline keeps producing in other forms: a refusal
+    to look, rendered identically to a look that found nothing. Pointing the
+    root AT the bundle already works -- nothing said so, and nobody should
+    have to derive it from the exclusion rules.
+    """
+    if not stats.media_bundles_pruned:
+        return
+    n = len(stats.media_bundles_pruned)
+    print(
+        f"  photo libraries   : {n} skipped by default "
+        "(bundle internals are not documents)"
+    )
+    print("    Their originals/ folders ARE home video. To transcribe one,")
+    print("    point the root at the bundle itself:")
+    for bundle in stats.media_bundles_pruned[:3]:
+        print(f'      corpus-transcribe "{bundle}" --min-seconds 15')
+    if n > 3:
+        print(f"      ... and {n - 3} more")
+
+
 def _dry_run(
     root: Path,
     db: Path,
@@ -85,9 +115,11 @@ def _dry_run(
     except BackendUnavailableError as exc:
         backend_problem = str(exc)
 
-    files = list(find_media(root, excludes=excludes))
+    walked = WalkStats()
+    files = list(find_media(root, excludes=excludes, stats=walked))
     print(f"corpus-transcribe: {root}")
     print(f"  media files found : {human_count(len(files))}")
+    _report_withheld(walked)
     # When a floor is set, every file has just been probed, so the exact
     # duration of what WILL run is known -- better than the sampled estimate
     # below, and it must not contradict the line above it. Printing "204
@@ -353,8 +385,10 @@ def main_argv(argv: list[str]) -> int:
             print("  Nothing to redo.")
             return 0
     else:
-        found = list(find_media(root, excludes=args.excludes))
+        walked = WalkStats()
+        found = list(find_media(root, excludes=args.excludes, stats=walked))
         print(f"corpus-transcribe: {root} -> {db}")
+        _report_withheld(walked)
         if args.min_seconds > 0:
             found, too_short = partition_by_duration(
                 found, min_seconds=args.min_seconds, probe=_duration_probe()

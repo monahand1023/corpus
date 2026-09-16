@@ -26,7 +26,7 @@ from __future__ import annotations
 import fnmatch
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpus.util.exclude import (
@@ -82,6 +82,13 @@ class WalkStats:
     permission_errors: int = 0
     stat_errors: int = 0
     files_excluded: int = 0
+    # Pruned directories that are MEDIA BUNDLES -- a `.photoslibrary`, whose
+    # `originals/` is home video. `dirs_pruned` is a bare count, and a count
+    # cannot tell a caller that the thing it was looking for is inside the
+    # thing it skipped. Named, because the remedy is to point the root AT one
+    # of these, which is impossible to do without knowing where they are.
+    # Bounded in practice by how many photo libraries a person owns.
+    media_bundles_pruned: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -137,6 +144,8 @@ def walk_files(
                 or has_corroborating_manifest(lower, dirpath_p, root)
             ):
                 stats.dirs_pruned += 1
+                if any(lower.endswith(suf) for suf in DEFAULT_EXCLUDED_DIR_SUFFIXES):
+                    stats.media_bundles_pruned.append(str(dir_full))
                 continue
             if excludes:
                 rel = (dir_full.relative_to(root)).as_posix()

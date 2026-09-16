@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from corpus.survey.media import MEDIA_EXTENSIONS
-from corpus.survey.walk import walk_files
+from corpus.survey.walk import WalkStats, walk_files
 from corpus.transcripts import quality, store
 from corpus.transcripts.audio import NoAudioStreamError
 from corpus.transcripts.pipeline import (
@@ -72,17 +72,25 @@ def find_media(
     *,
     extensions: Iterable[str] = MEDIA_EXTENSIONS,
     excludes: Sequence[str] = (),
+    stats: WalkStats | None = None,
 ) -> Iterator[Path]:
     """Every media file under `root`, in a stable order.
 
     Sorted so an interrupted run resumes in the same sequence rather than
     re-walking in whatever order the filesystem returns, which makes progress
     legible across restarts.
+
+    Pass `stats` to find out what the walk WITHHELD. A `.photoslibrary` is
+    pruned by default -- right for indexing documents, wrong here, where its
+    `originals/` is the home video -- and without this the caller cannot tell
+    an empty folder from a folder it declined to open. Read it after the
+    iterator is exhausted; it fills in as a side effect.
     """
+    stats = stats if stats is not None else WalkStats()
     wanted = {e.lower() for e in extensions}
     found = [
         walked.path
-        for walked in walk_files(Path(root), excludes=tuple(excludes))
+        for walked in walk_files(Path(root), excludes=tuple(excludes), stats=stats)
         if walked.path.suffix.lower() in wanted
     ]
     yield from sorted(found)
