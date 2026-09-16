@@ -49,7 +49,7 @@ from corpus.util.exclude import has_corroborating_manifest, is_unconditionally_e
 
 logger = logging.getLogger(__name__)
 
-# Set only by `corpus.connectors.zip._load_extracted`, via
+# Set only by `corpus.connectors.zip.ZipConnector._load_extracted`, via
 # `default_excludes_suppressed()` below — see that context manager's
 # docstring for why a disposable zip-extraction directory needs every
 # `discover_files` call under it (including each per-type sub-connector's
@@ -67,7 +67,7 @@ def default_excludes_suppressed() -> Iterator[None]:
     as if `use_default_excludes=False` were passed, regardless of what its
     caller actually passed.
 
-    Exists for exactly one caller: `corpus.connectors.zip._load_extracted`.
+    Exists for exactly one caller: `corpus.connectors.zip.ZipConnector._load_extracted`.
     A disposable zip-extraction directory has ALREADY been filtered by
     zip.py's own noise/dependency logic (`_is_archive_noise` /
     `_is_dependency_noise`, governed by `SourceConfig.exclude_dependencies`)
