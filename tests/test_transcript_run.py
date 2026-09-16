@@ -211,3 +211,74 @@ def test_a_limit_caps_the_run_without_losing_the_rest(tmp_path: Path) -> None:
     second = transcribe_directory(root, db, Backend(), transcribe=_ok)
     assert second.skipped_done == 1
     assert second.transcribed == 2
+
+
+def test_a_transcript_kept_under_old_rules_faces_the_new_ones(tmp_path) -> None:
+    """The other half of the policy fingerprint's promise.
+
+    A rule change already invalidated stored "no speech" verdicts. A stored
+    TRANSCRIPT was equally a verdict -- "this text is real" -- and was
+    inherited forever, so a filter written to catch something never reached
+    the material already indexed under the older rules.
+    """
+    root = _media(tmp_path, "loop.m4a")
+    db = tmp_path / "t.db"
+    looped = "I am going to draw a small map. " * 9
+
+    # Accepted under rules that did not look for loops.
+    loose = Settings(max_looping_share=1.1)
+    transcribe_directory(
+        root, db, Backend(), settings=loose,
+        transcribe=lambda p, b, *, settings=None: Outcome(
+            path=str(p), duration_s=30.0,
+            transcript=Transcript(
+                path=str(p), text=looped,
+                windows=[Window(0.0, 30.0, looped, "en")],
+                duration_s=30.0, model=b.model_name),
+        ),
+    )
+    with store.open_store(db) as conn:
+        assert store.counts(conn)["transcripts"] == 1
+
+    # Now the rules look for loops. No model runs: the text is already stored.
+    calls: list[str] = []
+
+    def must_not_run(path, backend, *, settings=None):
+        calls.append(str(path))
+        raise AssertionError("re-judging must not re-transcribe")
+
+    stats = transcribe_directory(
+        root, db, Backend(), settings=Settings(), transcribe=must_not_run
+    )
+    assert calls == []
+    assert stats.demoted == 1
+    with store.open_store(db) as conn:
+        assert store.counts(conn)["transcripts"] == 0
+        row = conn.execute(
+            "SELECT reason, rejected_text FROM no_text WHERE path = ?",
+            (str(root / "loop.m4a"),),
+        ).fetchone()
+    assert row[0] == "looping_repetition"
+    # The text is kept, so a rule that proves too aggressive can be reversed
+    # against real evidence rather than a re-run.
+    assert row[1] == looped
+
+
+def test_a_transcript_that_still_passes_is_restamped_not_redone(tmp_path) -> None:
+    root = _media(tmp_path, "talk.m4a")
+    db = tmp_path / "t.db"
+    transcribe_directory(root, db, Backend(), settings=Settings(), transcribe=_ok)
+
+    stats = transcribe_directory(
+        root, db, Backend(), settings=Settings(max_looping_share=0.55),
+        transcribe=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no re-run")),
+    )
+    assert stats.rejudged == 1 and stats.demoted == 0
+    with store.open_store(db) as conn:
+        assert store.counts(conn)["transcripts"] == 1
+    # And now it is current, so a third run has nothing to do.
+    stats2 = transcribe_directory(
+        root, db, Backend(), settings=Settings(max_looping_share=0.55),
+        transcribe=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no re-run")),
+    )
+    assert stats2.rejudged == 0 and stats2.skipped_done == 1

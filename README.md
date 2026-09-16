@@ -442,11 +442,25 @@ designed in the abstract (`corpus.transcripts.quality`):
   Dropping every transcript merely *containing* a sign-off deleted 12.3% of
   that archive — 732 transcripts, including an 84-minute talk that ended with
   someone genuinely saying "thank you very much".
-- **Degenerate repetition** and **impossible speech rate** — more characters
-  than a human mouth produces in the window's duration.
+- **Degenerate repetition**, as two separate signals, because one shape hides
+  from the other. One catches a unit hammered ("okay okay okay okay"); the
+  other catches the transcriber *looping* — a whole phrase repeated to fill the
+  window, which is the commonest degenerate output there is. On 200 real
+  recordings the first scored at most 0.250 against its 0.9 threshold while six
+  transcripts were unmistakable loops, so on real data it was doing nothing.
+  The loop signal only applies once there is enough text for a repeat to be
+  unambiguous — below that, a repeat is a child saying a word four times, and
+  that is a recording to keep.
+- **Impossible speech rate** — more characters than a human mouth produces in
+  the window's duration.
 - **Unexpected language**, when you name the languages you actually speak
   (`--language en --language ja`). Silence gets labelled as languages nobody
-  in the recording speaks.
+  in the recording speaks. **This one is lossy and opt-in for a reason**: the
+  label is least reliable exactly when the audio is hard, so short real
+  utterances get mislabelled too. On a 200-clip test it removed 11 more files,
+  of which several were genuine English mislabelled as Norwegian. It applies
+  only to short text for that reason. Leave it off unless you have looked at
+  what it removes.
 
 Voice-activity detection is used only to decide where to SPEND time, and
 never to decide whether a recording is worth keeping. On that same archive a
@@ -468,6 +482,17 @@ Every stored verdict carries a fingerprint of the rules that produced it —
 model, window size, thresholds, and the boilerplate phrase lists. Change any
 of them and the affected files are retried rather than inheriting a verdict
 made under different rules.
+
+That applies to transcripts you already have, not only to files that were
+rejected. A stored transcript is equally a verdict — *this text is real* — so
+when the rules change, stored transcripts are re-judged against the new ones
+and demoted if they no longer pass. This costs no model time, because judging
+text does not need the audio; their text is kept in `no_text` so a rule that
+proves too aggressive can be reversed against real evidence. Without it a
+filter never reaches the material already indexed under the older rules —
+measured: adding the loop signal correctly re-examined all 126 rejected files
+in a test archive and left the six looping transcripts it was written to catch
+sitting in the index.
 
 ### Requirements
 

@@ -208,6 +208,12 @@ def main_argv(argv: list[str]) -> int:
         on_progress=progress,
     )
 
+    if stats.demoted:
+        print(
+            f"\n  {human_count(stats.demoted)} transcript(s) kept by the previous "
+            f"rules no longer pass the current ones and were moved to no_text "
+            f"(their text is retained there, so the change can be audited)."
+        )
     print(
         f"\n  transcribed : {human_count(stats.transcribed)}"
         f"\n  no speech   : {human_count(stats.empty)}"

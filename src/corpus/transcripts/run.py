@@ -22,13 +22,14 @@ omitted from it silently keeps stale answers alive.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpus.survey.media import MEDIA_EXTENSIONS
 from corpus.survey.walk import walk_files
-from corpus.transcripts import store
+from corpus.transcripts import quality, store
 from corpus.transcripts.pipeline import Outcome, Settings, transcribe_file
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 class RunStats:
     considered: int = 0
     skipped_done: int = 0
+    rejudged: int = 0
+    demoted: int = 0
     transcribed: int = 0
     empty: int = 0
     failed: int = 0
@@ -70,6 +73,55 @@ def find_media(
     yield from sorted(found)
 
 
+def rejudge_stored(
+    conn: sqlite3.Connection,
+    *,
+    policy: str,
+    settings: Settings,
+    paths: set[str] | None = None,
+) -> tuple[int, int]:
+    """Re-apply the current rules to transcripts kept under older ones.
+
+    Returns (rejudged, demoted).
+
+    Costs no model time: the text is already stored, and judging text is what
+    `quality` does. That is the whole reason this can run on every pass rather
+    than being a migration someone has to remember.
+
+    Without it the policy fingerprint kept only half its promise. A rule change
+    invalidated stored "no speech" verdicts and retried those files, but a
+    stored TRANSCRIPT was equally a verdict -- "this text is real" -- and was
+    inherited forever. Measured: adding the loop signal correctly re-examined
+    all 126 rejected files in an archive and left the six looping transcripts
+    it was written to catch sitting in the index.
+    """
+    stale = store.stale_transcripts(conn, policy=policy)
+    rejudged = demoted = 0
+    for path, text, duration_s, languages in stale:
+        if paths is not None and path not in paths:
+            continue
+        rejudged += 1
+        verdict = quality.judge_transcript(
+            text,
+            duration_s=duration_s,
+            languages=languages,
+            expected_languages=settings.expected_languages or None,
+            max_repeat_share=settings.max_repeat_share,
+            max_looping_share=settings.max_looping_share,
+            max_chars_per_second=settings.max_chars_per_second,
+            unspoken_max_chars=settings.unspoken_max_chars,
+        )
+        if verdict.keep:
+            store.restamp_transcript(conn, path, policy=policy)
+        else:
+            store.demote_transcript(
+                conn, path, duration_s=duration_s, policy=policy,
+                reason=verdict.reason or "no_text", rejected_text=text,
+            )
+            demoted += 1
+    return rejudged, demoted
+
+
 def transcribe_directory(
     root: Path | str,
     db_path: Path | str,
@@ -96,6 +148,12 @@ def transcribe_directory(
     stats.considered = len(files)
 
     with store.open_store(db_path) as conn:
+        # Before deciding what to skip: anything kept under OLD rules has to
+        # face the current ones, or a tightened filter never reaches the
+        # material it was written for.
+        stats.rejudged, stats.demoted = rejudge_stored(
+            conn, policy=policy, settings=settings, paths={str(f) for f in files}
+        )
         done = store.already_done(conn, policy=policy)
         todo = [p for p in files if str(p) not in done]
         stats.skipped_done = len(files) - len(todo)

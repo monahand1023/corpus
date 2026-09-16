@@ -307,6 +307,63 @@ def already_done(conn: sqlite3.Connection, *, policy: str) -> set[str]:
     return done
 
 
+def stale_transcripts(
+    conn: sqlite3.Connection, *, policy: str
+) -> list[tuple[str, str, float, list[str]]]:
+    """Transcripts KEPT under rules other than these.
+
+    The other half of what `already_done` is for. A rule change invalidates a
+    stored "no speech" verdict, but a stored transcript was equally a verdict
+    -- "this text is real" -- and it was being inherited forever. The six
+    looping transcripts that motivated `looping_share` would have survived the
+    fix that was written to catch them.
+    """
+    rows = conn.execute(
+        "SELECT path, text, duration_s, languages FROM transcripts"
+        " WHERE policy IS NOT ? ",
+        (policy,),
+    ).fetchall()
+    out = []
+    for path, text, duration_s, languages in rows:
+        try:
+            langs = [lg for lg in json.loads(languages or "[]") if lg]
+        except (ValueError, TypeError):
+            langs = []
+        out.append((path, text, duration_s or 0.0, langs))
+    return out
+
+
+def restamp_transcript(conn: sqlite3.Connection, path: str, *, policy: str) -> None:
+    """Record that this transcript still passes, under these rules."""
+    conn.execute("UPDATE transcripts SET policy = ? WHERE path = ?", (policy, path))
+    conn.commit()
+
+
+def demote_transcript(
+    conn: sqlite3.Connection,
+    path: str,
+    *,
+    duration_s: float,
+    policy: str,
+    reason: str,
+    rejected_text: str,
+) -> None:
+    """Move a transcript the current rules reject into `no_text`.
+
+    The text is kept as `rejected_text` rather than dropped, so a rule that
+    turns out to be too aggressive can be audited and reversed against real
+    evidence instead of a re-run.
+    """
+    conn.execute("DELETE FROM transcripts WHERE path = ?", (path,))
+    conn.execute(
+        "INSERT OR REPLACE INTO no_text"
+        " (path, duration_s, policy, reason, rejected_text, checked_at)"
+        " VALUES (?,?,?,?,?,?)",
+        (path, duration_s, policy, reason, rejected_text, _now()),
+    )
+    conn.commit()
+
+
 def counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Row counts per table, for progress reporting and sanity checks."""
     out: dict[str, int] = {}
