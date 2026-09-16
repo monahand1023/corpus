@@ -179,6 +179,15 @@ class SourceConfig(BaseModel):
     # leaf pattern (`*.min.js`, `*.map`, ...) are excluded before extraction —
     # see `corpus.connectors.zip._is_dependency_noise`. Set to false to index
     # a library's vendored docs on purpose.
+    # Paths this source must not index, as fnmatch patterns matched against
+    # the root-relative path AND the basename, so "Backup", "**/Backup/*" and
+    # "Backup/report.md" all do what the reader expects.
+    #
+    # It exists so the documents `corpus-survey duplicates` reports as wholly
+    # duplicated can actually be dropped. Naming them while offering no way to
+    # act on them is the same defect as a setting documented in three places
+    # and read in none.
+    exclude: list[str] = Field(default_factory=list)
     exclude_dependencies: bool = True
     # `aup3` connector only -- every other connector ignores these two.
     # Audacity's `.aup3` project files store sample rate and channel count

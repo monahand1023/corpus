@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from corpus.config import CorpusConfig, PruningConfig
+from corpus.connectors.discovery import source_excludes
 from corpus.connectors.registry import build_pipeline
 from corpus.db.sqlite import (
     DEFAULT_MAX_ORPHAN_RATIO,
@@ -156,6 +158,24 @@ class IngestResult:
     # "never readable" — so files reclassified as unreadable have their
     # indexed content deleted as if they had been removed from disk.
     skip_rise_detail: str | None = None
+
+
+def _load_excluding(connector: Any, patterns: Sequence[str]) -> Iterator[Any]:
+    """`connector.load()` with the source's own exclude list in force.
+
+    A generator so the context stays set for the whole iteration, and so the
+    call site needs one line rather than re-indenting the ingest loop.
+
+    Set here rather than passed to seventeen connector constructors:
+    `discover_files` is the one seam they all share, and a connector that
+    forgot a new argument would silently ignore the setting -- which is the
+    failure this feature exists to stop making.
+    """
+    if not patterns:
+        yield from connector.load()
+        return
+    with source_excludes(patterns):
+        yield from connector.load()
 
 
 class Ingester:
@@ -323,7 +343,7 @@ class Ingester:
         seen_ids: set[str] = set()
 
         buffer: list[Chunk] = []
-        for doc in connector.load():
+        for doc in _load_excluding(connector, source_cfg.exclude):
             documents += 1
             for ch in chunker.chunk(doc):
                 seen_ids.add(ch.id)

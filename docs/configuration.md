@@ -237,6 +237,7 @@ Each `[[sources]]` block configures one connector instance.
 | `type` | str | Which built-in connector to use. One of `markdown`, `text`, `pdf`, `html`. |
 | `path` | path | Where to find the source files. `~` expands to home. |
 | `glob` | str? | File pattern relative to `path`. Default depends on `type`. |
+| `exclude` | list[str] | Paths this source must not index. See below. |
 
 ```toml
 [[sources]]
@@ -257,6 +258,46 @@ path = "~/exports/saved-articles"
 ```
 
 Multiple sources of the same `type` are fine — they just need different `name`s.
+
+### `exclude` — paths this source must not index
+
+`fnmatch` patterns, matched against **both** the path relative to `path` and
+the basename, so all of these work without you having to know which form the
+implementation wanted:
+
+```toml
+[[sources]]
+name = "work"
+type = "docx"
+path = "~/Work"
+exclude = [
+  "Old Backup",                  # that folder, and everything under it
+  "*Backup*",                    # any folder or file with Backup in its name
+  "**/Caches/*",                 # glob form
+  "Archive/report.docx",         # one exact file
+  "copy of *",                   # by basename
+]
+```
+
+A directory name matches **exactly**: `"Backup"` is the folder called
+`Backup`, not every folder with `Backup` in its name — the same way
+`"report.md"` is not `"final report.md"`. Write `*Backup*` for that.
+
+**What this is for.** `corpus-survey duplicates` reports documents whose every
+passage also appears under another document, which are the ones that can be
+dropped losslessly. On one archive that was 1,119 documents holding 3% of the
+index. Naming them was useless until there was a way to act:
+
+```sh
+corpus-survey duplicates --db data/corpus.db                       # look
+corpus-survey duplicates --db data/corpus.db --excludes-for work   # paste
+```
+
+Duplicates come in **pairs** and both members qualify, so the report lists
+exactly one of each — dropping the whole set would delete the content rather
+than deduplicate it. The copy under a folder named `Backup`, or inside a
+`.zip` whose contents are also extracted, is the one suggested.
+
 
 ### Built-in `type` options
 

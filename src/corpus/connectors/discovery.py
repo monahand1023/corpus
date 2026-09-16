@@ -41,8 +41,9 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from fnmatch import fnmatch
 from pathlib import Path
 
 from corpus.util.exclude import has_corroborating_manifest, is_unconditionally_excluded_dir_name
@@ -118,15 +119,74 @@ def _is_under_excluded_dir(resolved: Path, root: Path) -> bool:
     return False
 
 
+# The SOURCE's own exclude list, set around a connector's `load()`.
+#
+# A ContextVar rather than a parameter on seventeen connector constructors:
+# `discover_files` is the one seam they all share, and threading a new
+# argument through every builder would mean a connector that forgot it
+# silently ignores the setting -- which is the exact failure this feature
+# exists to stop making. Same mechanism as `_suppress_default_excludes`
+# directly above.
+_source_excludes: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "corpus_source_excludes", default=()
+)
+
+
+@contextmanager
+def source_excludes(patterns: Sequence[str]) -> Iterator[None]:
+    """Apply a source's `exclude` list to every `discover_files` call within."""
+    token = _source_excludes.set(tuple(patterns))
+    try:
+        yield
+    finally:
+        _source_excludes.reset(token)
+
+
+def _excluded(rel: Path, name: str, patterns: Sequence[str]) -> bool:
+    """fnmatch against the root-relative path AND the basename.
+
+    Both, for the same reason `walk_files` does it: `exclude = ["Backup"]`
+    and `exclude = ["**/Backup/*"]` are the two forms a reader writes without
+    knowing which one the implementation wanted, and only matching one of
+    them makes the setting look broken. A directory name matches when it is
+    any component of the path, so excluding a folder excludes what is under
+    it.
+    """
+    posix = rel.as_posix()
+    parts = set(rel.parts)
+    for pattern in patterns:
+        # A leading `**/` is path-glob syntax, which fnmatch does not know:
+        # fnmatch("Backup/report.md", "**/Backup/*") is False because `**/`
+        # wants a segment before it. Stripping it is what the reader meant.
+        bare = pattern.removeprefix("**/")
+        if (
+            fnmatch(posix, pattern)
+            or fnmatch(posix, bare)
+            or fnmatch(name, pattern)
+            or fnmatch(name, bare)
+            or pattern in parts
+            or fnmatch(posix, f"{bare.rstrip('/')}/*")
+            or any(fnmatch(part, bare) for part in rel.parts[:-1])
+        ):
+            return True
+    return False
+
+
 def discover_files(
     root: Path,
     glob: str,
     use_default_excludes: bool = True,
+    exclude: Sequence[str] = (),
 ) -> Iterator[Path]:
     """Yield regular files under `root` matching `glob`, excluding symlinks,
     any path that resolves outside `root`, and — by default — anything under
     a well-known noise directory (see the module docstring and
-    `corpus.util.exclude`)."""
+    `corpus.util.exclude`).
+
+    `exclude` is the SOURCE's own list, from `corpus.toml`. It exists so the
+    documents `corpus-survey duplicates` names as removable can actually be
+    removed: naming them while offering no way to act was the same defect as
+    a setting documented in three places and read in none."""
     effective_use_default_excludes = use_default_excludes and not _suppress_default_excludes.get()
     root = root.resolve()
     for path in sorted(root.glob(glob)):
@@ -141,5 +201,11 @@ def discover_files(
             continue
         if effective_use_default_excludes and _is_under_excluded_dir(resolved, root):
             logger.debug("skipping file under excluded noise directory: %s", path)
+            continue
+        effective_exclude = tuple(exclude) or _source_excludes.get()
+        if effective_exclude and _excluded(
+            resolved.relative_to(root), path.name, effective_exclude
+        ):
+            logger.debug("skipping file excluded by this source: %s", path)
             continue
         yield path

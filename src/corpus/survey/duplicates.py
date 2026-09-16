@@ -99,4 +99,105 @@ def find_duplicate_content(
     return report
 
 
-__all__ = ["DuplicateReport", "find_duplicate_content"]
+# Path fragments that mark a copy as the DERIVATIVE one, so the other is the
+# one to keep.
+#
+# These decide only which member of an ALREADY-IDENTICAL pair to suggest
+# dropping. Getting it "wrong" swaps which of two documents holding the same
+# passages survives, so the cost of a bad guess is nothing -- which is what
+# makes guessing acceptable here and nowhere else in this module.
+_DERIVATIVE_MARKERS = (
+    "backup",
+    "/.bak-",
+    "archive - backups/",
+    ".zip::",
+    "copy of ",
+    " (1).",
+    " (2).",
+    " (3).",
+)
+
+
+@dataclass(frozen=True)
+class DuplicatePair:
+    """Two documents with identical content, and which to drop.
+
+    `keep` and `drop` are a SUGGESTION about paths, not a judgement about
+    value: the two documents hold the same passages, so either would do.
+    """
+
+    keep: str
+    drop: str
+    shared: int
+
+
+def _derivative_rank(key: str) -> int:
+    """0 for a path with no derivative marker, 1 for one that has any.
+
+    Lower sorts first and is kept. Ties break on path length, then name, so
+    the result does not depend on dict ordering.
+    """
+    lowered = key.lower()
+    return 1 if any(marker in lowered for marker in _DERIVATIVE_MARKERS) else 0
+
+
+def duplicate_documents(
+    db_path: Path | str, *, min_chunks: int = 2
+) -> list[DuplicatePair]:
+    """Documents whose EVERY chunk also appears elsewhere, paired for removal.
+
+    The decidable subset of `find_duplicate_content`. A document all of whose
+    passages exist under another document can be dropped losslessly -- unlike
+    a partial overlap, where two versions share most passages and differ in
+    the ones that matter.
+
+    PAIRS, NOT A LIST, because both members of a duplicate pair are wholly
+    contained in the other and both would otherwise appear. Acting on that
+    list deletes the content. N identical copies yield N-1 removals and
+    exactly one survivor.
+
+    `min_chunks` skips single-chunk documents: one shared passage is a stock
+    sentence, not a copied file.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("SELECT content_hash, source_key FROM chunks").fetchall()
+    finally:
+        conn.close()
+
+    docs_by_hash: dict[str, set[str]] = defaultdict(set)
+    hashes_by_doc: dict[str, set[str]] = defaultdict(set)
+    for content_hash, source_key in rows:
+        docs_by_hash[content_hash].add(source_key)
+        hashes_by_doc[source_key].add(content_hash)
+
+    # Group documents by their exact content set: identical sets are copies.
+    by_content: dict[frozenset[str], list[str]] = defaultdict(list)
+    for doc, hashes in hashes_by_doc.items():
+        if len(hashes) < min_chunks:
+            continue
+        if all(len(docs_by_hash[h]) > 1 for h in hashes):
+            by_content[frozenset(hashes)].append(doc)
+
+    pairs: list[DuplicatePair] = []
+    for content, docs in by_content.items():
+        if len(docs) < 2:
+            # Wholly duplicated, but not by a single other document -- its
+            # passages are scattered across several. Dropping it could still
+            # lose the document's own identity, so it is not offered.
+            continue
+        ordered = sorted(docs, key=lambda d: (_derivative_rank(d), len(d), d))
+        keep = ordered[0]
+        pairs.extend(
+            DuplicatePair(keep=keep, drop=other, shared=len(content))
+            for other in ordered[1:]
+        )
+    return sorted(pairs, key=lambda p: -p.shared)
+
+
+__all__ = [
+    "DuplicatePair",
+    "DuplicateReport",
+    "duplicate_documents",
+    "find_duplicate_content",
+]

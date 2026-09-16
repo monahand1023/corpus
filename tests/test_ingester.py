@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from corpus.config import CorpusConfig
+from corpus.config import CorpusConfig, SourceConfig
 from corpus.connectors.markdown import MarkdownChunker
 from corpus.connectors.registry import CONNECTOR_REGISTRY
 from corpus.db.sqlite import ChunkStore
@@ -51,11 +51,15 @@ def fake_embedder(token_start: int = 0) -> MagicMock:
 
 def make_config(source_name: str = "notes", return_source: object = True) -> MagicMock:
     cfg = MagicMock()
-    cfg.source_by_name.side_effect = (
-        lambda name: (object() if return_source else None)
-        if name == source_name
-        else None
-    )
+    # A real SourceConfig, not `object()`: the stub has to carry every field
+    # the ingester reads, or a new one looks like a bug in production code.
+    # `exclude` was added and these tests were the only thing that noticed.
+    def _stub(name: str) -> object | None:
+        if name != source_name or not return_source:
+            return None
+        return SourceConfig(name=source_name, type="markdown", path=".")
+
+    cfg.source_by_name.side_effect = _stub
     cfg.sources = []
     return cfg
 

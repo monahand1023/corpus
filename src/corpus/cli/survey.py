@@ -605,7 +605,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_overlap.set_defaults(func=_run_overlap)
 
+    p_dupes = sub.add_parser(
+        "duplicates",
+        help="Documents wholly duplicated elsewhere, paired so only one goes",
+    )
+    p_dupes.add_argument("--db", required=True, metavar="PATH")
+    p_dupes.add_argument(
+        "--top", type=int, default=25, help="How many pairs to print (default 25)"
+    )
+    p_dupes.add_argument(
+        "--excludes-for",
+        default=None,
+        metavar="SOURCE",
+        help=(
+            "Print the paths to drop as an `exclude` list for this source, "
+            "ready to paste into corpus.toml"
+        ),
+    )
+    p_dupes.set_defaults(func=_run_duplicates)
+
     return parser
+
+
+def _run_duplicates(args: argparse.Namespace) -> int:
+    from corpus.survey.duplicates import duplicate_documents, find_duplicate_content
+
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"error: database not found: {db_path}", file=sys.stderr)
+        return 1
+
+    passages = find_duplicate_content(db_path, top=0)
+    pairs = duplicate_documents(db_path)
+    removable = sum(p.shared for p in pairs)
+
+    print(f"duplicated passages : {passages.redundant_chunks:,} of "
+          f"{passages.total_chunks:,} chunks ({passages.percent:.1f}%)")
+    print(f"removable documents : {len(pairs):,} holding {removable:,} chunks "
+          f"({100.0 * removable / max(passages.total_chunks, 1):.1f}%)")
+    print()
+    print("A document is removable only when EVERY one of its passages also")
+    print("appears under another document. Duplicates come in pairs and both")
+    print("members qualify, so exactly one of each is listed here -- dropping")
+    print("the whole set would delete the content, not deduplicate it.")
+    print("The rest of the duplicated passages are partial overlaps: two")
+    print("versions sharing most of their text and differing where it counts.")
+
+    if args.excludes_for:
+        print(f"\n# paste into the [[sources]] block named {args.excludes_for!r}")
+        print("exclude = [")
+        for pair in pairs:
+            print(f'  "{pair.drop}",')
+        print("]")
+        return 0
+
+    print(f"\n{'chunks':>7}  drop / keep")
+    for pair in pairs[: args.top]:
+        print(f"{pair.shared:7,}  - {pair.drop}")
+        print(f"{'':7}  + {pair.keep}")
+    if len(pairs) > args.top:
+        print(f"\n  ... {len(pairs) - args.top:,} more (--top N)")
+    return 0
 
 
 def main_argv(argv: list[str]) -> int:
