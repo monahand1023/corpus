@@ -368,12 +368,35 @@ def main_argv(argv: list[str]) -> int:
         # banner and then nothing for hours.
         print(f"  [{index}/{todo}] {mark} {path.name[:68]}", flush=True)
 
-    stats = transcribe_directory(
-        root, db, backend,
-        settings=settings, excludes=args.excludes, limit=args.limit,
-        on_progress=progress, only=only,
-    )
+    # A SUBPROCESS, not a thread. Whisper can enter an unbounded decode loop
+    # on non-speech audio -- a real archive watched a 170-second clip hold the
+    # pipeline for 75 minutes, GPU busy, producing nothing. Signals arrive at
+    # Python bytecode boundaries and the loop is inside Metal kernels; threads
+    # cannot be killed. Only a process can be terminated.
+    #
+    # corpus computed the deadline for this from the day the pipeline landed
+    # and never enforced it: `file_timeout` was imported, tested, and called
+    # by nothing.
+    from corpus.transcripts.worker import TranscribeWorker
 
+    worker = TranscribeWorker()
+    try:
+        stats = transcribe_directory(
+            root, db, backend,
+            settings=settings, excludes=args.excludes, limit=args.limit,
+            on_progress=progress, only=only,
+            run_one=lambda path, timeout: worker.run(path, timeout, settings),
+        )
+    finally:
+        worker.close()
+
+    if stats.timed_out:
+        print(
+            f"\n  {human_count(stats.timed_out)} file(s) exceeded their deadline and "
+            "were cut off mid-decode. Recorded as FAILURES, not settled verdicts, so "
+            "the next run retries them: a hang is usually about the run (thermal "
+            "state, memory pressure, a decode loop) rather than about the file."
+        )
     if stats.demoted:
         print(
             f"\n  {human_count(stats.demoted)} transcript(s) kept by the previous "

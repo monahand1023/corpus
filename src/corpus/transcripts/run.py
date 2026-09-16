@@ -27,6 +27,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from corpus.survey.media import MEDIA_EXTENSIONS
 from corpus.survey.walk import walk_files
@@ -38,7 +39,8 @@ from corpus.transcripts.pipeline import (
     filter_windows,
     transcribe_file,
 )
-from corpus.transcripts.segment import join_windows
+from corpus.transcripts.segment import file_timeout, join_windows
+from corpus.transcripts.worker import WorkerTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,10 @@ class RunStats:
     transcribed: int = 0
     empty: int = 0
     failed: int = 0
+    # Counted separately from `failed` (which it is also part of), because a
+    # hang and a broken decode need different responses: one is about this
+    # run, the other about the file.
+    timed_out: int = 0
     seconds_of_audio: float = 0.0
     errors: list[tuple[str, str]] = field(default_factory=list)
 
@@ -396,6 +402,55 @@ def stale_paths_present(
     return present, missing
 
 
+def _call_bounded(
+    transcribe: Callable[..., Outcome],
+    path: Path,
+    backend: object,
+    settings: Settings,
+    timeout_s: float,
+    run_one: Callable[[Path, float], tuple[str, Any]] | None,
+) -> Outcome:
+    """Transcribe one file under a deadline, raising `WorkerTimeout` if it blows.
+
+    `run_one` is the strong form: a subprocess that can be KILLED. The CLI
+    supplies one, because Whisper's decode loop is inside Metal kernels where
+    neither a signal nor a thread cancellation ever arrives -- a real archive
+    watched a 170-second clip hold the pipeline for 75 minutes.
+
+    Without one, the deadline is applied with a thread, which bounds how long
+    the RUN waits but not how long the work takes: the abandoned thread keeps
+    going. That is enough for an injected fake, which cannot hang a GPU, and
+    is deliberately not what production uses.
+    """
+    if run_one is not None:
+        kind, payload = run_one(path, timeout_s)
+        if kind == "timeout":
+            raise WorkerTimeout(f"timed out after {timeout_s:.0f}s")
+        if kind == "error":
+            detail = str(payload)
+            # The worker reports exceptions as text across the pipe, so the
+            # one the run loop treats specially has to be recognised again.
+            if detail.startswith("NoAudioStreamError"):
+                raise NoAudioStreamError(detail)
+            raise RuntimeError(detail)
+        return payload  # type: ignore[no-any-return]
+
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(transcribe, path, backend, settings=settings)
+        try:
+            return future.result(timeout=timeout_s)
+        except FutureTimeout:
+            raise WorkerTimeout(f"timed out after {timeout_s:.0f}s") from None
+    finally:
+        # wait=False: waiting for the abandoned thread would reintroduce
+        # exactly the stall this is bounding.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def transcribe_directory(
     root: Path | str,
     db_path: Path | str,
@@ -407,6 +462,8 @@ def transcribe_directory(
     on_progress: Callable[[int, int, Path, Outcome | None], None] | None = None,
     transcribe: Callable[..., Outcome] = transcribe_file,
     only: Sequence[Path] | None = None,
+    file_timeout_s: float | None = None,
+    run_one: Callable[[Path, float], tuple[str, Any]] | None = None,
 ) -> RunStats:
     """Transcribe everything under `root` into the sidecar at `db_path`.
 
@@ -441,8 +498,37 @@ def transcribe_directory(
             todo = todo[:limit]
 
         for index, path in enumerate(todo, start=1):
+            # `file_timeout` has computed this bound since the pipeline
+            # landed, and nothing ever called it: the value was ported into
+            # corpus and the mechanism that enforces it was left behind. A
+            # bound with no way to enforce it reads exactly like one that
+            # works, which is how a 17-minute stall went unnoticed on a work
+            # list whose longest recording should take ten.
+            deadline = file_timeout_s
+            if deadline is None:
+                recorded = conn.execute(
+                    "SELECT duration_s FROM transcripts WHERE path = ?"
+                    " UNION SELECT duration_s FROM no_text WHERE path = ?",
+                    (str(path), str(path)),
+                ).fetchone()
+                deadline = file_timeout(float(recorded[0] or 0.0) if recorded else 0.0)
             try:
-                outcome = transcribe(path, backend, settings=settings)
+                outcome = _call_bounded(
+                    transcribe, path, backend, settings, deadline, run_one
+                )
+            except WorkerTimeout as exc:
+                # A FAILURE, not a settled verdict: a hang is usually about
+                # this run -- thermal state, memory pressure, a transient
+                # decode loop -- so the file comes back on the next pass
+                # rather than being written off.
+                stats.timed_out += 1
+                stats.failed += 1
+                stats.errors.append((str(path), str(exc)))
+                store.save_failure(conn, str(path), str(exc))
+                logger.warning("transcription %s for %s", exc, path)
+                if on_progress:
+                    on_progress(index, len(todo), path, None)
+                continue
             except NoAudioStreamError:
                 # A settled fact about the FILE, not a failure of this run.
                 # Recorded as no_text so it is skipped next time: measured on
