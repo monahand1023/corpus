@@ -2,9 +2,11 @@
 
 [![PyPI](https://img.shields.io/pypi/v/corpus-rag)](https://pypi.org/project/corpus-rag/) [![Python](https://img.shields.io/pypi/pyversions/corpus-rag)](https://pypi.org/project/corpus-rag/) [![CI](https://github.com/monahand1023/corpus/actions/workflows/ci.yml/badge.svg)](https://github.com/monahand1023/corpus/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/monahand1023/corpus)](LICENSE)
 
-Your personal archive — notes, PDFs, docs — queryable in plain English, stored and searched entirely on your machine.
+Your personal archive — notes, PDFs, documents, and the speech inside your audio and video — queryable in plain English, stored and searched entirely on your machine.
 
-A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or handing your whole archive to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server — the database, index, and search all run locally. (One honest caveat: the text you ingest or query is sent to your chosen embedding API — Voyage or Gemini — to be turned into vectors. See [what corpus doesn't do](#what-corpus-doesnt-do).) Add a `corpus.toml`, point it at your data, run `corpus-ingest`, and Claude Code can search years of notes in under 300ms.
+A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or handing your whole archive to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server — the database, index, and search all run locally. (One honest caveat: the text you ingest or query is sent to your chosen embedding API — Voyage or Gemini — to be turned into vectors. See [what corpus doesn't do](#what-corpus-doesnt-do).) Run `corpus-init` once, point `corpus-index` at a folder, and Claude Code can search years of notes in under 300ms. There are **17 connectors** — markdown, PDF, DOCX, XLSX, HTML, CSV, zip archives and more — plus [`corpus-transcribe`](#corpus-transcribe-speech-into-the-index) for recordings.
+
+New here? [Quick start](#quick-start) gets you searching. [`docs/testing.md`](docs/testing.md) explains how the project establishes that any of this actually works, which is the part most RAG projects leave out.
 
 ## How it works
 
@@ -287,6 +289,9 @@ corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothin
 corpus-transcribe ~/Videos --dry-run     # how many hours of speech, and how long it'd take
 corpus-transcribe ~/Videos               # transcribe to a sidecar (resumable)
 corpus-publish-check                     # safe to make public? asks the REMOTE too
+corpus-publish-check --pypi corpus-rag   # + scan CI logs and published artifacts
+corpus-contextualize --source notes --dry-run  # estimate Haiku spend for contextual retrieval
+corpus-migrate-fts --db archive/corpus.db      # rebuild the FTS index after a schema change
 ```
 
 ## corpus-index: point it at a folder
@@ -804,9 +809,12 @@ A database or a real `corpus.toml` inside `corpus`'s own package directory or re
 | [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code + Claude Desktop wiring, all 7 tools, the investigation pattern |
 | [`docs/adding_a_source.md`](docs/adding_a_source.md) | Walkthrough for writing a custom connector |
 | [`docs/transcript_quality.md`](docs/transcript_quality.md) | Filtering invented text out of machine transcripts — why confidence and voice-activity detection both fail as quality gates, and the three signals that work |
+| [`docs/testing.md`](docs/testing.md) | **How this project is tested, and what each layer actually proves** — unit / smoke / eval / judge, plus the verification layer that asks whether a check could have failed at all |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and the actual fixes |
 
-Architecture overview, benchmarking, and eval methodology are covered inline in this README (sections above).
+Architecture overview, benchmarking, and eval methodology are covered inline in
+this README (sections above); [`docs/testing.md`](docs/testing.md) is the
+fuller account of how correctness is established here.
 
 ## Develop locally
 
