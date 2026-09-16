@@ -86,6 +86,7 @@ def rejudge_stored(
     policy: str,
     settings: Settings,
     paths: set[str] | None = None,
+    model_name: str = "",
 ) -> tuple[int, int]:
     """Re-apply the current rules to transcripts kept under older ones.
 
@@ -107,6 +108,23 @@ def rejudge_stored(
     for path, text, duration_s, languages in stale:
         if paths is not None and path not in paths:
             continue
+        # This applies the WHOLE-TRANSCRIPT rules only. It cannot apply the
+        # per-window ones to a row whose stored windows did not come from this
+        # pipeline -- a restoration record holds one synthetic span covering
+        # the file. Restamping such a row says "this faced the current rules",
+        # and half of them did.
+        #
+        # Measured live: 104 rows were restamped that way and every one still
+        # held loop text at 0.80-0.82 that the per-window rule would have
+        # stripped. Stamped current, they would never have been redone. Left
+        # stale, a real re-transcribe picks them up.
+        row = conn.execute(
+            "SELECT segments FROM transcripts WHERE path = ?", (path,)
+        ).fetchone()
+        if row is not None:
+            windows = _windows_from_segments(row[0])
+            if windows and max(d for _t, d, _c in windows) > settings.window_s + 1e-6:
+                continue
         rejudged += 1
         verdict = quality.judge_transcript(
             text,
@@ -286,6 +304,56 @@ def refilter_stored(
     return stats
 
 
+def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
+    """Files the current policy invalidated, read from the STORE.
+
+    After a threshold change, re-walking the media roots is the wrong
+    operation: the files to redo are already known, and a walk rediscovers
+    everything the archive deliberately excluded. Measured on a live archive,
+    whose roots hold ~58,000 photo-library videos of which 81% are the
+    sub-4-second clip Apple stores beside each Live Photo -- its own filters
+    exclude those, plus karaoke backing tracks and a 15-second floor, and none
+    of those rules live in corpus. A blind re-walk would have queued ~46,800
+    near-empty clips for ~33 hours of room tone.
+
+    The sidecar's contents already encode every one of those decisions.
+
+    Rejections count. A `no_text` row is a verdict too, and redoing only the
+    transcripts leaves every rejection frozen under rules that no longer
+    apply -- the half-kept promise the policy fingerprint exists to close.
+    """
+    seen: dict[str, None] = {}
+    for table in ("transcripts", "no_text"):
+        try:
+            rows = conn.execute(
+                f"SELECT path FROM {table} WHERE policy IS NOT ?", (policy,)
+            )
+        except sqlite3.Error:
+            continue
+        for (path,) in rows:
+            if path:
+                seen.setdefault(path, None)
+    return [Path(p) for p in seen]
+
+
+def stale_paths_present(
+    conn: sqlite3.Connection, *, policy: str
+) -> tuple[list[Path], int]:
+    """`stale_paths`, minus what is not on disk right now, and how many.
+
+    This archive spans external drives. A path that is not mounted is not a
+    broken file, and recording thousands of failures for an unplugged volume
+    would bury the real ones -- so they are counted and reported, not tried.
+    """
+    present, missing = [], 0
+    for path in stale_paths(conn, policy=policy):
+        if path.exists():
+            present.append(path)
+        else:
+            missing += 1
+    return present, missing
+
+
 def transcribe_directory(
     root: Path | str,
     db_path: Path | str,
@@ -296,19 +364,24 @@ def transcribe_directory(
     limit: int | None = None,
     on_progress: Callable[[int, int, Path, Outcome | None], None] | None = None,
     transcribe: Callable[..., Outcome] = transcribe_file,
+    only: Sequence[Path] | None = None,
 ) -> RunStats:
     """Transcribe everything under `root` into the sidecar at `db_path`.
 
     Safe to interrupt and re-run: anything already answered for under the same
     policy is skipped. `transcribe` is injectable so the run loop can be
     tested without a model.
+
+    `only` replaces the directory walk with an explicit file list -- see
+    `stale_paths`, which reads the work list from the store so an archive's
+    own exclusion rules are not rediscovered and overturned.
     """
     settings = settings or Settings()
     model_name = getattr(backend, "model_name", "unknown")
     policy = store.policy_fingerprint(settings.as_policy(model_name))
     stats = RunStats()
 
-    files = list(find_media(root, excludes=excludes))
+    files = list(only) if only is not None else list(find_media(root, excludes=excludes))
     stats.considered = len(files)
 
     with store.open_store(db_path) as conn:
@@ -316,7 +389,8 @@ def transcribe_directory(
         # face the current ones, or a tightened filter never reaches the
         # material it was written for.
         stats.rejudged, stats.demoted = rejudge_stored(
-            conn, policy=policy, settings=settings, paths={str(f) for f in files}
+            conn, policy=policy, settings=settings,
+            paths={str(f) for f in files}, model_name=model_name,
         )
         done = store.already_done(conn, policy=policy)
         todo = [p for p in files if str(p) not in done]

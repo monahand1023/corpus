@@ -208,12 +208,23 @@ def main_argv(argv: list[str]) -> int:
             "geometry, which only a real re-transcribe can redo."
         ),
     )
+    parser.add_argument(
+        "--redo-stale",
+        action="store_true",
+        help=(
+            "Re-transcribe exactly the files the current policy invalidated, "
+            "taking the work list from the sidecar instead of walking the "
+            "media roots. After a threshold change that is the right "
+            "operation: a re-walk rediscovers everything the archive chose to "
+            "exclude, and those rules live in the archive, not in corpus."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
     configure_logging(args.verbose)
     root = Path(args.path).expanduser()
-    if not root.is_dir():
+    if not root.is_dir() and not args.redo_stale:
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 1
     db = Path(args.db).expanduser()
@@ -240,9 +251,34 @@ def main_argv(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    total = len(list(find_media(root, excludes=args.excludes)))
-    print(f"corpus-transcribe: {root} -> {db}")
-    print(f"  {human_count(total)} media file(s); already-done files are skipped\n")
+    only = None
+    if args.redo_stale:
+        from corpus.transcripts import store
+        from corpus.transcripts.run import stale_paths_present
+
+        with store.open_store(db, read_only=True) as conn:
+            policy = store.policy_fingerprint(
+                settings.as_policy(getattr(backend, "model_name", "unknown"))
+            )
+            only, missing = stale_paths_present(conn, policy=policy)
+        total = len(only)
+        print(f"corpus-transcribe --redo-stale: {db}")
+        print(f"  {human_count(total)} file(s) invalidated by the current policy")
+        if missing:
+            # An unmounted volume is not a broken file, and recording
+            # thousands of failures for one would bury the real ones.
+            print(
+                f"  {human_count(missing)} more are recorded but not on disk "
+                "right now (unmounted volume?) and are left alone"
+            )
+        print()
+        if not total:
+            print("  Nothing to redo.")
+            return 0
+    else:
+        total = len(list(find_media(root, excludes=args.excludes)))
+        print(f"corpus-transcribe: {root} -> {db}")
+        print(f"  {human_count(total)} media file(s); already-done files are skipped\n")
 
     def progress(index: int, todo: int, path: Path, outcome: object) -> None:
         mark = "ok " if getattr(outcome, "produced_text", False) else "-- "
@@ -258,7 +294,7 @@ def main_argv(argv: list[str]) -> int:
     stats = transcribe_directory(
         root, db, backend,
         settings=settings, excludes=args.excludes, limit=args.limit,
-        on_progress=progress,
+        on_progress=progress, only=only,
     )
 
     if stats.demoted:

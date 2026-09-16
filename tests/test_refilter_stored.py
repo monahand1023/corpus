@@ -232,3 +232,43 @@ def test_a_row_whose_windows_are_wider_than_window_s_is_skipped(tmp_path):
         == "old-policy"
     ), "an un-refilterable row was restamped"
     assert "skipped" in stats.describe().lower()
+
+
+# --- a partial re-judge must not claim to be a full one -----------------------
+
+
+def test_rejudge_does_not_restamp_a_row_whose_windows_it_cannot_refilter(tmp_path):
+    """`rejudge_stored` applies the WHOLE-TRANSCRIPT rules to stored text.
+    It cannot apply the per-window ones, because a restoration record has no
+    real windows -- one synthetic span covering the file.
+
+    Restamping such a row says "this faced the current rules". Half of them
+    did. Measured live: 104 rows were restamped that way and every one still
+    held loop text at 0.80-0.82, which the per-window rule would have
+    stripped -- and being stamped current, they would never be redone.
+
+    Left stale instead, so a real re-transcribe picks them up.
+    """
+    from corpus.transcripts.run import rejudge_stored
+
+    conn = _sidecar(tmp_path, [("/wide.mov", [(0, 255, REAL_A)], 255.0)])
+    rejudged, _demoted = rejudge_stored(
+        conn, policy="new", settings=Settings(), model_name="whisper-large-v3"
+    )
+    row = conn.execute(
+        "SELECT policy FROM transcripts WHERE path='/wide.mov'"
+    ).fetchone()
+    assert row[0] == "old-policy", "a partially-judged row was stamped current"
+    assert rejudged == 0
+
+
+def test_rejudge_still_restamps_a_row_it_can_fully_judge(tmp_path):
+    from corpus.transcripts.run import rejudge_stored
+
+    conn = _sidecar(tmp_path, [("/ok.mov", [(0, 30, REAL_A)], 30.0)])
+    rejudged, _ = rejudge_stored(
+        conn, policy="new", settings=Settings(), model_name="whisper-large-v3"
+    )
+    assert rejudged == 1
+    row = conn.execute("SELECT policy FROM transcripts WHERE path='/ok.mov'").fetchone()
+    assert row[0] == "new"
