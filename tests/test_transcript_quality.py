@@ -12,6 +12,7 @@ import pytest
 from corpus.transcripts import (
     CAPTION_SIGNOFF_TAILS,
     DEFAULT_MAX_CHARS_PER_SECOND,
+    DEFAULT_MAX_LOOPING_SHARE,
     SUBTITLE_BOILERPLATE,
     TranscriptVerdict,
     impossible_speech_rate,
@@ -607,9 +608,7 @@ def test_repeat_share_still_sees_one_unit_hammered() -> None:
     "text",
     [
         "I'm going to eat the rest of the food. " * 9,
-        "The water is very clear and clear. " * 5,
-        "Blimvara " * 5,
-        "そのため、お店の中にもお店があります。" * 5,
+        "and this is how it looks " * 40,
     ],
 )
 def test_a_looping_transcriber_is_rejected(text: str) -> None:
@@ -768,3 +767,112 @@ def test_the_ceiling_sits_between_the_two_measurements() -> None:
     # Pins the reasoning, not just the number. If someone re-tightens this,
     # this test says what the number was chosen against.
     assert FASTEST_REAL_SPEECH < DEFAULT_MAX_CHARS_PER_SECOND < MEASURED_DECODE_LOOP
+
+
+# ---------------------------------------------------------------------------
+# The loop ceiling, re-measured against a FULL archive.
+#
+# The first version of this threshold was validated against 74 transcripts and
+# then applied to 7,186. On the full archive real material reaches 0.5984 --
+# the ceiling was 0.600, a margin of 0.3% -- and it removed 241 transcripts,
+# a substantial fraction of them real.
+#
+# REAL FAMILY SPEECH IS GENUINELY REPETITIVE. Songs, chants, a parent
+# repeating an instruction, a child repeating a word. That is not a tuning
+# detail; it is the shape of the data, and it is the same lesson repeat_share
+# already carried ("at 0.6 a reference archive lost a clip of a child
+# repeating one word").
+# ---------------------------------------------------------------------------
+
+# Measured across 7,186 real transcripts, 2026-09-16.
+HIGHEST_REAL_LOOPING = 0.5984
+
+
+def test_a_birthday_song_with_the_talk_that_follows_it_is_kept() -> None:
+    """The shape of the real case, which scored 0.6075 and was deleted.
+
+    A sung phrase repeated many times, then the ordinary conversation around
+    it. The fixture is synthetic on purpose -- the real one is family audio
+    and does not belong in a public repository -- but it reproduces the shape
+    and lands in the same band (0.641 against the archive's 0.6075).
+
+    Its English-language counterpart survived at 0.5955 while this one was
+    deleted at 0.6075. Same family, same event, separated by 0.012.
+    """
+    song = "happy birthday to you " * 14
+    after = ("there you go blow them out well done that was great shall we do "
+             "the cake now wait not yet careful there you are")
+    assert judge_transcript(song + after, duration_s=60.0, languages=["en"]).keep
+
+
+def test_a_parent_repeating_an_instruction_is_kept() -> None:
+    # 0.671 -- the shape of a real 0.703 rejection, a parent telling a child
+    # not to hit something because it will break.
+    real = "careful do not hit it hard it will break careful now " * 3
+    assert judge_transcript(real, duration_s=30.0, languages=["en"]).keep
+
+
+def test_a_genuine_decode_loop_is_still_rejected() -> None:
+    # The shape of the archive's clearest loop: one short phrase, nothing
+    # else, filling the window. That one scored 0.986 and appeared byte
+    # identical across several unrelated files.
+    loop = "and this is how it looks " * 40
+    verdict = judge_transcript(loop, duration_s=60.0, languages=["en"])
+    assert not verdict.keep and verdict.reason == "looping_repetition"
+
+
+def test_the_loop_ceiling_clears_real_material_by_a_real_margin() -> None:
+    """The property that was missing, stated as a property.
+
+    An indexed loop is recoverable noise. A deleted family recording is not,
+    so the margin belongs on that side.
+    """
+    assert DEFAULT_MAX_LOOPING_SHARE >= HIGHEST_REAL_LOOPING * 1.25
+
+
+# --- the escape window in looping_share --------------------------------------
+
+
+# A SHORT phrase is what reaches the window: one or two words repeated gives
+# 8-25 word-trigrams. A five-word phrase repeated eight times gives 38 and
+# never enters it -- the first version of this test made that mistake and
+# passed while the bug was live.
+@pytest.mark.parametrize("reps", [10, 14, 20, 25])
+def test_a_short_decode_loop_does_not_escape_the_signal(reps: int) -> None:
+    """A pure repetition of 8-25 words scored exactly 0.0.
+
+    The unit basis switches: below four word-trigrams the signal falls back to
+    character 6-grams, which yield plenty of units. Between four and
+    twenty-three trigrams it uses trigrams -- and those sit BELOW the
+    twenty-four-unit floor, so the signal returns 0.0 and the text escapes.
+
+    The band that escapes is exactly the shape the filter exists to catch: one
+    short phrase repeated to fill a window.
+    """
+    assert looping_share("Blimvara " * reps) > 0.5
+
+
+def test_the_signal_is_monotonic_in_repetition() -> None:
+    # The symptom that exposed it: more repetition scored LOWER.
+    shares = [looping_share("Blimvara " * n) for n in (5, 10, 20, 40)]
+    assert min(shares) > 0.5, shares
+
+
+def test_a_short_word_repeated_a_few_times_is_now_protected() -> None:
+    """Deliberately changed when the ceiling moved to 0.85.
+
+    Five repetitions of one word scores 0.78. Under the old 0.6 ceiling this
+    was rejected; it is now kept, and that is the trade the re-measurement
+    bought -- the same band held a family singing Happy Birthday. A surviving
+    loop is recoverable noise in the index; a deleted recording is not.
+    """
+    assert judge_transcript(
+        "Blimvara " * 5, duration_s=30.0, languages=["en"]
+    ).keep
+
+
+def test_short_real_repeats_are_still_protected() -> None:
+    # The floor's actual purpose must survive the fix: a child repeating a
+    # word is not a decode loop.
+    for text in ("Papa! Papa! Papa! Papa!", "Mama, mama, mama!", "No no no no!"):
+        assert looping_share(text) == 0.0, text

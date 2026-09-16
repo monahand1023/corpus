@@ -617,8 +617,40 @@ def strip_caption_tail(
 # perfect 1.00 and a long-enough one was rejected as degenerate.
 _MIN_UNITS_FOR_RATIO = 4
 
-# Measured: 6 true loops at 0.712-0.886, next-highest real text at 0.379.
-DEFAULT_MAX_LOOPING_SHARE = 0.6
+# RE-MEASURED 2026-09-16 against a full archive, after the first value proved
+# to be deleting real recordings.
+#
+# It was set to 0.6 from a 74-transcript sample where the next-highest real
+# text scored 0.379 -- an apparently comfortable gap. Applied to the same
+# project's full full transcript archive it removed 241 transcripts, and real
+# material turned out to reach **0.5984**: a margin of 0.3%.
+#
+# What the sample could not show is that REAL FAMILY SPEECH IS GENUINELY
+# REPETITIVE. Sampling what 0.6 rejected, at every band:
+#
+#     0.607  "お誕生日おめでとう" x8      Happy Birthday, sung
+#     0.703  "don't hit it hard..." x3    a parent talking to a child
+#     0.803  "just one cup of rice..."    real cooking instruction
+#     0.805  "¿Aquello es tuyo? ... Sean."    real multilingual family speech
+#     0.986  "そのため、" x40           a genuine decode loop
+#
+# The English birthday video survived at 0.5955 while the Japanese one was
+# deleted at 0.607 -- same family, same event, separated by 0.012.
+#
+# 0.85 keeps the 92 clearest loops, restores 149 transcripts, and leaves 42%
+# of margin over real material. The asymmetry is the whole argument: an
+# indexed loop is recoverable noise, a deleted family recording is not.
+#
+# This repeats a lesson the module already carried for `max_repeat_share`
+# ("at 0.6 a reference archive lost a clip of a child repeating one word").
+# A threshold validated on a sample is not validated on the population.
+DEFAULT_MAX_LOOPING_SHARE = 0.85
+
+
+def _character_units(text: str) -> list[str]:
+    """Character 6-grams: the finer-grained basis, used as a fallback."""
+    lowered = text.lower()
+    return [lowered[i:i + 6] for i in range(len(lowered) - 5)]
 
 
 def _repetition_units(text: str) -> list[str]:
@@ -633,8 +665,7 @@ def _repetition_units(text: str) -> list[str]:
         words = text.lower().split()
         units = [" ".join(words[i:i + 3]) for i in range(len(words) - 2)]
     if len(units) < _MIN_UNITS_FOR_RATIO:
-        lowered = text.lower()
-        units = [lowered[i:i + 6] for i in range(len(lowered) - 5)]
+        units = _character_units(text)
     return units
 
 
@@ -683,7 +714,20 @@ def looping_share(text: str) -> float:
     """
     units = _repetition_units(text)
     if len(units) < _MIN_UNITS_FOR_LOOPING:
-        return 0.0
+        # The unit basis switches, and that switch used to open a hole. Below
+        # four word-trigrams `_repetition_units` falls back to character
+        # 6-grams, which yield plenty of units. BETWEEN four and twenty-three
+        # trigrams it returned trigrams -- under this floor -- so the signal
+        # returned 0.0 and the text escaped. A pure repetition of 8 to 25
+        # words scored exactly zero: precisely the shape this exists to catch,
+        # and MORE repetition scored LOWER than less.
+        #
+        # Retry on characters, which are finer-grained, before giving up. The
+        # floor still protects genuinely short text, because a four-word
+        # utterance has too few character 6-grams to clear it either.
+        units = _character_units(text)
+        if len(units) < _MIN_UNITS_FOR_LOOPING:
+            return 0.0
     return 1.0 - (len(set(units)) / len(units))
 
 
