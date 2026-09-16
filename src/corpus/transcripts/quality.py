@@ -200,6 +200,43 @@ _PUNCT = re.compile(
 _CREDIT_TAIL_MAX_CHARS = 30
 # "the amara org community" is the longest real one seen.
 _CREDIT_TAIL_MAX_WORDS = 4
+
+# What may follow a caption sign-off and still leave it a caption sign-off.
+#
+# The measured gap: the tail patterns are anchored with `$`, so they match only
+# when the phrase ENDS the text. Every real-world variant that names its object
+# survived -- "Thanks for watching this video.", "Merci d'avoir regarde cette
+# video.", "Gracias por ver este video." -- including in English, the commonest
+# language in the archive.
+#
+# Bounding the remainder by LENGTH the way credit lines are bounded would have
+# been wrong here. A credit line is followed by a name, which is unknowable in
+# advance, so length is the only available test. A sign-off's object is a small
+# closed set, and length alone would strip "Thanks for watching the kids." --
+# two words, and exactly the family recording this whole filter exists not to
+# delete. So the remainder is matched against a vocabulary instead: every word
+# of it must be a determiner or a word for "video", in the languages the phrase
+# list already covers. "the kids" fails on "kids" and is kept.
+# Determiners, articles, possessives and the prepositions that precede them,
+# in the languages the phrase list already covers -- then the object itself.
+_SIGNOFF_OBJECT_VOCAB = """
+a an the this that these those my our your his her its their to at of for
+el la lo los las un una este esta ese esa esos esas mi mis nuestro nuestra
+su sus de del
+ce cet cette ces le les mon ma notre votre leur du des
+il gli i questo questa quel quello mio nostro suo di dei della
+o os as um uma esse essa meu minha nosso seu do da dos das
+der die das dieser diese dieses den dem ein eine mein unser euer ihr
+het dit deze mijn ons jullie hun
+
+video videos vid vids clip clips channel channels episode episodes stream
+streams film films movie movies vlog vlogs podcast podcasts
+canal canale canali kanal kanaal filmpje filmpjes folge sendung
+"""
+_SIGNOFF_OBJECT_WORDS = frozenset(_SIGNOFF_OBJECT_VOCAB.split())
+# A sign-off's object is short by nature; this is a second, cheap guard so a
+# long run of determiners cannot accumulate into a real sentence.
+_SIGNOFF_OBJECT_MAX_WORDS = 4
 # Scripts written without spaces between words need character n-grams; split on
 # whitespace and a wall of identical syllables is a single token scoring zero
 # repetition.
@@ -368,6 +405,29 @@ def _strip_credit_line(text: str, prefixes: tuple[str, ...]) -> str:
     return text if best is None else text[:best].strip()
 
 
+def _strip_signoff_object(text: str, phrases: frozenset[str]) -> str:
+    """Cut a sign-off that names its object: "...for watching THIS VIDEO".
+
+    Complements the anchored tail patterns, which fire only when the phrase
+    itself ends the text. Everything after the phrase must be in
+    `_SIGNOFF_OBJECT_WORDS`, so this can never reach into real speech: the
+    first ordinary noun disqualifies the match.
+    """
+    best = None
+    for phrase in phrases:
+        for match in _credit_pattern(phrase).finditer(text):
+            tail = _normalise(text[match.end():])
+            if not tail:
+                continue  # the anchored pass owns this case
+            words = tail.split()
+            if len(words) > _SIGNOFF_OBJECT_MAX_WORDS:
+                continue
+            if not all(word in _SIGNOFF_OBJECT_WORDS for word in words):
+                continue
+            best = match.start() if best is None else min(best, match.start())
+    return text if best is None else text[:best].strip()
+
+
 def _without_marks(decomposed: str) -> str:
     """Drop combining marks from NFD text. Used on BOTH sides of the screen."""
     return "".join(ch for ch in decomposed if ch not in _MARK_RANGE)
@@ -447,6 +507,10 @@ def strip_caption_tail(
         if stripped != out:
             out = stripped
             removed = True
+    objected = _strip_signoff_object(out, frozenset(phrases))
+    if objected != out:
+        out = objected
+        removed = True
     credited = _strip_credit_line(out, heads)
     if credited != out:
         out = credited

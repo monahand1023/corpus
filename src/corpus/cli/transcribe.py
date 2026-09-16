@@ -195,7 +195,12 @@ def main_argv(argv: list[str]) -> int:
         mark = "ok " if getattr(outcome, "produced_text", False) else "-- "
         if outcome is None:
             mark = "ERR"
-        print(f"  [{index}/{todo}] {mark} {path.name[:68]}")
+        # flush because this is the ONLY sign of life on a multi-hour run, and
+        # Python block-buffers stdout when it is not a terminal. Redirected to
+        # a log or a pipe -- which is how a long run is actually started -- the
+        # entire progress stream stayed in the buffer, so the log showed the
+        # banner and then nothing for hours.
+        print(f"  [{index}/{todo}] {mark} {path.name[:68]}", flush=True)
 
     stats = transcribe_directory(
         root, db, backend,

@@ -496,3 +496,64 @@ def test_text_merely_mentioning_a_sign_off_word_is_untouched() -> None:
         "vielen Dank fuer  alles, sagte er",
     ]:
         assert strip_caption_tail(untouched) == untouched
+
+
+# ---------------------------------------------------------------------------
+# Sign-offs that name their object.
+#
+# Found by running the shipped model against generated non-speech and then
+# checking the documented claims one by one. The tail patterns are anchored
+# with `$`, so they fired only when the phrase itself ended the text -- every
+# real-world variant naming its object survived, English included.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Thanks for watching this video.",
+        "Thank you for watching my video.",
+        "Thanks for watching the video.",
+        "Gracias por ver este video.",
+        "Merci d'avoir regardé cette vidéo.",
+        "Obrigado por assistir a este vídeo.",
+        "Grazie per la visione di questo video.",
+        "Please subscribe to the channel.",
+    ],
+)
+def test_a_signoff_that_names_its_object_is_still_a_signoff(text: str) -> None:
+    assert strip_caption_tail(text) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The reason this is a vocabulary test and not a length test. Bounding
+        # the remainder by word count -- the way credit lines are bounded --
+        # would cut every one of these, and they are real speech. The first is
+        # the exact shape of family audio this filter exists not to delete.
+        "Thanks for watching the kids.",
+        "Thanks for watching the kids while we were out.",
+        "Thank you for watching my daughter yesterday.",
+        "Please subscribe to the mailing list before Friday.",
+        "Gracias por ver a los niños el sábado.",
+        "We spent the afternoon watching the boats come in.",
+    ],
+)
+def test_real_speech_that_merely_resembles_a_signoff_is_untouched(text: str) -> None:
+    assert strip_caption_tail(text) == text
+
+
+def test_the_object_pass_does_not_reach_past_its_vocabulary() -> None:
+    # "video" is in the vocabulary and "rental" is not, so the match is
+    # disqualified rather than truncated to the last recognised word.
+    text = "Thanks for watching the video rental place for me."
+    assert strip_caption_tail(text) == text
+
+
+def test_a_talk_ending_in_thank_you_very_much_survives_the_new_pass() -> None:
+    # The property the whole tail design exists for: this phrase is in
+    # SUBTITLE_BOILERPLATE but deliberately NOT in CAPTION_SIGNOFF_TAILS,
+    # because dropping transcripts containing it deleted 732 real recordings.
+    talk = "and it changed how we staffed the team for two quarters. Thank you very much."
+    assert strip_caption_tail(talk) == talk
