@@ -290,3 +290,43 @@ def test_an_empty_log_that_is_OLD_fails(tmp_path, capsys) -> None:
 
     assert ok is False, "an old empty log cannot tell low demand from a broken writer"
     assert "60 days" in out or "days" in out, out
+
+
+# --- threshold margins -------------------------------------------------------
+
+
+def test_thresholds_are_reported_against_the_archive_that_uses_them(
+    tmp_path, capsys
+) -> None:
+    """Both threshold defects of 2026-09-16 would have shown up here.
+
+    A ceiling 0.3% above real data reads identically to one 60% above it,
+    until something measures the distance.
+    """
+    from corpus.cli.doctor import _check_threshold_margins
+    from corpus.transcripts import store
+    from corpus.transcripts.store import Transcript, Window
+
+    db = tmp_path / "transcripts.db"
+    with store.open_store(db) as conn:
+        # Text whose looping share sits just under the ceiling.
+        text = "happy birthday to you " * 14 + "there you go well done everyone"
+        t = Transcript(path="/w/a.m4a", text=text,
+                       windows=[Window(0.0, 60.0, text, "en")],
+                       duration_s=60.0, model="m")
+        store.save_transcript(conn, t)
+
+    ok = _check_threshold_margins(str(db))
+    out = capsys.readouterr().out
+
+    assert ok is True, "margins are reported, never enforced"
+    assert "headroom" in out
+    assert "looping" in out.lower()
+
+
+def test_no_sidecar_means_no_margin_opinion(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_threshold_margins
+
+    _check_threshold_margins(str(tmp_path / "missing.db"))
+    out = capsys.readouterr().out
+    assert "SKIPPED" in out

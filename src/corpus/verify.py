@@ -136,10 +136,66 @@ def dormant(
     return sorted(name for name in known if counts.get(name, 0) == 0)
 
 
+# Below this much headroom, a threshold is close enough to real data that
+# ordinary variation can cross it. Not a failure -- a number to look at.
+TIGHT_MARGIN_PERCENT = 25.0
+
+
+@dataclass(frozen=True)
+class Margin:
+    """How much room a threshold leaves above the data it must not reject.
+
+    `percent` is None when nothing was observed, because a margin against no
+    data is not a small margin -- it is no measurement.
+    """
+
+    label: str
+    threshold: float
+    observed_max: float | None
+    percent: float | None
+
+    @property
+    def tight(self) -> bool:
+        return self.percent is not None and self.percent < TIGHT_MARGIN_PERCENT
+
+    def describe(self) -> str:
+        if self.percent is None:
+            return f"{self.label}: observed nothing, so there is no margin to report"
+        return (
+            f"{self.label}: {self.percent:.1f}% headroom "
+            f"(threshold {self.threshold:g}, real data reaches {self.observed_max:g})"
+        )
+
+
+def margin(*, threshold: float, observed_max: float | None, label: str) -> Margin:
+    """Headroom between a threshold and the highest real value beneath it.
+
+    THE DEFECT THIS EXISTS FOR, twice in two days. A speech-rate ceiling sat
+    0.6% above the fastest real speech, having been set when the archive's
+    maximum was 41% lower -- the threshold never moved, the data did. A loop
+    ceiling sat 0.3% above the highest real score and was deleting family
+    recordings: one birthday song survived by 0.012 while another was deleted.
+
+    Both were found by hand, by accident, and there are eleven tunable
+    thresholds. A margin is REPORTED rather than enforced, because a threshold
+    may legitimately sit near data it is meant to nearly touch -- what it must
+    not do is sit there unnoticed.
+
+    A negative percent means real data already crosses the threshold, so it is
+    actively rejecting real material.
+    """
+    if observed_max is None or observed_max <= 0:
+        return Margin(label, threshold, observed_max, None)
+    return Margin(label, threshold, observed_max, (threshold / observed_max - 1) * 100)
+
+
 __all__ = [
     "MIN_VERDICTS_FOR_DORMANCY",
+    "TIGHT_MARGIN_PERCENT",
     "Coverage",
     "DetectorBroken",
+    "Margin",
     "dormant",
+    "margin",
     "self_check",
 ]

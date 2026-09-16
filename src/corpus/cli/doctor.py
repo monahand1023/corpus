@@ -315,6 +315,72 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
     return True
 
 
+def _check_threshold_margins(sidecar: str | None) -> bool:
+    """How close is each threshold to the real data it must not reject?
+
+    Reported, never enforced. A threshold may legitimately sit near data it is
+    meant to nearly touch; what it must not do is sit there unnoticed, which
+    is what happened twice in two days. A ceiling 0.3% above real material
+    reads exactly like one 60% above it until something measures the distance.
+    """
+    print("\nthreshold margins")
+    if not sidecar or not Path(sidecar).expanduser().is_file():
+        print("  SKIPPED (no transcript sidecar; pass --transcripts PATH)")
+        return True
+
+    from corpus.transcripts import quality, store
+    from corpus.verify import margin
+
+    try:
+        with store.open_store(sidecar, read_only=True) as conn:
+            rows = conn.execute(
+                "SELECT text, duration_s FROM transcripts WHERE duration_s > 1.0"
+            ).fetchall()
+    except Exception as exc:
+        print(f"  SKIPPED (could not read: {type(exc).__name__})")
+        return True
+
+    if not rows:
+        print("  SKIPPED (no transcripts to measure against)")
+        return True
+
+    # Only thresholds whose crossing DELETES something are worth reporting:
+    # the margin that matters is the one protecting real material.
+    measured = (
+        (
+            "max chars/sec",
+            quality.DEFAULT_MAX_CHARS_PER_SECOND,
+            max(len(t) / d for t, d in rows),
+        ),
+        (
+            "looping share",
+            quality.DEFAULT_MAX_LOOPING_SHARE,
+            max(quality.looping_share(t) for t, _ in rows),
+        ),
+        (
+            # Measured only on text the filter actually evaluates. This rule
+            # is guarded by `len(text) > 40`, and ignoring that guard reported
+            # a crossed threshold for "Ah! Ah! Ah! Ah!" -- a real exclamation
+            # the guard exists to protect. A margin against data the rule
+            # never sees is not a margin.
+            "repeat share",
+            0.9,
+            max((quality.repeat_share(t) for t, _ in rows if len(t) > 40),
+                default=0.0),
+        ),
+    )
+    tight = 0
+    for label, threshold, observed in measured:
+        m = margin(threshold=threshold, observed_max=observed, label=label)
+        mark = "[ warn ]" if m.tight else "[  ok  ]"
+        print(f"  {mark} {m.describe()}")
+        tight += m.tight
+    if tight:
+        print("           A tight margin is not a defect -- it is a number to")
+        print("           look at. Real data drifts; thresholds do not.")
+    return True
+
+
 def _check_index_quality(db_path: str | None) -> bool:
     if not db_path:
         print("\nindex quality     SKIPPED (no --config or --db)")
@@ -455,6 +521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _check_filter_activity(sidecar),
             sidecar,
         ),
+        ("threshold margins", _check_threshold_margins(sidecar), sidecar),
     ):
         if needs:
             ran[name] = check
