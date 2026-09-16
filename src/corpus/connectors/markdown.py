@@ -19,6 +19,7 @@ from pathlib import Path
 
 from corpus.chunkers.markdown import chunk_markdown_body, parse_markdown
 from corpus.connectors.discovery import discover_files
+from corpus.transcripts.quality import strip_caption_tail
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.dedup import fingerprint
 from corpus.util.encoding import read_text_with_fallback
@@ -147,9 +148,26 @@ class MarkdownChunker:
             pieces = [body.strip()] if body.strip() else []
 
         chunks: list[Chunk] = []
-        for i, piece in enumerate(pieces):
+        index = 0
+        for piece in pieces:
+            # Transcription sign-offs ride in on every connector, not just the
+            # transcript one. A voicemail transcript inside an email, a meeting
+            # transcript pasted into a note, an Otter export saved as a .docx:
+            # all arrive here, and stripping only in `connectors/transcripts.py`
+            # attached the cleanup to the CONNECTOR rather than to the CONTENT.
+            # `corpus-survey index-quality` detected the leftovers across every
+            # source type and then told the operator to edit a connector by
+            # hand. The vocabulary is closed and matches only at a tail, so
+            # this is safe on ordinary prose.
+            piece = strip_caption_tail(piece)
+            if not piece.strip():
+                # The whole piece was boilerplate. Indexing it would give
+                # search a result that answers nothing.
+                continue
             # Title goes in the first chunk; later chunks get a "[title]" prefix
             # so retrieval results carry their source's name in the chunk text.
+            i = index
+            index += 1
             content = f"{title}\n\n{piece}" if i == 0 else f"[{title}]\n\n{piece}"
             content = _strip_nul(content)
             content = scrub(content)
