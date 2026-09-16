@@ -77,28 +77,85 @@ in later without touching the pipeline.
 overlap-join, timeout scaling, resumption, the fingerprint. The backend itself
 is exercised by one opt-in integration test, skipped by default.
 
-## Stage 3 — make `corpus-index` do it automatically
+## Stage 3 — the run, and `corpus-index` pointing at it — SHIPPED
 
-Today `corpus-index` reports media as a gap and moves on. It should offer to
-handle it.
+Shipped as `corpus-transcribe` (`corpus.transcripts.run`,
+`corpus.cli.transcribe`): a resumable directory runner, a dry run that prices
+the job, and a media offer printed by `corpus-index` after its gap report.
 
-- `corpus-survey media` already estimates hours and projects runtime; wire
-  that into the plan so the confirmation prompt says "4.2 h of audio, ~17 min
-  at 15x realtime" before anything starts.
-- On confirmation: transcribe to the sidecar DB, then ingest it as a
-  `transcripts` source in the same run.
-- Without the extra installed, keep reporting the gap and name the extra.
+**Deviation from the plan above, and why.** The plan said `corpus-index`
+should transcribe on confirmation, in the same run. It does not. It reports
+which gap extensions hold speech and names the command:
 
-**Acceptance:** `corpus-init && corpus-index ~/some/folder` on a directory of
-documents *and* audio produces one database searchable across both, with the
-plan having priced it first.
+```
+Of those, .m4a, .mov hold SPEECH that can be transcribed and indexed.
+Run `corpus-transcribe <path>` first, then re-run this command
+```
 
-## Stage 4 — images, only if it earns it
+Everything else `corpus-index` does is seconds of I/O. Transcription is hours
+of local compute, and burying it as a sub-step of an indexing command means a
+`y` at an indexing prompt starts an overnight job. It gets its own command,
+its own dry run, and its own confirmation. The offer keeps the discovery
+property the plan actually wanted — you find out from the tool, not from the
+docs — without the commitment.
 
-`a media consumer` has captioning, OCR and an Apple Photos reader (~150 KB). Apple
-Photos is macOS-specific and the captioning is a second heavy model. Defer
-until stages 1–3 have shipped and been used; `corpus-survey` will keep
-reporting images as a gap in the meantime, which is honest.
+**Acceptance, met:** `corpus-transcribe` on a folder of mixed media wrote a
+sidecar; `corpus-ingest` ingested it as a `transcripts` source; `corpus-query
+"what did the children do at the water"` returned the sentence spoken in an
+`.m4a` that was never text. The silent `.mov` in the same folder was recorded
+as holding no speech rather than indexed.
+
+**Two defects this stage surfaced by being run rather than reasoned about:**
+
+- `default_backend()` checked the platform only, so on Apple Silicon without
+  the extra it returned a backend that could not work — and the failure
+  surfaced on the first window of every file. A 7,000-file archive would have
+  recorded 7,000 identical ImportErrors before anyone learned which package to
+  install. Fixed with `preflight()`, which also runs in the dry run, so the
+  cheapest possible moment tells you.
+- The dry run counted the `transcripts` table only, so files judged to hold no
+  speech were reported as outstanding work. On a real archive most files
+  produce no text — the count understated the skip set in exactly the
+  direction that gets trusted.
+
+## Stage 4 — images, deferred (not cancelled)
+
+Deferred for four reasons, in descending order of weight.
+
+**1. "Images" is three separable features, not one.** `a media consumer` conflates
+generic OCR of image files, model captioning of photo content, and an Apple
+Photos library reader. They have different dependencies, different platforms
+and different value. Porting them as a unit is how a 600-line feature becomes
+a 3,300-line one.
+
+**2. There is no quality filter for captions, and there is for speech.**
+Stages 1–3 were portable largely because `corpus.transcripts.quality` already
+existed and was derived from a real real archive — the filters are
+the hard-won part, and the pipeline around them is comparatively simple. No
+equivalent exists for captions. A captioner invents confidently too, and
+shipping captioning without knowing what its failure modes look like would
+repeat the mistake that stage 1's filters were written to fix. That work has
+not been done, and inventing it in the abstract is exactly what the
+hallucination filters prove doesn't work.
+
+**3. Size — a weaker argument than it first looked.** Measured: the image
+features total 3,350 lines (`caption.py` 2,367, plus OCR, the Photos reader,
+place lookup, LZFSE decoding and privacy filtering) against 2,395 for
+everything shipped in stages 1–3. That is 1.4x, not the order of magnitude
+this bullet originally claimed — the estimate was made before counting and was
+wrong in the direction that flattered the decision. It is listed third because
+it carries the least weight, not the most. What does survive is the shape:
+`caption.py` alone is larger than the entire transcription pipeline, and
+`mlx-vlm` is Apple-only, so stage 2's backend-protocol exercise has to be
+repeated in full before any of it can ship publicly.
+
+**4. Demand is unmeasured, and measurable.** `a media consumer` has served **0**
+real logged queries. Stage 4's precondition is not a date — it is evidence
+that anyone asks image questions of an archive. `corpus-doctor`'s query-log
+audit is what answers that, and it currently says no one has.
+
+Meanwhile `corpus-survey` keeps reporting images as a gap, which is honest and
+costs nothing.
 
 ## Risks, with the mitigation named
 

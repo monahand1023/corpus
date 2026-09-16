@@ -95,9 +95,16 @@ class MlxWhisperBackend:
     def model_name(self) -> str:
         return self._model
 
-    def transcribe_window(self, samples: np.ndarray) -> WindowResult:
+    def preflight(self) -> None:
+        """Fail NOW if this backend cannot run, rather than per file.
+
+        Without this the missing extra surfaced only when the first window was
+        transcribed, so a 7,000-file archive recorded 7,000 identical failures
+        before anyone learned which package to install. A precondition that is
+        knowable before the run starts belongs before the run starts.
+        """
         try:
-            import mlx_whisper
+            import mlx_whisper  # noqa: F401
         except ImportError as exc:
             raise BackendUnavailableError(
                 "mlx-whisper is not installed. It ships with the "
@@ -105,6 +112,10 @@ class MlxWhisperBackend:
                 "That extra runs on Apple Silicon only -- on other hardware, "
                 "supply your own backend satisfying TranscriberBackend."
             ) from exc
+
+    def transcribe_window(self, samples: np.ndarray) -> WindowResult:
+        self.preflight()
+        import mlx_whisper
 
         out: dict[str, Any] = mlx_whisper.transcribe(
             samples,
@@ -141,7 +152,10 @@ def default_backend() -> TranscriberBackend:
     import platform
 
     if platform.system() == "Darwin" and platform.machine() == "arm64":
-        return MlxWhisperBackend()
+        backend = MlxWhisperBackend()
+        # Checked here, not on first use: see MlxWhisperBackend.preflight.
+        backend.preflight()
+        return backend
     raise BackendUnavailableError(
         "No transcription backend is available for this platform. The shipped "
         f"one (mlx-whisper) requires Apple Silicon; this is "

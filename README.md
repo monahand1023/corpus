@@ -266,6 +266,8 @@ corpus-survey overlap ~/Downloads/notes --db archive/corpus.db  # already indexe
 corpus-survey index-quality --db archive/corpus.db  # did junk get indexed?
 corpus-index ~/Downloads/export          # survey + plan + confirm + ingest, one command
 corpus-index ~/Downloads/export --dry-run   # show the plan, write/ingest nothing
+corpus-transcribe ~/Videos --dry-run     # how many hours of speech, and how long it'd take
+corpus-transcribe ~/Videos               # transcribe to a sidecar (resumable)
 ```
 
 ## corpus-index: point it at a folder
@@ -371,6 +373,119 @@ directory, expect those chunks to be pruned as orphans on the next
 silently deleting it, so a large prune will ask you to confirm with
 `--prune-anyway` instead of happening invisibly.
 
+## corpus-transcribe: speech into the index
+
+`corpus-index` reports audio and video as a gap and skips them. `corpus-transcribe`
+is the step that closes it — point it at a folder of recordings and it writes a
+sidecar database that is then a source like any other:
+
+```bash
+corpus-transcribe ~/Videos --dry-run     # how much audio, how long, what's left
+corpus-transcribe ~/Videos               # do it (safe to interrupt)
+corpus-transcribe ~/Videos --limit 20    # sample the quality first
+```
+
+**Why it is a separate command and not part of `corpus-index`.** Everything
+`corpus-index` does is seconds of I/O. This is hours of local compute, so it
+sits behind its own confirmation and its own dry run rather than happening
+because you pointed the indexer at a folder that happened to contain an
+`.mp4`. `corpus-index` tells you it's available and gets out of the way:
+
+```
+Gap — no connector (report this first; it's the whole point)
+  .m4a      18 files
+  .mov       4 files
+
+Of those, .m4a, .mov hold SPEECH that can be transcribed and indexed.
+Run `corpus-transcribe <path>` first, then re-run this command
+```
+
+The dry run is the intended first step — it is the only warning before the
+hours start:
+
+```
+corpus-transcribe: ~/Videos
+  media files found : 22
+  audio to process  : ~9.4 h
+  estimated runtime : ~0.6 h at 15x realtime (local compute; no API spend)
+  already done      : 6 of these (skipped; includes files found to hold no speech)
+```
+
+Then wire the sidecar in and ingest — the command prints this block for you:
+
+```toml
+[[sources]]
+name = "recordings"
+type = "transcripts"
+path = "data/transcripts.db"
+```
+
+```bash
+corpus-ingest --source recordings
+corpus-query "what was decided about the roof"
+```
+
+### What it does about hallucination
+
+A speech model trained on audio paired with scraped subtitles learned that
+silence maps to caption boilerplate, and reproduces it whenever handed audio
+without speech. **Confidence cannot catch this**: measured on generated
+silence, one model returned `"Thank you."` at `no_speech=0.782` and
+`avg_logprob=-0.24`. It is confidently wrong, so no threshold on its own
+scores separates invention from speech.
+
+So the filters run on the TEXT, not on the model's scores, and they are the
+part of this that was derived from a real real archive rather than
+designed in the abstract (`corpus.transcripts.quality`):
+
+- **Caption boilerplate**, matched at the TAIL, not anywhere in the text.
+  Dropping every transcript merely *containing* a sign-off deleted 12.3% of
+  that archive — 732 transcripts, including an 84-minute talk that ended with
+  someone genuinely saying "thank you very much".
+- **Degenerate repetition** and **impossible speech rate** — more characters
+  than a human mouth produces in the window's duration.
+- **Unexpected language**, when you name the languages you actually speak
+  (`--language en --language ja`). Silence gets labelled as languages nobody
+  in the recording speaks.
+
+Voice-activity detection is used only to decide where to SPEND time, and
+never to decide whether a recording is worth keeping. On that same archive a
+hallucinated sign-off peaked at 0.145 speech probability and a genuine
+recording of a parent calling a child's name peaked at 0.144 — and of nine
+detector rejections audited by hand, four were real family recordings that
+were quiet, distant or reverberant. If the detector finds nothing but the
+audio is not silent, the file is transcribed in full and the text is judged.
+
+### Interrupting it is fine
+
+Every outcome is written as it happens, including the negative ones, so a
+second run skips what the first already answered. That matters more than it
+sounds: files that produce NO usable text are exactly the ones a naive
+restart re-does, because they leave nothing behind to find. One interrupted
+pass re-decoded 889 already-examined silent clips before those rows existed.
+
+Every stored verdict carries a fingerprint of the rules that produced it —
+model, window size, thresholds, and the boilerplate phrase lists. Change any
+of them and the affected files are retried rather than inheriting a verdict
+made under different rules.
+
+### Requirements
+
+Transcription needs `ffmpeg` on PATH plus two extras:
+
+```bash
+uv add 'corpus-rag[transcribe]'      # voice-activity detection
+uv add 'corpus-rag[transcribe-mlx]'  # the shipped model — Apple Silicon only
+```
+
+The shipped backend is `mlx-whisper`, which runs on Apple Silicon only. A
+public package cannot make one vendor's hardware a requirement of a headline
+feature, so the pipeline talks to a protocol
+(`corpus.transcripts.backends.TranscriberBackend`) and the Apple-specific part
+sits behind it. Supplying your own takes two members — `model_name` and
+`transcribe_window(samples) -> WindowResult` — and every quality rule above
+then applies to its output unchanged.
+
 ## Ingesting a folder
 
 `corpus-ingest --path` is the lower-level primitive `corpus-index` is built
@@ -474,6 +589,7 @@ interval instead of a single number.
 | `tsv` | `**/*.tsv` | — (stdlib `csv`) | Same connector as `csv`; tab is just the fallback default when the delimiter can't be sniffed |
 | `zip` | `**/*.zip` | — (stdlib `zipfile`; contents may need their own extra) | Extracts each archive to a temp dir, re-runs the connectors above by file type, deletes the extracted copies. Archives are never modified. Encrypted archives, zip-slip members, and nested archives are refused — see the safety contract in `src/corpus/connectors/zip.py`'s module docstring. Chunk `source_key`s look like `reports.zip::q3/summary.pdf`, so a search hit is traceable back to its archive. Vendored-dependency/build-output members (`node_modules`, `site-packages`, `.git`, minified `*.min.js`/`*.map`, ...) are excluded by default — set `exclude_dependencies = false` on the source to index them anyway. A member name written as raw UTF-8/Shift-JIS bytes without the standard UTF-8 flag bit (common from non-Python zip tools, especially Japanese-locale ones) is repaired rather than left as CP437 mojibake — see `_repair_filename_encoding` in `src/corpus/connectors/zip.py`. |
 | `aup3` | `**/*.aup3` | — (stdlib `sqlite3`; `ffmpeg` optional for FLAC/MP3 extraction) | Audacity 3 project files — SQLite databases holding raw audio. The indexed document is metadata only (duration, block count, sample-format verdict) — audio content isn't text and can't be chunked/embedded directly. Call `corpus.connectors.aup3.extract_audio()` separately to write a playable WAV (stdlib)/FLAC/MP3 (via `ffmpeg`) file adjacent to the source, for a future transcription pass. The source `.aup3` is opened read-only and never modified. Sample rate and channel count aren't recoverable from the project file — defaults to 44100 Hz mono; override per source with `sample_rate` / `channels`. |
+| `transcripts` | `**/*transcripts.db` | — (stdlib `sqlite3`) | A sidecar written by [`corpus-transcribe`](#corpus-transcribe-speech-into-the-index), not a folder of files: point `path` at the database. One document per recording, chunked on window boundaries so a hit keeps its timestamp and the `file://` link jumps to the source media. Recordings that produced no usable text are stored as such and never indexed. |
 
 ## Adding a new source type
 
@@ -600,22 +716,22 @@ Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates
 - **Embedding is not local, for real retrieval.** Storage, the vector + full-text index, hybrid search, and the optional reranker all run on your machine — but turning text into vectors for actual semantic search requires the **Voyage or Gemini API** (an API key + network at ingest and query time). The only built-in offline embedder, `provider="hash"` (see [Eval](#eval)), is a keyless lexical-overlap substrate for eval/CI reproducibility, not a semantic-quality model — for real retrieval, the text you ingest and your queries are sent to whichever provider you pick. If that's a dealbreaker, this isn't the tool.
 - **Not built for huge corpora.** Vector search is a brute-force scan (sqlite-vec `vec0`), fast to roughly **100K chunks**. Beyond that you'd want ANN/HNSW indexing, which isn't included.
 - **No OCR.** Scanned or image-only PDFs produce no text — OCR them first.
-- **No audio, video, or image content.** There is no transcription and no
-  captioning. Point it at a folder of `.mp4`, `.mov`, `.m4a`, `.jpg` or
-  `.heic` and those files are reported as a gap and skipped — `corpus-survey
-  census` and `corpus-index` both list them explicitly before ingesting
-  anything, so you find out up front rather than after a run. `.mp3` is the
-  one partial exception and it is not what it looks like: the `music`
-  connector reads ID3 **tags** to answer "what albums do I have", and never
-  touches the audio.
+- **No image content.** There is no OCR of photos and no captioning. Point it
+  at a folder of `.jpg` or `.heic` and those files are reported as a gap and
+  skipped — `corpus-survey census` and `corpus-index` both list them
+  explicitly before ingesting anything, so you find out up front rather than
+  after a run.
 
-  What IS here is the part that judges transcription output once you have it
-  elsewhere — `corpus.transcripts` holds the hallucination filters
-  (caption-boilerplate matching, repetition, impossible speech rate) derived
-  from a real real archive. Running a speech-to-text model and
-  wiring its output in is a connector you would write; see
-  [docs/adding_a_source.md](docs/adding_a_source.md), which has a section on
-  exactly that case.
+  **Speech in audio and video IS handled**, by a separate command rather than
+  by `corpus-index`: see [`corpus-transcribe`](#corpus-transcribe-speech-into-the-index).
+  It is deliberately not automatic — it is hours of local compute, not seconds
+  of I/O, so it belongs behind its own confirmation. The shipped speech model
+  runs on Apple Silicon only; the seam it sits behind does not (see
+  `corpus.transcripts.backends`).
+
+  `.mp3` has a second, unrelated path that is not what it looks like: the
+  `music` connector reads ID3 **tags** to answer "what albums do I have", and
+  never touches the audio. Transcribing an `.mp3` is `corpus-transcribe`.
 - **No live sync.** No file watcher and no real-time/incremental indexing daemon — you re-run `corpus-ingest` when content changes.
 - **Not an LLM or chatbot.** `corpus` only *retrieves* — it finds and returns the relevant chunks. The answering/reasoning is done by whatever model consumes them (e.g. Claude via the MCP server).
 - **Python 3.12+ only** (tested on 3.12, 3.13, and 3.14).

@@ -83,19 +83,15 @@ def test_an_unsupported_platform_names_what_to_do_about_it() -> None:
     assert platform.machine() in message, "must say what it detected"
 
 
-@pytest.mark.skipif(
-    not (platform.system() == "Darwin" and platform.machine() == "arm64"),
-    reason="not Apple Silicon",
-)
-def test_apple_silicon_gets_the_shipped_backend() -> None:
-    assert isinstance(default_backend(), MlxWhisperBackend)
+APPLE_SILICON = platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
-def test_a_missing_extra_names_the_extra_rather_than_raising_importerror(
-    monkeypatch,
-) -> None:
-    # The same failure shape the reranker uses: five frames of
-    # ModuleNotFoundError tells a user nothing about which extra to install.
+def _hide_mlx(monkeypatch) -> None:
+    """Make `import mlx_whisper` fail, whether or not it is installed here.
+
+    The extra is optional, so a test that merely relies on it being absent
+    passes for the wrong reason on a machine that has it.
+    """
     import builtins
 
     real_import = builtins.__import__
@@ -106,6 +102,38 @@ def test_a_missing_extra_names_the_extra_rather_than_raising_importerror(
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", without_mlx)
+
+
+@pytest.mark.skipif(not APPLE_SILICON, reason="not Apple Silicon")
+def test_apple_silicon_gets_the_shipped_backend(monkeypatch) -> None:
+    # preflight is stubbed rather than satisfied: what is under test is the
+    # SELECTION, and requiring the extra here would make the suite need Apple
+    # Silicon AND an optional install to check which branch was taken.
+    monkeypatch.setattr(MlxWhisperBackend, "preflight", lambda self: None)
+    assert isinstance(default_backend(), MlxWhisperBackend)
+
+
+@pytest.mark.skipif(not APPLE_SILICON, reason="not Apple Silicon")
+def test_a_missing_extra_is_caught_before_the_run_not_once_per_file(
+    monkeypatch,
+) -> None:
+    # The regression this pins: default_backend() checked the PLATFORM only,
+    # so on Apple Silicon without the extra it handed back a backend that
+    # could not work. The failure then surfaced on the first window of every
+    # file -- one archive recorded the same ImportError thousands of times
+    # before anyone learned which package to install.
+    _hide_mlx(monkeypatch)
+    with pytest.raises(BackendUnavailableError) as caught:
+        default_backend()
+    assert "corpus-rag[transcribe-mlx]" in str(caught.value), "must name the extra"
+
+
+def test_a_missing_extra_names_the_extra_rather_than_raising_importerror(
+    monkeypatch,
+) -> None:
+    # The same failure shape the reranker uses: five frames of
+    # ModuleNotFoundError tells a user nothing about which extra to install.
+    _hide_mlx(monkeypatch)
     with pytest.raises(BackendUnavailableError) as caught:
         MlxWhisperBackend().transcribe_window(None)
     assert "corpus-rag[transcribe-mlx]" in str(caught.value)

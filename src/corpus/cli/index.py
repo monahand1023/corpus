@@ -95,6 +95,63 @@ def _print_gap(plan: IndexPlan) -> None:
     )
 
 
+def _media_in_gap(plan: IndexPlan) -> list[str]:
+    """Media extensions the gap report just listed, if any."""
+    from corpus.survey.media import MEDIA_EXTENSIONS
+
+    return sorted(
+        b.bucket for b in plan.gap if b.bucket.lower() in MEDIA_EXTENSIONS
+    )
+
+
+def _print_media_offer(plan: IndexPlan, root: str) -> bool:
+    """Say that the media in the gap COULD be indexed, and what it would cost.
+
+    The gap report above is honest but incomplete on its own: it says these
+    files will not be searchable without saying that a transcription pass
+    would change that. Somebody pointing this at a folder of recordings should
+    not have to read the docs to discover the feature exists.
+
+    Returns whether transcription is actually possible here.
+    """
+    extensions = _media_in_gap(plan)
+    if not extensions:
+        return False
+
+    from corpus.transcripts.audio import ffmpeg_available
+
+    print(
+        f"\n  Of those, {', '.join(extensions)} hold SPEECH that can be "
+        "transcribed and indexed."
+    )
+
+    missing = []
+    try:
+        from corpus.transcripts.backends import BackendUnavailableError, default_backend
+
+        default_backend()
+    except BackendUnavailableError as exc:
+        missing.append(str(exc).split(".")[0])
+    except ImportError:
+        missing.append("the transcription backend is not installed")
+    if not ffmpeg_available():
+        missing.append("ffmpeg is not on PATH")
+
+    if missing:
+        print("  Not available here: " + "; ".join(missing) + ".")
+        print(
+            "  Install with: uv add 'corpus-rag[transcribe,transcribe-mlx]' "
+            "(Apple Silicon), plus ffmpeg."
+        )
+        return False
+
+    print(
+        f"  Run `corpus-transcribe {root}` first, then re-run this command -- "
+        "the transcripts become a source like any other."
+    )
+    return True
+
+
 def _print_noise(plan: IndexPlan) -> None:
     ws = plan.census.walk_stats
     print("\nNoise (excluded from the plan, not ingested)")
@@ -324,6 +381,7 @@ def main_argv(argv: list[str]) -> int:
 
     print(f"corpus-index: {plan.root}")
     _print_gap(plan)
+    _print_media_offer(plan, args.path)
     _print_noise(plan)
     _print_overlap(plan)
     _print_plan_table(plan, config.embedder.provider, config.embedder.model)
