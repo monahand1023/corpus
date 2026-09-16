@@ -77,19 +77,30 @@ def test_dry_run_ignores_rows_left_by_some_other_folder(tmp_path, capsys) -> Non
     assert "already done" not in out, out
 
 
-def test_dry_run_says_so_when_the_model_is_not_installed(tmp_path, capsys) -> None:
-    # Cheapest possible moment to learn this. Before, the extra was missing
-    # until the first window of the first file -- i.e. after the user had
-    # already committed to the run.
+def test_dry_run_says_so_when_transcription_cannot_run(tmp_path, capsys) -> None:
+    """The cheapest moment to learn the run is impossible, whatever the reason.
+
+    There are TWO reasons, and this test originally knew only one. Written on
+    Apple Silicon, it asserted the message names the `transcribe-mlx` extra --
+    true when the extra is merely missing. On Linux CI the backend is
+    unavailable for a different reason (not Apple Silicon at all), and that
+    message names the protocol to implement instead. The test failed on every
+    CI platform while passing locally.
+
+    What actually matters is invariant across both: it says so up front, it
+    exits non-zero, and it names something the reader can act on.
+    """
     root = _media(tmp_path, "talk.m4a")
     code = main_argv([str(root), "--db", str(tmp_path / "t.db"), "--dry-run"])
     out = capsys.readouterr().out
 
-    if "cannot run yet" in out:
-        assert "transcribe-mlx" in out, "must name the extra to install"
-        assert code == 2, "a run that cannot happen must not report success"
-    else:  # a machine with the extra genuinely installed
+    if "cannot run yet" not in out:  # a machine that really can transcribe
         assert code == 0
+        return
+
+    assert code == 2, "a run that cannot happen must not report success"
+    actionable = ("transcribe-mlx" in out) or ("TranscriberBackend" in out)
+    assert actionable, f"must name the extra OR how to supply a backend: {out!r}"
 
 
 def test_an_empty_folder_is_reported_rather_than_started(tmp_path, capsys) -> None:
