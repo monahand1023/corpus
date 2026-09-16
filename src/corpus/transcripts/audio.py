@@ -25,6 +25,7 @@ module costs nothing on a machine that only ever reads an existing sidecar.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -61,6 +62,30 @@ VAD_PAD_S = 0.3
 
 class AudioUnavailableError(RuntimeError):
     """Audio could not be decoded, or the tools to decode it are missing."""
+
+
+class NoAudioStreamError(AudioUnavailableError):
+    """The file has no audio track at all -- a settled fact about the file.
+
+    Separate from its parent because the RUN treats the two differently, and
+    must: an ordinary decode failure is retried on every future run, since it
+    usually means a corrupt read or a transient resource problem. "This video
+    has no audio" is not transient, and retrying it forever costs an ffmpeg
+    invocation per run and puts an error in front of the operator that they
+    can never act on.
+
+    Measured on a live re-transcribe of a photo library: 67 of the first 665
+    files -- 10% -- were exactly this, mostly the silent clip a phone records
+    beside a still. A subclass, so any caller catching the broad type is
+    unaffected.
+    """
+
+
+# ffmpeg's wording when the input has no audio track. Matched on the message
+# rather than on the exit code, which is the same for every decode problem.
+_NO_STREAM_RE = re.compile(
+    r"does not contain any stream|Output file .* does not contain", re.I
+)
 
 
 def ffmpeg_available() -> bool:
@@ -105,6 +130,8 @@ def decode(path: Path | str, *, timeout_s: float = 1800.0) -> np.ndarray:
         raise AudioUnavailableError(f"ffmpeg timed out after {timeout_s}s") from exc
     if proc.returncode != 0 or not proc.stdout:
         detail = proc.stderr.decode(errors="replace").strip()[:200]
+        if _NO_STREAM_RE.search(detail):
+            raise NoAudioStreamError(f"{path} has no audio stream: {detail}")
         raise AudioUnavailableError(f"ffmpeg could not decode {path}: {detail}")
     return np.frombuffer(proc.stdout, dtype=np.float32)
 

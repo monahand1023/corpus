@@ -31,6 +31,7 @@ from pathlib import Path
 from corpus.survey.media import MEDIA_EXTENSIONS
 from corpus.survey.walk import walk_files
 from corpus.transcripts import quality, store
+from corpus.transcripts.audio import NoAudioStreamError
 from corpus.transcripts.pipeline import (
     Outcome,
     Settings,
@@ -401,6 +402,22 @@ def transcribe_directory(
         for index, path in enumerate(todo, start=1):
             try:
                 outcome = transcribe(path, backend, settings=settings)
+            except NoAudioStreamError:
+                # A settled fact about the FILE, not a failure of this run.
+                # Recorded as no_text so it is skipped next time: measured on
+                # a live photo library, 10% of files have no audio track, and
+                # as failures they were re-decoded on every run forever while
+                # putting an error in front of the operator that they could
+                # never act on. An error nobody can act on hides the ones
+                # they can.
+                stats.empty += 1
+                store.save_no_text(
+                    conn, str(path), duration_s=0.0,
+                    reason="no_audio_stream", policy=policy,
+                )
+                if on_progress:
+                    on_progress(index, len(todo), path, None)
+                continue
             except Exception as exc:  # one bad file must not end the run
                 # A failure is recorded and NOT skipped on the next run: it
                 # usually means a broken decode or a transient resource
