@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS dropped_windows (
   no_speech REAL NOT NULL,
   avg_logprob REAL NOT NULL,
   text TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
   policy TEXT NOT NULL,
   PRIMARY KEY (path, window_start)
 );
@@ -104,6 +106,7 @@ _ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("rejected_text", "TEXT NOT NULL DEFAULT ''"),
     ),
     "transcripts": (("policy", "TEXT NOT NULL DEFAULT ''"),),
+    "dropped_windows": (("reason", "TEXT NOT NULL DEFAULT ''"),),
 }
 
 
@@ -275,8 +278,8 @@ def save_dropped_windows(
     """
     conn.executemany(
         "INSERT OR REPLACE INTO dropped_windows"
-        " (path, window_start, no_speech, avg_logprob, text, policy)"
-        " VALUES (?,?,?,?,?,?)",
+        " (path, window_start, no_speech, avg_logprob, text, reason, policy)"
+        " VALUES (?,?,?,?,?,?,?)",
         [
             (
                 path,
@@ -284,6 +287,10 @@ def save_dropped_windows(
                 float(d.get("no_speech", 0.0)),
                 float(d.get("avg_logprob", 0.0)),
                 str(d.get("text", "")),
+                # WHICH rule fired. Without it the evidence this table exists
+                # to keep cannot answer the question that matters: is any of
+                # these filters dead? A count of discards cannot say.
+                str(d.get("reason", "")),
                 policy,
             )
             for d in dropped
@@ -362,6 +369,40 @@ def demote_transcript(
         (path, duration_s, policy, reason, rejected_text, _now()),
     )
     conn.commit()
+
+
+def filter_activity(
+    conn: sqlite3.Connection, *, policy: str | None = None
+) -> dict[str, int]:
+    """How many times each rejection reason actually fired.
+
+    The input to dormancy detection: a filter that never appears here, across
+    a corpus large enough to mean it, is either unnecessary or broken. This
+    project shipped a repetition check that had never once fired on real data
+    and nothing said so, because a count of total discards cannot distinguish
+    a dead rule from a rule with nothing to reject.
+    """
+    out: Counter[str] = Counter()
+    where = " WHERE reason IS NOT NULL AND reason != ''"
+    params: tuple[str, ...] = ()
+    if policy is not None:
+        # Scope to ONE rule set. Comparing a current filter list against
+        # verdicts recorded under older rules manufactures dead filters that
+        # are not dead: measured on a real sidecar, three looked dormant only
+        # because an earlier pipeline spelled the reasons differently.
+        where += " AND policy = ?"
+        params = (policy,)
+    for table in ("no_text", "dropped_windows"):
+        try:
+            rows = conn.execute(
+                f"SELECT reason, count(*) FROM {table}{where} GROUP BY reason",
+                params,
+            )
+        except sqlite3.Error:
+            continue
+        for reason, n in rows:
+            out[reason] += n
+    return dict(out)
 
 
 def counts(conn: sqlite3.Connection) -> dict[str, int]:

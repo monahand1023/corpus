@@ -24,7 +24,7 @@ is an unknown, and an unknown must be louder than a pass, not quieter.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 
@@ -100,4 +100,46 @@ def self_check(
         )
 
 
-__all__ = ["Coverage", "DetectorBroken", "self_check"]
+# Below this many verdicts, "never fired" is noise rather than evidence. A
+# guard that fires on a three-file sample gets switched off, which leaves you
+# worse off than no guard -- the same reason the caption tail matcher dropped
+# its over-broad heuristics.
+MIN_VERDICTS_FOR_DORMANCY = 200
+
+
+def dormant(
+    counts: Mapping[str, int],
+    *,
+    known: Iterable[str],
+    coverage: Coverage,
+    minimum: int = MIN_VERDICTS_FOR_DORMANCY,
+) -> list[str]:
+    """Known filters that never fired, once the sample is big enough to mean it.
+
+    A filter that never fires across a large corpus is either unnecessary or
+    broken, and there is no third option. This project shipped one: a
+    repetition check thresholded at 0.9 whose highest score across 74 real
+    transcripts was 0.250. Nothing reported it, because a dead knob reads
+    exactly like a knob with nothing to reject.
+
+    Returns [] below `minimum` rather than guessing: zero rejections out of
+    three files is not evidence of anything.
+
+    `counts` must come from ONE rule set. Counting verdicts recorded under
+    older rules against a current filter list manufactures dead filters that
+    are not dead -- measured on a real sidecar, three looked dormant purely
+    because an earlier pipeline spelled its reasons differently. See
+    `corpus.transcripts.store.filter_activity(policy=...)`.
+    """
+    if coverage.examined < minimum:
+        return []
+    return sorted(name for name in known if counts.get(name, 0) == 0)
+
+
+__all__ = [
+    "MIN_VERDICTS_FOR_DORMANCY",
+    "Coverage",
+    "DetectorBroken",
+    "dormant",
+    "self_check",
+]

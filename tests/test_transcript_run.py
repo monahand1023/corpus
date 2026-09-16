@@ -282,3 +282,34 @@ def test_a_transcript_that_still_passes_is_restamped_not_redone(tmp_path) -> Non
         transcribe=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no re-run")),
     )
     assert stats2.rejudged == 0 and stats2.skipped_done == 1
+
+
+def test_a_run_persists_WHICH_filter_rejected_each_window(tmp_path) -> None:
+    """The reason was computed per window and then dropped on the way to disk.
+
+    `run.py` built the row from window_start/no_speech/avg_logprob/text and
+    omitted `reason`, so the store could not answer "is any of these filters
+    dead?" -- which is the question a count of discards cannot answer.
+    """
+    root = _media(tmp_path, "clip.m4a")
+    db = tmp_path / "t.db"
+
+    def with_drops(path, backend, *, settings=None):
+        return Outcome(
+            path=str(path), duration_s=60.0,
+            transcript=Transcript(
+                path=str(path), text="we fed the ducks by the pond",
+                windows=[Window(0.0, 30.0, "we fed the ducks by the pond", "en")],
+                duration_s=60.0, model=backend.model_name),
+            dropped=[
+                DroppedWindow(30.0, 0.8, -0.2, "Thank you.", "caption_boilerplate"),
+                DroppedWindow(60.0, 0.7, -0.3, "rice " * 40, "looping_repetition"),
+            ],
+        )
+
+    transcribe_directory(root, db, Backend(), transcribe=with_drops)
+
+    with store.open_store(db) as conn:
+        activity = store.filter_activity(conn)
+    assert activity.get("caption_boilerplate") == 1
+    assert activity.get("looping_repetition") == 1

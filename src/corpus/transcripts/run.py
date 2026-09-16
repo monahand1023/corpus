@@ -186,6 +186,10 @@ def transcribe_directory(
                             "no_speech": d.no_speech,
                             "avg_logprob": d.avg_logprob,
                             "text": d.text,
+                            # WHICH rule fired. Computed per window and then
+                            # dropped here, which left the store unable to
+                            # answer whether any filter is dead.
+                            "reason": d.reason,
                         }
                         for d in outcome.dropped
                     ],
