@@ -710,7 +710,10 @@ def looping_share(text: str) -> float:
     exactly the recording its owner keeps the archive for.
 
     Measured on 74 real transcripts: median 0.000, and the six true loops
-    scored 0.712-0.886 against a next-highest of 0.379.
+    scored 0.712-0.886 against a next-highest of 0.379. That sample is NOT
+    the basis for the threshold -- see `DEFAULT_MAX_LOOPING_SHARE`, where the
+    full full transcript archive put real material at 0.5984 and the gap the
+    sample showed turned out not to exist.
     """
     units = _repetition_units(text)
     if len(units) < _MIN_UNITS_FOR_LOOPING:

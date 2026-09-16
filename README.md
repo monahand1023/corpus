@@ -833,7 +833,23 @@ uv run corpus-init                   # the CLI scripts are also available via `u
 
 The repo includes `examples/sample_corpus/` (synthetic markdown notes) and `examples/corpus.toml.example` (wired to point at it) for try-before-you-config experiments.
 
-`scripts/install-hooks.sh` points this checkout's `core.hooksPath` at the tracked `.githooks/` directory, whose `pre-commit` hook blocks committing a database file, a root `corpus.toml`, or `.env` — even via `git add -f`. `core.hooksPath` is per-checkout git config, not something a clone inherits, so this is a convenience for catching your own mistakes locally, not a guarantee: run the script again after every fresh clone. `tests/test_repo_hygiene.py` (part of the normal test suite, and run in CI) is the guard that actually can't be skipped.
+### Git hooks
+
+`scripts/install-hooks.sh` points this checkout's `core.hooksPath` at the tracked `.githooks/` directory. Three hooks live there:
+
+| hook | blocks |
+|---|---|
+| `pre-commit` | staging a database file, a root `corpus.toml`, or `.env` — even via `git add -f` |
+| `commit-msg` | a commit **message** naming a private companion project |
+| `pre-push` | pushing any commit whose message does |
+
+The last two exist because a commit message is the one surface `pre-commit` (paths) and `tests/test_repo_hygiene.py` (file content) both pass straight through — and because a force-push does not undo one. A rewrite makes an object *unreachable*, not absent; GitHub serves unreachable objects by SHA indefinitely and only Support can purge them. Get the message right before it leaves your machine.
+
+Their denylist lives in `.git/private-name-patterns` (one regex per line), **not** in the tracked hooks — a denylist of private names inside a public repo would publish the very strings it exists to suppress. `.git/` cannot be committed, which is the point. It also means the file does not survive a clone: recreate it, or the hooks tell you on your next commit that nothing is being checked.
+
+All three hooks **fail closed**. Each proves its matcher can match before believing a clean result, and `commit-msg`/`pre-push` compile every pattern before use — `grep` exits 2 on a bad regex, and an `if grep -q` reads that as "no match", so a typo used to disable the guard silently. `tests/test_hook_behaviour.py` runs all three against real temporary repositories.
+
+`core.hooksPath` is per-checkout git config, not something a clone inherits, so hooks are a convenience for catching your own mistakes locally, not a guarantee. `tests/test_repo_hygiene.py` (part of the normal test suite, and run in CI) is the guard that can't be skipped, and `corpus-publish-check` asks the remote about the surfaces no local command can see.
 
 ## License
 

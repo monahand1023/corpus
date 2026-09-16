@@ -149,7 +149,8 @@ text faster than anyone speaks: over a thousand characters from an
 eleven-second clip is 106 characters/second.
 
 Real content on the reference archive topped out at **14.7** c/s with a 99th
-percentile of **17.7**, so the default ceiling of 25 is a wide margin. Scripts
+percentile of **17.7**, so the ceiling was first set at 25 — a wide margin at
+the time; see the re-measurement below. Scripts
 that pack more meaning into fewer characters, such as Japanese, produce *lower*
 rates, so one ceiling serves every language. This signal needs no language
 knowledge at all.
@@ -216,8 +217,37 @@ the tests could never reveal it.**
 `looping_share()` counts **distinct** units instead, so the score rises with
 how much of the text is duplicated however long the repeating phrase is.
 Measured on those 74 transcripts: median **0.000**, the six loops
-**0.712–0.886**, next-highest real text **0.379**. A clean gap, so the
-threshold (**0.6**) is a measurement rather than a guess.
+**0.712–0.886**, next-highest real text **0.379**. An apparently clean gap,
+so the threshold was set at **0.6**.
+
+#### That threshold was wrong, and the sample is why
+
+Applied to the same project's **full full transcript archive**, 0.6 removed
+**241 transcripts**, and real material turned out to reach **0.5984** — a
+margin of 0.3%, not the comfortable gap the sample showed. Sampling what it
+rejected, at every band:
+
+| score | what it actually was |
+|---|---|
+| 0.607 | `"お誕生日おめでとう"` ×8 — Happy Birthday, sung |
+| 0.703 | `"don't hit it hard…"` ×3 — a parent talking to a child |
+| 0.803 | `"just one cup of rice…"` — real cooking instruction |
+| 0.805 | `"¿Aquello es tuyo? … Sean."` — real multilingual family speech |
+| 0.986 | `"そのため、"` ×40 — a genuine decode loop |
+
+The English birthday video survived at **0.5955** while the Japanese one was
+deleted at **0.607** — same family, same event, separated by 0.012.
+
+What the 74-transcript sample could not show is that **real family speech is
+genuinely repetitive**: songs, chants, a parent repeating an instruction. The
+threshold is now **0.85**, which keeps the 92 clearest loops, restores the 149
+deleted recordings, and leaves 42% of margin over real material. The asymmetry
+is the whole argument: an indexed loop is recoverable noise, a deleted family
+recording is not.
+
+This repeats a lesson this page already carried two paragraphs up — at 0.6,
+`repeat_share` lost a clip of a child repeating one word. **A threshold
+validated on a sample is not validated on the population.**
 
 It can afford to be strict where `repeat_share` cannot, because it only applies
 once there is enough text for a repeat to be unambiguous. Without that floor it
@@ -233,11 +263,35 @@ Splitting on whitespace makes a wall of identical Khmer or Japanese syllables a
 single token, scoring zero repetition — the failure mode is invisible unless
 you look for it.
 
+#### The floor and the fallback have to agree, or they open a hole
+
+`_repetition_units` prefers word trigrams and falls back to character 6-grams;
+`looping_share` returns 0.0 below a floor of 24 units. Those two rules were
+written separately, and between them sat a window where **neither applied**.
+
+Below four word-trigrams the fallback fires and characters give plenty of
+units. Between four and twenty-three trigrams it returned *trigrams* — under
+the floor — so the score was 0.0 and the text walked straight through. **A
+pure repetition of 8 to 25 words scored exactly zero**, which is precisely the
+shape this signal exists to catch, and it meant MORE repetition scored LOWER
+than less.
+
+The fix is to retry on characters before giving up, rather than to lower the
+floor. The floor still protects genuinely short text, because a four-word
+utterance has too few character 6-grams to clear it either.
+
+The general shape is worth naming: when a metric has both a *fallback* and a
+*minimum*, check what happens in the band where the fallback has not triggered
+and the minimum has not been met. A signal that returns "nothing here" for an
+input it cannot measure is indistinguishable from one that measured and found
+nothing.
+
 ### Where the checks have to run
 
 Per-**window**, per-**transcript**, and on the rescue path, because junk
-reaches an index by whichever one you skip. Measured on a live 45,092-chunk
-index: 716 chunks were loops, but only 553 belonged to transcripts a
+reaches an index by whichever one you skip. Measured 2026-09-11 on a live
+45,092-chunk index (it has grown since; the ratios are the point, not the
+total): 716 chunks were loops, but only 553 belonged to transcripts a
 whole-transcript judgement rejects. The other 163 were single looping windows
 inside genuine recordings — real material either side, so no per-file verdict
 can reach them. A further 12 arrived through the *rescue* that restores the

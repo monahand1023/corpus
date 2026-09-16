@@ -30,6 +30,7 @@ from corpus.eval.goldset import (
     sqlite_lookup,
 )
 from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_query
+from corpus.eval.noise import METRICS, MetricSpread, gate_verdict, spread_report
 from corpus.retriever import Retriever
 
 
@@ -197,19 +198,39 @@ def _load_thresholds(path: Path) -> dict[str, float]:
     return thresholds
 
 
-def _print_gate(overall: MetricSummary, thresholds: dict[str, float]) -> bool:
+def _print_spread(spreads: dict[str, MetricSpread], top_k: int) -> None:
+    print("\n=== Spread across runs ===")
+    for metric in METRICS:
+        label = metric.replace("_at_k", f"@{top_k}")
+        print(f"  {label:<10} {spreads[metric].describe()}")
+    print(
+        "\nA hosted embedder does not return a bit-identical vector for a fixed\n"
+        "query, so result ORDER moves while set membership usually does not --\n"
+        "which is why recall@k sits still and the rank-weighted metrics do not.\n"
+        "Set a gate below the worst run by at least twice this spread."
+    )
+
+
+def _print_gate(
+    spreads: dict[str, MetricSpread],
+    thresholds: dict[str, float],
+    *,
+    n_queries: int | None = None,
+) -> bool:
     """Print one `[gate] ...` line per checked metric to stderr.
 
-    Returns True iff every checked metric meets (or exceeds) its floor.
+    Judged on the WORST run, not the average: a gate that passes on the mean
+    and fails one run in three is a flaky gate, not a passing one. Returns
+    True iff every checked metric clears its floor in every run.
     """
     passed = True
     for metric, floor in thresholds.items():
-        value = getattr(overall, metric)
-        ok = value >= floor
-        if not ok:
+        verdict = gate_verdict(
+            floor=floor, spread=spreads[metric], n_queries=n_queries
+        )
+        if not verdict.passed:
             passed = False
-        status = "PASS" if ok else "FAIL"
-        print(f"[gate] {metric} = {value:.3f}  floor {floor:.3f}  {status}", file=sys.stderr)
+        print(verdict.describe(), file=sys.stderr)
     return passed
 
 
@@ -258,6 +279,20 @@ def main() -> int:
             "this: measured on one archive, 0.35s with no re-ranking, 2.3s "
             "at 8, 4.5s at 15, 8.6s at 30. Worth sweeping before enabling "
             "re-ranking on a server people wait on."
+        ),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Run the whole gold set N times and report each metric's spread. "
+            "A hosted embedder is not bit-reproducible, so rank-weighted "
+            "metrics move run to run even when nothing changed; with --check, "
+            "the gate is then judged on the WORST run and flagged when its "
+            "headroom is inside that noise. Costs N times the query "
+            "embeddings."
         ),
     )
     parser.add_argument("--no-hybrid", action="store_true")
@@ -352,14 +387,31 @@ def main() -> int:
                 retriever, queries, top_k=args.top_k, have_reranker=reranker is not None
             )
             return 0
-        records = _run_query_set(
-            retriever,
-            queries,
-            top_k=args.top_k,
-            hybrid=not args.no_hybrid,
-            rerank=args.rerank,
-            rerank_pool_size=args.rerank_pool_size,
-        )
+        if args.repeat < 1:
+            print("--repeat must be at least 1", file=sys.stderr)
+            return 2
+        runs: list[MetricSummary] = []
+        for attempt in range(args.repeat):
+            records = _run_query_set(
+                retriever,
+                queries,
+                top_k=args.top_k,
+                hybrid=not args.no_hybrid,
+                rerank=args.rerank,
+                rerank_pool_size=args.rerank_pool_size,
+            )
+            runs.append(aggregate(_scored(records)))
+            if args.repeat > 1 and not args.as_json:
+                r = runs[-1]
+                print(
+                    f"run {attempt + 1}/{args.repeat}: recall@{args.top_k}="
+                    f"{r.recall_at_k:.3f} MRR={r.mrr:.3f} nDCG@{args.top_k}="
+                    f"{r.ndcg_at_k:.3f}",
+                    file=sys.stderr,
+                )
+        spreads = spread_report(runs)
+        if args.repeat > 1 and not args.as_json:
+            _print_spread(spreads, args.top_k)
         if args.as_json:
             print(json.dumps(_build_json(records, args.top_k, not args.no_hybrid, args.rerank), indent=2))
         else:
@@ -375,8 +427,9 @@ def main() -> int:
             except ValueError as e:
                 print(f"Invalid thresholds file {check_path}: {e}", file=sys.stderr)
                 return 2
-            overall = aggregate(_scored(records))
-            return 0 if _print_gate(overall, thresholds) else 1
+            return 0 if _print_gate(
+                spreads, thresholds, n_queries=runs[-1].n if runs else None
+            ) else 1
 
         return 0
     finally:

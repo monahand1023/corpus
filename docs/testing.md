@@ -153,6 +153,46 @@ finds measures your own memory.
 with `--rerank`. If the MCP server does not rerank, neither should the eval —
 and vice versa, or the number describes a system nobody is running.
 
+### The eval has its own noise floor — measure it before trusting a third decimal
+
+A hosted embedding provider does not return a bit-identical vector for a fixed
+query. Measured directly: four embeddings of one query differed, and the
+retrieved ranks 2 and 3 swapped. So **result ORDER moves run to run while set
+membership usually does not**, which is exactly the split between recall@k and
+the rank-weighted metrics.
+
+```
+corpus-eval --repeat 5 --check tests/eval_thresholds.json
+```
+
+runs the whole gold set five times and prints each metric's min, max and
+spread, then judges the gate on the **worst** run rather than the average — a
+gate that passes on the mean and fails one run in three is a flaky gate, not a
+passing one. Measured across the three archives:
+
+| Archive | recall@k spread | MRR spread | nDCG@k spread |
+|---|---|---|---|
+| transcripts | 0.000 | 0.000 | 0.000 |
+| photos | 0.000 | 0.000 | 0.001 |
+| mail | 0.000 | 0.000 | **0.013** |
+
+The magnitude is archive-dependent — a denser archive has more near-ties for a
+perturbed vector to flip — which is precisely why it has to be measured per
+archive rather than assumed. On a larger 31-query gold set over a 45,594-chunk
+archive, MRR moved **0.027** between identical runs.
+
+Two distinct ways a floor can sit too close to the measurement, reported
+separately because conflating them makes the check cry wolf:
+
+- **FLAKY** — run-to-run noise can cross the floor, so the same data gives
+  different answers. Needs twice the observed spread as headroom.
+- **TIGHT** — the floor is closer than the smallest change the metric can
+  express. recall@k over 8 queries can only take values k/8, so a floor
+  0.025 below a measured 0.875 has **no** effective margin: any single query
+  regressing fails it. All three archives are currently in this state. That
+  may be exactly what their owner wants; the point is that it is now a
+  choice rather than a surprise.
+
 ### What the numbers look like in practice
 
 Three personal archives, each measured at the `top_k` its own MCP server
@@ -160,9 +200,12 @@ serves, hybrid retrieval, no reranker, eight queries each:
 
 | Archive | recall@k | MRR | nDCG@k |
 |---|---|---|---|
-| transcripts (k=5) | 0.625 | 0.442 | 0.486 |
+| transcripts (k=5) | 0.625 | 0.448 | 0.491 |
 | photos (k=8) | 0.625 | 0.479 | 0.256 |
-| mail (k=8) | 0.875 | 0.342 | 0.216 |
+| mail (k=8) | 0.875 | 0.342 | 0.203–0.216 |
+
+Re-measured 2026-09-16 with `--repeat 5`. Mail's nDCG is given as a RANGE
+because that is what it is — see the noise floor section above.
 
 The useful signal is the SHAPE, not the absolute values. Mail has the best
 recall and the worst MRR: the right thread is nearly always in the top 8, but

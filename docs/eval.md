@@ -165,6 +165,7 @@ On the sample corpus, hybrid (BM25 + vector, fused) beats vector-only on every m
 | `--compare` | off | Metric × config comparison table (see above) instead of the single-config report |
 | `--json` | off | Emit the structured result instead of human-readable tables |
 | `--check PATH` | off | JSON thresholds file; gate the exit code on the aggregate meeting each floor (single-config only, see [CI gate](#ci-gate-phase-3)) |
+| `--repeat N` | `1` | Run the whole gold set N times and report each metric's spread. With `--check`, the gate is judged on the WORST run. Costs N× the query embeddings (see [noise floor](#the-noise-floor)) |
 
 `corpus-eval` is **report-only by default**: without `--check`, it always exits `0` and does not fail on a low score. Regression gating lives in the pytest smoke floor (`tests/test_eval_queries_smoke.py`) and in `--check PATH` (a JSON thresholds file — see ["CI gate (Phase 3)"](#ci-gate-phase-3) below), which the `eval-gate` CI job runs on every push/PR.
 
@@ -216,5 +217,22 @@ Floors sit just under the measured baseline (recall@5 = 1.000, nDCG@5 = 0.898 �
 **Updating the floors:** when a legitimate retrieval improvement moves the sample-corpus numbers (new chunking strategy, better fusion, etc.), re-run the command above, update `examples/sample_corpus/thresholds.json` to sit just under the new baseline, and update the [Results](#results) table in the same commit — don't raise the floor to exactly the new number, leave a little headroom. Never lower a floor to make a real regression pass; if the gate fails, treat it as a bug to fix, not a threshold to relax.
 
 **No API key needed:** `eval-gate` runs `uv sync --dev` (no `--all-extras`), sets no `ANTHROPIC_API_KEY` or provider secret, and still exercises the full hybrid BM25+vector pipeline end to end via `provider="hash"` — proving the keyless path stays green on every push/PR to `main`.
+
+### The noise floor
+
+The CI gate above is safe from this, because `provider="hash"` is deterministic. **A gate against your own archive is not.**
+
+A hosted embedding provider does not return a bit-identical vector for a fixed query. Measured directly: four embeddings of one query differed, and the retrieved ranks 2 and 3 swapped. Result ORDER moves run to run; set membership usually does not — so `recall@k` sits still while MRR and nDCG wander. On a 31-query gold set over a live archive, MRR moved **0.027** between identical runs against an archive nothing had written to.
+
+Measure it before setting a floor:
+
+```sh
+corpus-eval --config your.toml --repeat 5 --check tests/eval_thresholds.json
+```
+
+This prints each metric's min/max/spread and judges the gate on the worst run. It flags two distinct problems, separately, because conflating them makes the check cry wolf:
+
+- **FLAKY** — run-to-run noise can cross the floor. The same data gives different answers, so the result is not reproducible. Needs at least twice the observed spread as headroom.
+- **TIGHT** — the floor is closer than the smallest change the metric can express. `recall@k` over 8 queries can only take values k/8, so a floor 0.025 below a measured 0.875 has **no** effective margin: any one query regressing fails it. Often deliberate — the point is to make it a choice rather than a surprise.
 
 **Deferred to Phase 2:** the LLM-as-judge / generation-quality gate (an opt-in job gated on `ANTHROPIC_API_KEY`) doesn't exist yet — it's out of scope for retrieval eval and belongs to Phase 2's generation work, not this gate.

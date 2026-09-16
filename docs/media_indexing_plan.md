@@ -9,7 +9,8 @@ Gap — no connector     .heic .jpg .m4a .mov .mp4 .png .sketch
 Indexable              .zip .md .txt .csv .mp3(tags only)
 ```
 
-The capability exists and works — 381 hours transcribed, 45,092 chunks, a
+The capability exists and works — 381 hours transcribed, 45,092 chunks as of
+2026-09-11, a
 gold set, measured retrieval — but it lives in a private consumer (`a document consumer`)
 as a 1,033-line script plus a 291-line connector. Nothing about it is secret;
 it was simply never packaged.
@@ -172,5 +173,5 @@ costs nothing.
 
 Not a rewrite. The pipeline works and its constants are documented with the
 measurements behind them (`WINDOW_S`, `OVERLAP_S`, `NO_SPEECH_MAX`,
-`VAD_SPEECH_PROB`, the 25 chars/second ceiling). The job is to move it behind
+`VAD_SPEECH_PROB`, `DEFAULT_MAX_CHARS_PER_SECOND`). The job is to move it behind
 a clean boundary without losing the reasons.
