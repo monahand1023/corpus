@@ -232,6 +232,19 @@ def save_transcript(conn: sqlite3.Connection, transcript: Transcript) -> None:
     conn.commit()
 
 
+def clear_failure(conn: sqlite3.Connection, path: str) -> None:
+    """Drop a `failures` row now that this file has an answer.
+
+    `failures` is deliberately excluded from `already_done` so a failed file
+    is retried -- and nothing removed the row when the retry worked. A live
+    sidecar held 94 failure rows for files that had since been given a proper
+    verdict: the table read as 94 broken files and there were none. A record
+    that says something which stopped being true is worse than no record,
+    because someone acts on it.
+    """
+    conn.execute("DELETE FROM failures WHERE path = ?", (path,))
+
+
 def save_no_text(
     conn: sqlite3.Connection,
     path: str,

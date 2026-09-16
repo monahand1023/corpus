@@ -538,12 +538,21 @@ def transcribe_directory(
                 # never act on. An error nobody can act on hides the ones
                 # they can.
                 stats.empty += 1
+                store.clear_failure(conn, str(path))
                 store.save_no_text(
                     conn, str(path), duration_s=0.0,
                     reason="no_audio_stream", policy=policy,
                 )
                 if on_progress:
-                    on_progress(index, len(todo), path, None)
+                    # NOT None. None is what a crash reports, and this is a
+                    # settled verdict -- 94 of these in a row printed as ERR
+                    # and looked exactly like a run falling over.
+                    on_progress(
+                        index,
+                        len(todo),
+                        path,
+                        Outcome(path=str(path), empty_reason="no_audio_stream"),
+                    )
                 continue
             except Exception as exc:  # one bad file must not end the run
                 # A failure is recorded and NOT skipped on the next run: it
@@ -577,6 +586,11 @@ def transcribe_directory(
                     ],
                     policy=policy,
                 )
+
+            # This file now has an answer, so any `failures` row from an
+            # earlier attempt has stopped being true. Clearing it here covers
+            # every verdict below in one place.
+            store.clear_failure(conn, str(path))
 
             if outcome.transcript is not None:
                 outcome.transcript.policy = policy
