@@ -148,6 +148,30 @@ def _window_is_junk(text: str, duration_s: float, settings: Settings) -> str | N
 _REPETITION_REASONS = frozenset({"looping_repetition", "degenerate_repetition"})
 
 
+def _is_physically_impossible(text: str, duration_s: float, settings: Settings) -> bool:
+    """Could this much text have come out of this much audio at all?
+
+    Split out of `_window_is_junk` because REINSTATEMENT NEEDS IT SEPARATELY.
+    That function returns at the first rule that matches, so a window caught
+    by a repetition rule never reaches the rate check below it -- and the
+    fallback then put the window back, treating a check that never ran as a
+    check that passed.
+
+    Found live: a 64-second video whose whole transcript was 235 characters
+    from a 1.7-second window -- 138 chars/s against a ceiling of 40. Dropped
+    as `looping_repetition` at 0.843, reinstated, then measured by the
+    whole-transcript judge against the FILE's 64 seconds (3.7 chars/s) and
+    kept. All three defences declined and the loop was indexed.
+
+    The repetition thresholds are a judgement call about taste -- a child
+    chanting one word is repetitive and real, which is why the fallback
+    exists. This is not a judgement call. No throat produces this.
+    """
+    return quality.impossible_speech_rate(
+        text.strip(), duration_s, ceiling=settings.max_chars_per_second
+    )
+
+
 def filter_windows(
     windows: Sequence[tuple[str, float, bool]], settings: Settings
 ) -> tuple[list[tuple[str, bool]], list[tuple[int, str]]]:
@@ -186,7 +210,23 @@ def filter_windows(
     ):
         # Nothing would survive and at least one drop was repetition:
         # reinstate those and let the permissive whole-transcript rule judge.
-        verdicts = [None if v in _REPETITION_REASONS else v for v in verdicts]
+        #
+        # Except where the rate check -- which sits BELOW the repetition rules
+        # and so never ran on these windows -- says the text could not have
+        # been spoken in the time available. Reinstating there does not hand
+        # the decision to a more permissive rule, it hands it to a rule
+        # measuring against the whole FILE's duration, where a burst of
+        # invented text averages down into silence and disappears.
+        verdicts = [
+            (
+                "impossible_speech_rate"
+                if _is_physically_impossible(text, duration, settings)
+                else None
+            )
+            if verdict in _REPETITION_REASONS
+            else verdict
+            for verdict, (text, duration, _) in zip(verdicts, windows, strict=True)
+        ]
 
     kept: list[tuple[str, bool]] = []
     dropped: list[tuple[int, str]] = []

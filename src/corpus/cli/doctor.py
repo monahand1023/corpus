@@ -246,6 +246,41 @@ WHOLE_FILE_FILTERS = (
     "impossible_speech_rate",
     "only_unspoken_languages",
 )
+# Filters that CANNOT fire in this pipeline, and why, keyed by the population
+# the explanation belongs to. Kept next to the lists they annotate so the
+# three are maintained together; a test asserts every name here is a real
+# filter OF THAT POPULATION, because a hand-maintained annotation beside a
+# hand-maintained list is exactly what drifts.
+#
+# "Never fired" and "cannot fire" need opposite responses -- "delete this or
+# find out why" versus "you never turned it on", or "it is doing its job one
+# population over" -- and reporting them identically is the same conflation
+# this command exists to eliminate.
+#
+# The bar for adding an entry is a MECHANISM plus evidence, not a hunch. Each
+# of these was confirmed against a live sidecar's own verdict counts.
+FILTER_NOTES: dict[tuple[str, str], str] = {
+    ("whole-file", "only_unspoken_languages"): (
+        "only fires when corpus-transcribe was given --language; "
+        "`judge_transcript` guards it with `if expected_languages and ...`. "
+        "Live evidence: 82 verdicts under the one policy that set languages, "
+        "none under any other."
+    ),
+    ("whole-file", "subtitle_boilerplate"): (
+        "shadowed by the per-window pass, which drops a sign-off window as "
+        "`caption_boilerplate` first -- the file then exits as `empty`, not "
+        "as this reason. Live evidence: 492 window drops and 436 empty files "
+        "against 0 here, and 15 here under the one policy predating it."
+    ),
+    ("whole-file", "impossible_speech_rate"): (
+        "shadowed harder: the per-window check applies the SAME ceiling over "
+        "a shorter span, so text that could fail against the file's duration "
+        "has already failed against its window's. Reaching this rule means "
+        "every window passed it, and the file's rate cannot exceed the "
+        "fastest window's."
+    ),
+}
+
 PER_WINDOW_FILTERS = (
     "empty",
     "caption_boilerplate",
@@ -319,10 +354,16 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
         if not idle:
             print(f"  [  ok  ] {coverage.describe()}, every filter has fired")
             continue
-        print(f"  [ warn ] {coverage.describe()}; never fired: {', '.join(idle)}")
-        print("           A filter that never fires is unnecessary or broken.")
-        print("           Judged within one rule set and one population, so "
-              "this is not a mismatch.")
+        gated = [n for n in idle if (label, n) in FILTER_NOTES]
+        dead = [n for n in idle if (label, n) not in FILTER_NOTES]
+        if dead:
+            print(f"  [ warn ] {coverage.describe()}; never fired: {', '.join(dead)}")
+            print("           A filter that never fires is unnecessary or broken.")
+            print("           Judged within one rule set and one population, so "
+                  "this is not a mismatch.")
+        for name in gated:
+            print(f"  [ info ] {name}: cannot fire here --")
+            print(f"           {FILTER_NOTES[label, name]}")
     return True
 
 

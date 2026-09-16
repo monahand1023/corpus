@@ -146,3 +146,51 @@ def test_an_all_looping_multi_window_file_also_falls_back():
     windows = [(chant, 30.0, i > 0) for i in range(3)]
     kept, _ = filter_windows(windows, Settings())
     assert len(kept) == 3, "a chant across three windows was deleted"
+
+
+# Verbatim from a live archive: a 64-second video whose ENTIRE transcript is
+# this, produced from a 1.7-second window. 235 characters in 1.7 seconds is
+# 138 per second, against a ceiling of 40 -- 3.4x past the point where a human
+# throat is the explanation. It is indexed, searchable content today.
+INDEXED_DECODE_LOOP = "ta lom, e o lomi, a stl, e4,8,1" + ",0" * 100
+
+
+def test_a_reinstated_window_still_faces_the_checks_it_never_reached():
+    """The fallback granted amnesty from a check that had not run.
+
+    `_window_is_junk` returns at the FIRST rule that matches. This window
+    matched `looping_repetition` (0.843 >= the strict 0.6), so the rate check
+    below it never executed. The fallback then reinstated the window -- and
+    reinstatement is not re-judgement, so the never-run check was treated
+    exactly like a check that had passed.
+
+    The whole-transcript judge then saw the same text against the FILE's 64
+    seconds instead of the window's 1.7: 3.7 chars/s, comfortably under the
+    ceiling, and 0.843 looping just under the permissive 0.85. All three
+    defences declined, and the loop was indexed.
+
+    The fallback exists so a strict REPETITION threshold cannot delete a short
+    real recording -- a child chanting one word is repetitive and real. It was
+    never meant to excuse text that could not physically have been spoken.
+    """
+    from corpus.transcripts.pipeline import filter_windows
+
+    kept, dropped = filter_windows([(INDEXED_DECODE_LOOP, 1.7, False)], Settings())
+
+    assert kept == [], f"a decode loop at 138 chars/s was reinstated: {kept}"
+    assert dropped == [(0, "impossible_speech_rate")], (
+        "dropped for the wrong reason -- the honest one is the physical rate, "
+        f"and it is what the dormancy report reads: {dropped}"
+    )
+
+
+def test_the_rate_backstop_does_not_touch_a_real_short_recording():
+    """The fallback's whole purpose, unchanged. A child repeating one word at
+    a human rate is repetitive, physically possible, and the reason this
+    archive exists."""
+    from corpus.transcripts.pipeline import filter_windows
+
+    chant = "Daddy! Daddy! Daddy! Daddy! Daddy! "
+    kept, dropped = filter_windows([(chant, 12.0, False)], Settings())
+
+    assert [t for t, _ in kept] == [chant.strip()], f"dropped a real clip: {dropped}"

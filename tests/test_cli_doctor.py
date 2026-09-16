@@ -478,3 +478,208 @@ def test_a_tight_margin_shows_the_text_it_measured(tmp_path, capsys):
 
     assert "real data" not in out, "the check still called its sample real"
     assert "playroom" in out, "the nearest recording was not named"
+
+
+# --- "never fired" and "cannot fire" are different facts ----------------------
+
+
+def test_a_filter_gated_on_configuration_is_not_reported_as_merely_dormant(
+    tmp_path, capsys
+):
+    """`only_unspoken_languages` is guarded by `if expected_languages and ...`,
+    so with no languages supplied to corpus-transcribe it CANNOT fire. The
+    dormancy check reported it beside filters that can fire and never have,
+    under the heading "A filter that never fires is unnecessary or broken".
+
+    Those need opposite responses: one is "delete this or find out why", the
+    other is "you never turned it on". Reporting them identically is the same
+    conflation -- could-not-run versus ran-and-found-nothing -- that this
+    command exists to eliminate.
+    """
+    import sqlite3
+
+    from corpus.cli.doctor import _check_filter_activity
+
+    db = tmp_path / "t.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE no_text (path TEXT, reason TEXT, policy TEXT, duration_s REAL)"
+    )
+    conn.execute("CREATE TABLE dropped_windows (path TEXT, reason TEXT, policy TEXT)")
+    # Enough verdicts to judge dormancy at all, none from the three quiet ones.
+    for i in range(250):
+        conn.execute(
+            "INSERT INTO no_text VALUES (?, 'silence', 'p', 1.0)", (f"/f{i}.mov",)
+        )
+    conn.commit()
+    conn.close()
+
+    _check_filter_activity(str(db), policy="p")
+    out = capsys.readouterr().out
+
+    assert "only_unspoken_languages" in out
+    assert "--language" in out, (
+        "the report did not say the filter is unconfigured rather than dead"
+    )
+
+
+def test_the_configuration_note_names_a_real_filter():
+    """A hand-maintained annotation beside a hand-maintained list is exactly
+    what drifts. This catches a rename, and an explanation filed against the
+    wrong population -- `impossible_speech_rate` is shadowed whole-file and
+    perfectly live per-window, so the note is only true of one of them."""
+    from corpus.cli.doctor import (
+        FILTER_NOTES,
+        PER_WINDOW_FILTERS,
+        WHOLE_FILE_FILTERS,
+    )
+
+    known = {"whole-file": WHOLE_FILE_FILTERS, "per-window": PER_WINDOW_FILTERS}
+    for population, name in FILTER_NOTES:
+        assert population in known, f"{population} is not a judged population"
+        assert name in known[population], f"{name} is not a {population} filter"
+
+
+def test_the_per_window_population_is_still_judged_when_whole_file_is_clean(
+    tmp_path, capsys
+):
+    """The two populations are judged in one loop, and the whole-file pass
+    returned out of it.
+
+    `if not dead: return True` ended the FUNCTION, not the iteration. So an
+    archive whose whole-file filters have all fired -- the healthy case, and
+    the one a maturing archive moves toward -- never had its per-window
+    filters examined at all, and the report looked complete. A check that
+    does not run is indistinguishable from a check that passed, which is the
+    defect this whole command exists to remove.
+    """
+    from corpus.cli.doctor import PER_WINDOW_FILTERS, WHOLE_FILE_FILTERS
+    from corpus.transcripts import store
+
+    db = tmp_path / "transcripts.db"
+    firing = [n for n in WHOLE_FILE_FILTERS if n != "only_unspoken_languages"]
+    with store.open_store(db) as conn:
+        # Whole-file: every filter that CAN fire has. Only the config-gated
+        # one is idle, so `dead` is empty and the loop used to return here.
+        for i in range(250):
+            store.save_no_text(
+                conn,
+                f"/w/{i}.m4a",
+                duration_s=1.0,
+                policy="p",
+                reason=firing[i % len(firing)],
+            )
+        # Per-window: one reason only, so the other four are genuinely dormant.
+        for i in range(250):
+            store.save_dropped_windows(
+                conn,
+                f"/w/{i}.m4a",
+                [{"text": "x", "reason": "empty"}],
+                policy="p",
+            )
+
+    ok = _check_filter_activity_out(str(db), capsys)
+
+    assert "per-window" in ok, f"the per-window population was never judged:\n{ok}"
+    for name in PER_WINDOW_FILTERS:
+        if name != "empty":
+            assert name in ok, f"{name} is dormant but was not named:\n{ok}"
+
+
+def _check_filter_activity_out(db, capsys) -> str:
+    from corpus.cli.doctor import _check_filter_activity
+
+    _check_filter_activity(db, policy="p")
+    return capsys.readouterr().out
+
+
+def test_a_filter_the_window_pass_claims_first_is_not_called_broken(tmp_path, capsys):
+    """"Never fired" and "cannot fire" again, from the other direction.
+
+    A whole transcript that is only "Thank you for watching" never reaches the
+    whole-file `subtitle_boilerplate` rule: the per-window pass drops that
+    window as `caption_boilerplate` first, and the file exits as `empty`.
+    Measured on the live archive -- 492 window drops for caption boilerplate
+    and 436 files out as empty, against 0 whole-file subtitle_boilerplate
+    under every policy that had per-window filtering, and 15 under the one
+    policy that predated it.
+
+    `impossible_speech_rate` is shadowed the same way and more strongly: the
+    window check uses the same ceiling over a SHORTER span, so text that would
+    fail over the file has already failed over its window.
+
+    Calling either one "unnecessary or broken" sends someone to delete a rule
+    that is doing its job one population over.
+    """
+    from corpus.cli.doctor import _check_filter_activity
+    from corpus.transcripts import store
+
+    db = tmp_path / "transcripts.db"
+    with store.open_store(db) as conn:
+        for i in range(250):
+            store.save_no_text(
+                conn, f"/w/{i}.m4a", duration_s=1.0, policy="p", reason="silence"
+            )
+
+    _check_filter_activity(str(db), policy="p")
+    out = capsys.readouterr().out
+
+    warned = [ln for ln in out.splitlines() if "never fired:" in ln]
+    assert warned, out
+    for name in ("subtitle_boilerplate", "impossible_speech_rate"):
+        assert name not in " ".join(warned), (
+            f"{name} is shadowed by the per-window pass, not broken:\n{out}"
+        )
+        assert name in out, f"{name} was dropped from the report entirely:\n{out}"
+
+
+def test_the_doctor_knows_every_reason_the_pipeline_can_emit():
+    """The two filter lists are hand-maintained beside a pipeline that is not.
+
+    A reason missing from them can never be reported dormant -- so the filter
+    that stopped working is exactly the one the dormancy check cannot see.
+    This derives the vocabulary from the source and compares.
+
+    Deliberately NOT a scan for every string literal: it reads the two
+    functions that decide a verdict, which is where the vocabulary lives.
+    """
+    import ast
+    from pathlib import Path
+
+    from corpus.cli.doctor import PER_WINDOW_FILTERS, WHOLE_FILE_FILTERS
+
+    src = Path("src/corpus/transcripts")
+
+    def literals(path: Path, func: str) -> set[str]:
+        tree = ast.parse((src / path).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == func:
+                out = set()
+                for sub in ast.walk(node):
+                    # `return "empty"` and `TranscriptVerdict(False, "empty")`
+                    if (
+                        isinstance(sub, ast.Return)
+                        and isinstance(sub.value, ast.Constant)
+                        and isinstance(sub.value.value, str)
+                    ):
+                        out.add(sub.value.value)
+                    if isinstance(sub, ast.Call) and len(sub.args) > 1:
+                        name = getattr(sub.func, "id", getattr(sub.func, "attr", ""))
+                        if name == "TranscriptVerdict" and isinstance(
+                            sub.args[1], ast.Constant
+                        ):
+                            out.add(sub.args[1].value)
+                return out
+        raise AssertionError(f"{func} not found in {path} -- it was renamed")
+
+    whole = literals(Path("quality.py"), "judge_transcript")
+    window = literals(Path("pipeline.py"), "_window_is_junk")
+
+    assert whole <= set(WHOLE_FILE_FILTERS), (
+        f"judge_transcript emits {whole - set(WHOLE_FILE_FILTERS)}, which the "
+        "doctor cannot report dormant"
+    )
+    assert window <= set(PER_WINDOW_FILTERS), (
+        f"_window_is_junk emits {window - set(PER_WINDOW_FILTERS)}, which the "
+        "doctor cannot report dormant"
+    )
