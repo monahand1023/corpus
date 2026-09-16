@@ -1,0 +1,64 @@
+#!/bin/sh
+# Refuse a commit whose MESSAGE names a private sibling repository.
+#
+# WHY THIS EXISTS. On 2026-06-01 a commit landed here whose message read
+# "...ported from sibling repo <private-name>". Normal provenance in any other
+# project; here it is the one sentence that must never be written. It was
+# force-pushed out on 2026-07-11 -- which makes an object UNREACHABLE, not
+# absent. GitHub kept serving it by SHA for two months, and no local command
+# could see it, because local gc had deleted the object every audit walks.
+#
+# The two guards that already existed could not have caught it:
+#   .githooks/pre-commit        matches PATHS
+#   tests/test_repo_hygiene.py  matches FILE CONTENT
+# A commit message passes through both untouched.
+#
+# WHY THE PATTERNS ARE NOT IN THIS FILE. This hook is tracked and this repo is
+# public. A denylist of the private names would publish the very strings it
+# exists to suppress -- the same reasoning as the pattern-based check in
+# tests/test_repo_hygiene.py. So the names live in .git/private-name-patterns,
+# which is inside .git/ and therefore can never be committed.
+#
+# One POSIX extended-regex pattern per line; blank lines and #comments ignored.
+
+MSG_FILE="$1"
+PATTERNS="$(git rev-parse --git-dir)/private-name-patterns"
+
+if [ ! -f "$PATTERNS" ]; then
+    echo "" >&2
+    echo "  NOTE: $PATTERNS is missing, so commit messages are NOT being" >&2
+    echo "  checked for private repository names. This file is intentionally" >&2
+    echo "  untracked -- recreate it after a fresh clone. One regex per line." >&2
+    echo "" >&2
+    exit 0
+fi
+
+# Strip comments/blanks, then test the message against each pattern.
+HITS=""
+while IFS= read -r pat; do
+    case "$pat" in ''|\#*) continue ;; esac
+    if grep -qiE "$pat" "$MSG_FILE" 2>/dev/null; then
+        HITS="$HITS $pat"
+    fi
+done < "$PATTERNS"
+
+if [ -n "$HITS" ]; then
+    echo "" >&2
+    echo "  ################################################################" >&2
+    echo "  #            COMMIT BLOCKED: private name in message           #" >&2
+    echo "  ################################################################" >&2
+    echo "" >&2
+    echo "  The commit MESSAGE matches a private-name pattern." >&2
+    echo "  (The pattern is not printed here -- printing it would put the" >&2
+    echo "   string into your terminal scrollback and CI logs.)" >&2
+    echo "" >&2
+    echo "  Rewrite the message without naming the private repository." >&2
+    echo "  Describe WHAT the change does, not which sibling repo it came from." >&2
+    echo "" >&2
+    echo "  Do NOT 'fix' this after pushing. A force-push does not delete:" >&2
+    echo "  GitHub serves unreachable objects by SHA and only GitHub Support" >&2
+    echo "  can purge them. Get the message right before it leaves this machine." >&2
+    echo "" >&2
+    exit 1
+fi
+exit 0
