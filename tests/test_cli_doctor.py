@@ -126,3 +126,28 @@ def test_index_quality_on_a_real_index_still_reports_ok(tmp_path, capsys) -> Non
 
     assert "[  ok  ]" in out, out
     assert ok is True
+
+
+def test_a_broken_detector_fails_the_doctor_rather_than_being_skipped(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """The swallow-as-skip trap, one level up.
+
+    `_check_index_quality` catches broad Exception and reports SKIPPED. A
+    detector that cannot fire would be swallowed as "skipped (could not
+    scan)" -- turning the loudest possible signal into the quietest, which is
+    the pattern this whole mechanism exists to remove.
+    """
+    from corpus.cli.doctor import _check_index_quality
+
+    monkeypatch.setattr(
+        "corpus.survey.index_quality.subtitle_boilerplate", lambda _t: False
+    )
+    ok = _check_index_quality(
+        _index(tmp_path, [("notes", "a.md", "ordinary text long enough to scan")])
+    )
+    out = capsys.readouterr().out
+
+    assert ok is False, "a broken detector must fail, not skip"
+    assert "SKIPPED" not in out, out
+    assert "[ FAIL ]" in out, out

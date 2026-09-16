@@ -24,6 +24,7 @@ is an unknown, and an unknown must be louder than a pass, not quieter.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -62,4 +63,41 @@ class Coverage:
         return f"{self.examined:,} {self.unit}"
 
 
-__all__ = ["Coverage"]
+class DetectorBroken(RuntimeError):
+    """A detector could not find a positive it is known to match.
+
+    Raised instead of returning "nothing found", because those are different
+    facts and only one of them is reassuring.
+    """
+
+
+def self_check(
+    detector: Callable[[str], bool], *, positive: str, label: str
+) -> None:
+    """Prove `detector` fires on a string it must match, before trusting it.
+
+    A scanner built on a detector that cannot fire reports a clean result
+    forever. That is not hypothetical here: a review of an early caption
+    phrase list found 22 of 45 entries could never match anything, and the
+    tests passed because they asserted against the list rather than against
+    strings a model really produces.
+
+    `positive` is deliberately a caller-supplied sample rather than something
+    generated here -- the planted needle has to be the shape the real detector
+    is meant to catch, and only the caller knows that.
+    """
+    try:
+        fired = detector(positive)
+    except Exception as exc:  # a detector that throws has not "found nothing"
+        raise DetectorBroken(
+            f"{label}: detector raised {type(exc).__name__} on a known positive, "
+            f"so this scan cannot be trusted"
+        ) from exc
+    if not fired:
+        raise DetectorBroken(
+            f"{label}: detector did not fire on a known positive, so it cannot "
+            f"find anything -- this scan proves nothing"
+        )
+
+
+__all__ = ["Coverage", "DetectorBroken", "self_check"]

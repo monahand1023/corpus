@@ -194,6 +194,7 @@ def _check_index_quality(db_path: str | None) -> bool:
         print("\nindex quality     SKIPPED (no --config or --db)")
         return True
     from corpus.survey.index_quality import NotACorpusIndexError, run_index_quality
+    from corpus.verify import DetectorBroken
 
     print("\nindex quality")
     try:
@@ -201,6 +202,12 @@ def _check_index_quality(db_path: str | None) -> bool:
     except NotACorpusIndexError as exc:
         print(f"  SKIPPED ({exc})")
         return True
+    except DetectorBroken as exc:
+        # Deliberately NOT caught by the broad handler below. A detector that
+        # cannot fire is the loudest signal this command has; swallowing it as
+        # "skipped" would turn it into the quietest.
+        print(f"  [ FAIL ] {exc}")
+        return False
     except Exception as exc:
         print(f"  SKIPPED (could not scan: {type(exc).__name__})")
         return True

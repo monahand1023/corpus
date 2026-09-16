@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from corpus.survey.index_quality import NotACorpusIndexError, run_index_quality
 
 SCHEMA = """
@@ -182,3 +184,31 @@ def test_filtering_to_a_source_type_that_does_not_exist_is_vacuous(
 
     assert result.coverage.vacuous is True
     assert result.clean is False
+
+
+def test_a_scan_whose_detector_cannot_fire_refuses_to_report_clean(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The regression this codebase already suffered, generalised.
+
+    22 of 45 entries in an early caption phrase list could never match
+    anything, and the tests passed because they asserted against the list
+    instead of against real model output. A scanner in that state reports a
+    clean index forever, which is worse than reporting an error.
+    """
+    from corpus.verify import DetectorBroken
+
+    db = _db(tmp_path, [("notes", "a.md", "ordinary text that is long enough")])
+    # Simulate a phrase list that has been emptied or broken.
+    monkeypatch.setattr(
+        "corpus.survey.index_quality.subtitle_boilerplate", lambda _t: False
+    )
+
+    with pytest.raises(DetectorBroken) as caught:
+        run_index_quality(db)
+    assert "proves nothing" in str(caught.value)
+
+
+def test_a_working_detector_scans_normally(tmp_path: Path) -> None:
+    db = _db(tmp_path, [("notes", "a.md", "ordinary text that is long enough")])
+    assert run_index_quality(db).clean is True

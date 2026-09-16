@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpus.transcripts.quality import strip_caption_tail, subtitle_boilerplate
-from corpus.verify import Coverage
+from corpus.verify import Coverage, self_check
 
 # Read in batches so a large index does not have to fit in memory, and so a
 # scan cannot hold a long transaction against a database a server is serving.
@@ -94,6 +94,22 @@ def run_index_quality(
     caps how many example findings are RETAINED -- counts are always exact,
     because the point is a number you can act on, not a wall of text.
     """
+    # Prove the detectors can fire BEFORE trusting anything they do not find.
+    # A phrase list that has been emptied, or normalisation that stops
+    # matching, turns this scan into one that reports a clean index forever --
+    # and that already happened here: 22 of 45 entries in an early list could
+    # never match anything, while the tests passed.
+    self_check(
+        subtitle_boilerplate,
+        positive="Thanks for watching!",
+        label="whole-chunk boilerplate",
+    )
+    self_check(
+        lambda text: strip_caption_tail(text) != text,
+        positive="and then we drove home. Thanks for watching",
+        label="sign-off tail",
+    )
+
     result = IndexQualityResult()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
