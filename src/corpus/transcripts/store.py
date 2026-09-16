@@ -108,6 +108,10 @@ _ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "transcripts": (("policy", "TEXT NOT NULL DEFAULT ''"),),
     "dropped_windows": (("reason", "TEXT NOT NULL DEFAULT ''"),),
+    # How many times in a row this file failed the SAME way. A timeout is
+    # retried because a hang is usually about the run; that stops being true
+    # by the third identical hang. See `corpus.transcripts.run`.
+    "failures": (("attempts", "INTEGER NOT NULL DEFAULT 1"),),
 }
 
 
@@ -298,11 +302,32 @@ def save_no_text(
 
 
 def save_failure(conn: sqlite3.Connection, path: str, error: str) -> None:
+    """Record a failure, counting consecutive REPEATS of the same one.
+
+    A different error resets the count: three failures for three different
+    reasons have not told us anything consistent, and treating them as three
+    of the same would write a file off on the strength of coincidence.
+    """
+    previous = conn.execute(
+        "SELECT error, attempts FROM failures WHERE path = ?", (path,)
+    ).fetchone()
+    attempts = 1
+    if previous is not None and previous["error"] == error:
+        attempts = int(previous["attempts"] or 1) + 1
     conn.execute(
-        "INSERT OR REPLACE INTO failures (path, error, failed_at) VALUES (?,?,?)",
-        (path, error, _now()),
+        "INSERT OR REPLACE INTO failures (path, error, failed_at, attempts)"
+        " VALUES (?,?,?,?)",
+        (path, error, _now(), attempts),
     )
     conn.commit()
+
+
+def failure_attempts(conn: sqlite3.Connection, path: str) -> int:
+    """How many times in a row this file failed the same way. 0 if never."""
+    row = conn.execute(
+        "SELECT attempts FROM failures WHERE path = ?", (path,)
+    ).fetchone()
+    return int(row["attempts"] or 1) if row else 0
 
 
 # What a non-finite measurement becomes on its way into the table.

@@ -353,6 +353,22 @@ def partition_by_duration(
     return keep, skip
 
 
+# How many identical timeouts before a file is treated as settled.
+#
+# A timeout is a failure and failures are retried, because a hang is usually
+# about the RUN -- thermal state, memory pressure, a transient decode loop --
+# rather than the file. That holds for the first hang and stops holding for
+# the third: one recording on a live archive hung three passes running (45
+# minutes before the deadline existed, then 162 seconds, then 162 again), and
+# retrying it forever bought nothing while costing the deadline every time.
+#
+# Three, not one, because writing a file off on its first bad night is exactly
+# the mistake this is trying not to make. The resulting verdict carries a
+# policy fingerprint like any other, so a rule change brings it back: this is
+# "we asked three times", not "this file is worthless".
+MAX_TIMEOUT_ATTEMPTS = 3
+
+
 def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
     """Files the current policy invalidated, read from the STORE.
 
@@ -532,6 +548,21 @@ def transcribe_directory(
                 stats.failed += 1
                 stats.errors.append((str(path), str(exc)))
                 store.save_failure(conn, str(path), str(exc))
+                if store.failure_attempts(conn, str(path)) >= MAX_TIMEOUT_ATTEMPTS:
+                    # It has never once completed. Settle it so it stops
+                    # costing the deadline on every future pass, keeping the
+                    # policy fingerprint so a rule change brings it back.
+                    store.save_no_text(
+                        conn, str(path), duration_s=0.0,
+                        reason="repeatedly_timed_out", policy=policy,
+                    )
+                    logger.warning(
+                        "%s has now timed out %d times; recording it as "
+                        "repeatedly_timed_out so it is not retried until a "
+                        "rule changes",
+                        path,
+                        MAX_TIMEOUT_ATTEMPTS,
+                    )
                 logger.warning("transcription %s for %s", exc, path)
                 if on_progress:
                     on_progress(index, len(todo), path, None)
