@@ -205,8 +205,16 @@ def _check_index_quality(db_path: str | None) -> bool:
         print(f"  SKIPPED (could not scan: {type(exc).__name__})")
         return True
 
+    # Vacuous BEFORE clean: a scan that examined nothing found nothing, and
+    # the second half of that sentence is the part people read.
+    if result.coverage.vacuous:
+        print(f"  [ FAIL ] {result.coverage.describe()} -- this scan proves nothing")
+        print("           Wrong --db, or a --source-type that is not in this index?")
+        return False
     if result.clean:
-        print(f"  [  ok  ] {result.scanned_chunks} chunks, no transcription artefacts")
+        print(
+            f"  [  ok  ] {result.coverage.describe()}, no transcription artefacts"
+        )
         return True
     # Only a chunk that is ENTIRELY boilerplate is a filtering defect and
     # fails. A sign-off glued to real speech is a known, re-ingestable state,

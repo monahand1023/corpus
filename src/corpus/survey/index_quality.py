@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpus.transcripts.quality import strip_caption_tail, subtitle_boilerplate
+from corpus.verify import Coverage
 
 # Read in batches so a large index does not have to fit in memory, and so a
 # scan cannot hold a long transaction against a database a server is serving.
@@ -65,8 +66,20 @@ class IndexQualityResult:
         return len(self.whole_chunk) + len(self.tails)
 
     @property
+    def coverage(self) -> Coverage:
+        """What this scan actually examined. Zero is not a pass."""
+        return Coverage(examined=self.scanned_chunks, unit="chunks")
+
+    @property
     def clean(self) -> bool:
-        return self.affected_chunks == 0
+        """No artefacts found AND something was actually examined.
+
+        The second half is load-bearing. This was `affected_chunks == 0`,
+        which is trivially true for an empty index -- so a scan pointed at the
+        wrong database, or filtered to a source type that does not exist,
+        printed "no transcription artefacts" having looked at nothing.
+        """
+        return bool(self.coverage) and self.affected_chunks == 0
 
 
 def run_index_quality(

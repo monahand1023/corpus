@@ -77,3 +77,52 @@ def test_the_auditor_resolves_the_same_path_the_writer_appends_to(tmp_path) -> N
     )
     assert configured_log_path(explicit) == Path("/somewhere/else.jsonl")
     assert configured_log_path(CorpusConfig(db_path=tmp_path / "c.db")) is None
+
+
+# --- a check that examined nothing must say so, not imply a pass -------------
+
+
+def _index(tmp_path, rows) -> str:
+    import sqlite3
+
+    p = tmp_path / "index.db"
+    c = sqlite3.connect(p)
+    c.executescript(
+        "CREATE TABLE chunks (id TEXT PRIMARY KEY, source_type TEXT NOT NULL,"
+        " source_key TEXT NOT NULL, content TEXT NOT NULL);"
+    )
+    c.executemany(
+        "INSERT INTO chunks (id, source_type, source_key, content) VALUES (?,?,?,?)",
+        [(str(i), st, k, t) for i, (st, k, t) in enumerate(rows)],
+    )
+    c.commit()
+    c.close()
+    return str(p)
+
+
+def test_index_quality_on_an_empty_index_does_not_report_ok(tmp_path, capsys) -> None:
+    """It printed "[ ok ] 0 chunks, no transcription artefacts".
+
+    A clean bill of health having examined nothing -- which is what a scan
+    pointed at the wrong database looks like.
+    """
+    from corpus.cli.doctor import _check_index_quality
+
+    ok = _check_index_quality(_index(tmp_path, []))
+    out = capsys.readouterr().out
+
+    assert "[  ok  ]" not in out, out
+    assert "examined nothing" in out, out
+    assert ok is False, "a vacuous check is not a passing check"
+
+
+def test_index_quality_on_a_real_index_still_reports_ok(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_index_quality
+
+    ok = _check_index_quality(
+        _index(tmp_path, [("notes", "a.md", "we fed the ducks by the pond for an hour")])
+    )
+    out = capsys.readouterr().out
+
+    assert "[  ok  ]" in out, out
+    assert ok is True

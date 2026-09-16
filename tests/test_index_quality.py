@@ -139,3 +139,46 @@ def test_a_database_that_is_not_an_index_says_so(tmp_path: Path) -> None:
 
     with pytest.raises(NotACorpusIndexError, match="chunks"):
         run_index_quality(path)
+
+
+# --- a scan that examined nothing is not a clean scan ------------------------
+
+
+def test_an_empty_index_is_not_reported_as_clean(tmp_path: Path) -> None:
+    """The defect: `clean` was `affected_chunks == 0`, trivially true at zero.
+
+    Scanning an empty index printed "no transcription artefacts" -- a clean
+    bill of health having examined nothing. Pointed at the wrong database, or
+    at a source type that does not exist, the scan reassured instead of
+    saying it had no idea.
+    """
+    db = _db(tmp_path, [])
+    result = run_index_quality(db)
+
+    assert result.scanned_chunks == 0
+    assert result.coverage.vacuous is True
+    assert result.clean is False, "a vacuous scan proves nothing"
+
+
+def test_a_scan_of_real_chunks_reports_its_coverage(tmp_path: Path) -> None:
+    db = _db(tmp_path, [
+        ("notes", "a.md", "we drove up to the lake and fed the ducks all afternoon"),
+        ("notes", "b.md", "the quarterly numbers came in ahead of plan this time"),
+    ])
+    result = run_index_quality(db)
+
+    assert result.coverage.examined == 2
+    assert result.coverage.describe() == "2 chunks"
+    assert result.clean is True
+
+
+def test_filtering_to_a_source_type_that_does_not_exist_is_vacuous(
+    tmp_path: Path,
+) -> None:
+    # The realistic way to get a false clean: a typo in --source-type, or a
+    # source that was renamed. The index is full; the scan still saw nothing.
+    db = _db(tmp_path, [("notes", "a.md", "real text that is long enough to keep")])
+    result = run_index_quality(db, source_types=("transcrpits",))
+
+    assert result.coverage.vacuous is True
+    assert result.clean is False

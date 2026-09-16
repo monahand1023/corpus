@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from corpus.verify import Coverage
+
 # A query with no proper nouns in it, so it is equally (un)suited to every
 # archive. The point is that retrieval RUNS and returns plausibly-shaped hits,
 # not that it returns good ones -- ranking quality is corpus-eval's job.
@@ -350,6 +352,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
         targets = kept
+        if not targets:
+            # `all([])` is True, so without this the run reports success
+            # having tested nothing. The skip notice above goes to stderr and
+            # is easy to miss; the exit status is what CI reads.
+            print(
+                f"error: {Coverage(0, 'servers').describe()} -- all "
+                f"{skipped} configured server(s) are out of scope without --all.",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.only:
         wanted = set(args.only)

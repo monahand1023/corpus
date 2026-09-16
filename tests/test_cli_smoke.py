@@ -287,3 +287,54 @@ def test_a_query_containing_an_equals_sign_is_not_a_server_override() -> None:
     probes, default = _split_probes(["revenue=2024"], {"live"}, "original")
     assert probes == {}
     assert default == "revenue=2024"
+
+
+# --- selecting zero servers is not a passing run -----------------------------
+
+
+def test_a_run_that_tested_no_servers_fails_rather_than_reporting_success(
+    tmp_path, capsys
+) -> None:
+    """`all([])` is True, so a run that selected NOTHING exited 0.
+
+    The unguarded route is the corpus-scoping filter: with a Claude config and
+    no `--all`, every non-corpus server is dropped. If that leaves nothing,
+    the notice goes to stderr and the run reports success having tested no
+    server at all. `--only` with no match was already guarded; this was not.
+
+    Measured on a real machine: "1/2 servers healthy" with four archives
+    configured, because two launch through their own entry points.
+    """
+    import json
+
+    from corpus.cli.smoke import main
+
+    cfg = tmp_path / "claude.json"
+    cfg.write_text(json.dumps({"mcpServers": {
+        "pencil": {"command": "some-other-mcp", "args": []},
+        "widget": {"command": "unrelated-server", "args": []},
+    }}))
+
+    code = main(["--claude-config", str(cfg)])
+    err = capsys.readouterr().err
+
+    assert code != 0, "a run that tested nothing must not report success"
+    assert "examined nothing" in err.lower() or "no servers" in err.lower(), err
+
+
+def test_a_run_with_real_servers_is_unaffected(tmp_path, capsys) -> None:
+    # The guard must not fire when there IS something in scope; the server
+    # itself will fail to launch here, which is fine -- what matters is that
+    # the run was not rejected as vacuous.
+    import json
+
+    from corpus.cli.smoke import main
+
+    cfg = tmp_path / "claude.json"
+    cfg.write_text(json.dumps({"mcpServers": {
+        "a": {"command": "corpus-mcp", "args": ["--config", "a.toml"]},
+    }}))
+
+    main(["--claude-config", str(cfg), "--timeout", "5"])
+    combined = capsys.readouterr()
+    assert "examined nothing" not in (combined.out + combined.err).lower()
