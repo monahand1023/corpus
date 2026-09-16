@@ -39,6 +39,15 @@ voyage = ["voyageai>=0.3.7,<0.5"]
 # (torch.jit.script memory corruption; <= 2.12.0). corpus never calls jit.script,
 # but the floor stops the lock regressing into the vulnerable range.
 reranker = ["sentence-transformers>=5.5.0,<6.0", "torch>=2.13.0"]
+# Optional: decode audio and find the speech in it. Needed to PRODUCE a
+# transcript sidecar; reading an existing one needs nothing. ffmpeg is a
+# system binary and cannot be declared here -- corpus.transcripts.audio
+# checks for it and says so.
+transcribe = ["silero-vad>=6.0", "torch>=2.13.0", "numpy>=1.26"]
+# Optional: the Apple-Silicon Whisper backend. Deliberately separate from
+# [transcribe], which is platform-neutral -- installing this on other
+# hardware would fail, and a backend is meant to be swappable.
+"transcribe-mlx" = ["mlx-whisper>=0.4.0"]
 # Optional: Claude Haiku per-doc summaries.
 summarizer = ["anthropic>=0.50,<1.0"]
 pdf = ["pypdf>=6.11.0,<7.0"]
@@ -150,6 +159,18 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "voyageai"
 implicit_reexport = true
+
+# mlx-whisper ships no stubs, and is Apple-Silicon only: it is absent
+# from every environment mypy runs in except a developer's Mac.
+[[tool.mypy.overrides]]
+module = "mlx_whisper"
+ignore_missing_imports = true
+
+# silero-vad is located by find_spec rather than imported, but torch
+# itself is an optional extra and absent from a base install.
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "silero_vad"]
+ignore_missing_imports = true
 
 # openpyxl ships no stubs or py.typed marker.
 [[tool.mypy.overrides]]
