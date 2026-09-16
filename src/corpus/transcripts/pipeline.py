@@ -68,6 +68,7 @@ class Settings:
     overlap_s: float = OVERLAP_S
     silence_max_prob: float = 0.05
     max_repeat_share: float = 0.9
+    max_looping_share: float = quality.DEFAULT_MAX_LOOPING_SHARE
     max_chars_per_second: float = quality.DEFAULT_MAX_CHARS_PER_SECOND
     unspoken_max_chars: int = quality.DEFAULT_UNSPOKEN_MAX_CHARS
 
@@ -78,6 +79,7 @@ class Settings:
             "overlap_s": self.overlap_s,
             "silence_max_prob": self.silence_max_prob,
             "max_repeat_share": self.max_repeat_share,
+            "max_looping_share": self.max_looping_share,
             "max_chars_per_second": self.max_chars_per_second,
             "unspoken_max_chars": self.unspoken_max_chars,
             "expected_languages": sorted(self.expected_languages),
@@ -129,6 +131,8 @@ def _window_is_junk(text: str, window: Window, settings: Settings) -> str | None
         return "caption_boilerplate"
     if quality.repeat_share(stripped) >= settings.max_repeat_share:
         return "degenerate_repetition"
+    if quality.looping_share(stripped) >= settings.max_looping_share:
+        return "looping_repetition"
     if quality.impossible_speech_rate(
         stripped, window.duration, ceiling=settings.max_chars_per_second
     ):
@@ -235,6 +239,7 @@ def transcribe_file(
         languages=languages,
         expected_languages=settings.expected_languages or None,
         max_repeat_share=settings.max_repeat_share,
+        max_looping_share=settings.max_looping_share,
         max_chars_per_second=settings.max_chars_per_second,
         unspoken_max_chars=settings.unspoken_max_chars,
     )

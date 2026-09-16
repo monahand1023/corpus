@@ -15,6 +15,7 @@ from corpus.transcripts import (
     TranscriptVerdict,
     impossible_speech_rate,
     judge_transcript,
+    looping_share,
     only_unspoken_languages,
     repeat_share,
     strip_caption_tail,
@@ -70,9 +71,21 @@ def test_expected_languages_are_the_callers_to_supply() -> None:
 
 # Varied prose, so only the RATE can flag it -- a wall of one character is
 # degenerate repetition as well, and would not prove this rule fires.
-_FAST_BUT_VARIED = ("the quarterly numbers came in ahead of plan and the team "
-                    "has already started work on the next phase of migration "
-                    "which we expect to finish before the end of the year ") * 4
+# Genuinely varied, not one sentence repeated. It used to be `... * 4`, which
+# made it a LOOP -- the fixture contradicted its own name, and only the
+# looping signal noticed. A rate test whose text is degenerate cannot show
+# that the rate signal is what rejected it.
+_FAST_BUT_VARIED = (
+    "the quarterly numbers came in ahead of plan and the team has already "
+    "started work on the next phase of migration which we expect to finish "
+    "before the end of the year while hiring continues across both sites and "
+    "the vendor contract is renegotiated ahead of renewal in the spring which "
+    "should free up budget for the tooling work everyone has been asking about "
+    "since the reorganisation was announced at the all hands in February and "
+    "the backlog was rewritten around the new priorities agreed with finance "
+    "after the audit closed out with no material findings this time and the "
+    "regional leads signed off on the revised dates without much argument"
+)
 
 
 def test_a_decode_loop_exceeds_any_real_speech_rate() -> None:
@@ -138,7 +151,13 @@ def test_a_long_foreign_tagged_transcript_survives_the_language_rule() -> None:
     Length is what keeps the language signal to the sign-offs it is for.
     """
     v = judge_transcript(
-        "I'm going to put on some diamonds. Uh, the lollipops? Yeah. " * 6,
+        "I'm going to put on some diamonds. Uh, the lollipops? Yeah, grab a "
+        "couple for the car. Did you want the blue ones or should I leave "
+        "them? Leave them, we can come back tomorrow before the train. Okay "
+        "but bring the small bag this time, the big one was a nightmare on "
+        "the escalator. Fine. Are we eating first or after we check out of "
+        "the hotel? After, I think, it gets busy around noon and the queue "
+        "goes round the corner.",
         duration_s=124.8, languages=["haw", "pt"], expected_languages=SPOKEN)
     assert v.keep is True
 
@@ -557,3 +576,81 @@ def test_a_talk_ending_in_thank_you_very_much_survives_the_new_pass() -> None:
     # because dropping transcripts containing it deleted 732 real recordings.
     talk = "and it changed how we staffed the team for two quarters. Thank you very much."
     assert strip_caption_tail(talk) == talk
+
+
+# ---------------------------------------------------------------------------
+# Loops.
+#
+# Found by transcribing 200 real recordings and reading what survived. Six
+# were the transcriber stuck in a loop -- "I am going to draw a small map."
+# repeated to fill the window. Every one passed `repeat_share`, whose highest
+# score across all 74 kept transcripts was 0.250 against a 0.9 threshold: the
+# metric divides one trigram's count by the total, so the denominator grows
+# with the text and a looped phrase can never approach 1.0.
+# ---------------------------------------------------------------------------
+
+
+def test_repeat_share_structurally_cannot_see_a_looped_phrase() -> None:
+    # Pins the reason a second signal exists, so nobody "simplifies" it away.
+    looped = "I am going to draw a small map. " * 8
+    assert repeat_share(looped) < 0.2
+    assert looping_share(looped) > 0.7
+
+
+def test_repeat_share_still_sees_one_unit_hammered() -> None:
+    # The shape it DOES see; neither signal subsumes the other.
+    assert repeat_share("okay okay okay okay okay okay okay") > 0.9
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm going to eat the rest of the food. " * 9,
+        "The water is very clear and clear. " * 5,
+        "Blimvara " * 5,
+        "そのため、お店の中にもお店があります。" * 5,
+    ],
+)
+def test_a_looping_transcriber_is_rejected(text: str) -> None:
+    assert not judge_transcript(text, duration_s=30.0, languages=["en"]).keep
+    assert judge_transcript(text, duration_s=30.0, languages=["en"]).reason == (
+        "looping_repetition"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Real speech that repeats. These are the recordings the archive is
+        # kept FOR, and a share threshold alone rejects the first outright --
+        # it scores 0.667. The unit floor is what protects them.
+        "Papa! Papa! Papa! Papa!",
+        "Mama, mama, mama!",
+        "No no no no!",
+        "Look! Look at that! Look!",
+        "Hey! Hey! Come here!",
+        "おいしい、おいしい、おいしい",
+    ],
+)
+def test_someone_repeating_a_word_is_not_a_loop(text: str) -> None:
+    assert looping_share(text) == 0.0
+    assert judge_transcript(text, duration_s=12.0, languages=["en"]).keep
+
+
+def test_ordinary_long_speech_scores_zero() -> None:
+    real = (
+        "we drove up to the lake and the kids fed the ducks all afternoon before "
+        "the rain started and we had to run back to the car with the picnic things"
+    )
+    assert looping_share(real) == 0.0
+    assert judge_transcript(real, duration_s=30.0, languages=["en"]).keep
+
+
+def test_the_looping_threshold_is_in_the_policy_fingerprint() -> None:
+    # A signal absent from the fingerprint leaves stale verdicts alive: files
+    # rejected under the old threshold would never be retried under a new one.
+    from corpus.transcripts.pipeline import Settings
+
+    assert "max_looping_share" in Settings().as_policy("m")
+    loose = Settings(max_looping_share=0.95).as_policy("m")
+    assert loose != Settings().as_policy("m")

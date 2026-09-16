@@ -26,12 +26,14 @@ from functools import cache
 __all__ = [
     "CAPTION_SIGNOFF_TAILS",
     "DEFAULT_MAX_CHARS_PER_SECOND",
+    "DEFAULT_MAX_LOOPING_SHARE",
     "DEFAULT_UNSPOKEN_MAX_CHARS",
     "SUBTITLE_BOILERPLATE",
     "SUBTITLE_CREDIT_PREFIXES",
     "TranscriptVerdict",
     "impossible_speech_rate",
     "judge_transcript",
+    "looping_share",
     "only_unspoken_languages",
     "repeat_share",
     "strip_caption_tail",
@@ -537,27 +539,74 @@ def strip_caption_tail(
 # perfect 1.00 and a long-enough one was rejected as degenerate.
 _MIN_UNITS_FOR_RATIO = 4
 
+# Measured: 6 true loops at 0.712-0.886, next-highest real text at 0.379.
+DEFAULT_MAX_LOOPING_SHARE = 0.6
 
-def repeat_share(text: str) -> float:
-    """Largest share of `text` occupied by one repeated unit, 0.0-1.0.
 
-    Returns 0.0 when the text is too short to measure. A ratio over one or two
-    units says nothing about repetition, and reporting 1.0 there turns the
-    shortest real utterances into false positives.
+def _repetition_units(text: str) -> list[str]:
+    """Word trigrams, falling back to character 6-grams.
+
+    The fallback covers scripts without word spaces and a single enormous
+    "word" -- "Mmmmmmmmmm..." is one token, so word units cannot see it, and
+    it is exactly the degenerate output to catch.
     """
     units: list[str] = []
     if not _UNSPACED_SCRIPT.search(text):
         words = text.lower().split()
         units = [" ".join(words[i:i + 3]) for i in range(len(words) - 2)]
     if len(units) < _MIN_UNITS_FOR_RATIO:
-        # Character n-grams, for scripts without word spaces and for a single
-        # enormous "word" -- "Mmmmmmmmmm..." is one token, so word units
-        # cannot see it, and it is exactly the degenerate output to catch.
         lowered = text.lower()
         units = [lowered[i:i + 6] for i in range(len(lowered) - 5)]
+    return units
+
+
+def repeat_share(text: str) -> float:
+    """Largest share of `text` occupied by ONE repeated unit, 0.0-1.0.
+
+    Returns 0.0 when the text is too short to measure. A ratio over one or two
+    units says nothing about repetition, and reporting 1.0 there turns the
+    shortest real utterances into false positives.
+
+    Sees single-unit hammering ("okay okay okay okay") and little else. It
+    cannot see a repeated PHRASE, because the denominator grows with the text
+    while the numerator counts one trigram: a seven-word phrase looped twenty
+    times scores about 0.145. `looping_share` is the signal for that shape.
+    """
+    units = _repetition_units(text)
     if len(units) < _MIN_UNITS_FOR_RATIO:
         return 0.0
     return Counter(units).most_common(1)[0][1] / len(units)
+
+
+# Below this many units, a repeat is someone saying a word twice. Measured on a
+# real archive: genuine short repeats -- "Papa! Papa! Papa! Papa!" (18 units),
+# "Look! Look at that! Look!" (20), "Hey! Hey! Come here!" (21) -- all sit
+# below 24, and every degenerate loop found sat above it (33, 38, 49, 71, 79,
+# 111). The floor is what lets the threshold be strict without deleting the
+# recordings the archive exists for.
+_MIN_UNITS_FOR_LOOPING = 24
+
+
+def looping_share(text: str) -> float:
+    """Share of `text` made of units ALREADY SEEN earlier in it, 0.0-1.0.
+
+    The signal for a transcriber caught in a loop, which is the commonest
+    degenerate output there is and which `repeat_share` structurally cannot
+    see. Counting distinct units rather than the most common one makes the
+    score rise with how much of the text is duplicated, however long the
+    repeating phrase is.
+
+    Returns 0.0 below `_MIN_UNITS_FOR_LOOPING`. Short repeats are real speech:
+    a child repeating a word scores 0.667 here, and rejecting it would delete
+    exactly the recording its owner keeps the archive for.
+
+    Measured on 74 real transcripts: median 0.000, and the six true loops
+    scored 0.712-0.886 against a next-highest of 0.379.
+    """
+    units = _repetition_units(text)
+    if len(units) < _MIN_UNITS_FOR_LOOPING:
+        return 0.0
+    return 1.0 - (len(set(units)) / len(units))
 
 
 def only_unspoken_languages(
@@ -606,6 +655,7 @@ def judge_transcript(
     languages: list[str] | None = None,
     expected_languages: set[str] | frozenset[str] | None = None,
     max_repeat_share: float = 0.9,
+    max_looping_share: float = DEFAULT_MAX_LOOPING_SHARE,
     max_chars_per_second: float = DEFAULT_MAX_CHARS_PER_SECOND,
     unspoken_max_chars: int = DEFAULT_UNSPOKEN_MAX_CHARS,
 ) -> TranscriptVerdict:
@@ -619,6 +669,11 @@ def judge_transcript(
     recordings: at 0.6 a reference archive lost a clip of a child repeating one
     word, which is noise to a filter and the reason its owner keeps the
     archive. Only genuinely degenerate output sits above 0.9.
+
+    `max_looping_share` can afford to be strict where that one cannot, because
+    it only applies once there is enough text for a repeat to be unambiguous.
+    The two see different shapes and neither subsumes the other: one unit
+    hammered, versus a phrase looped.
     """
     if not text.strip():
         return TranscriptVerdict(False, "empty")
@@ -626,6 +681,8 @@ def judge_transcript(
         return TranscriptVerdict(False, "subtitle_boilerplate")
     if len(text) > 40 and repeat_share(text) >= max_repeat_share:
         return TranscriptVerdict(False, "degenerate_repetition")
+    if looping_share(text) >= max_looping_share:
+        return TranscriptVerdict(False, "looping_repetition")
     if impossible_speech_rate(text, duration_s, ceiling=max_chars_per_second):
         return TranscriptVerdict(False, "impossible_speech_rate")
     if (
