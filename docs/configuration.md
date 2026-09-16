@@ -196,6 +196,14 @@ Writing failures are swallowed after one warning: a full disk or a read-only
 directory must never take down retrieval for the sake of a log. Delete the
 file to erase the history; nothing transmits it anywhere.
 
+**`corpus-doctor` audits this log automatically** once `enabled = true` — it
+resolves the same path the server writes to, so you do not pass `--query-log`.
+It reports the count of distinct real queries, separates them from synthetic
+and test-fixture entries, and refuses to draw conclusions below 30. That last
+part matters: a low count is evidence of low USAGE only once the log is known
+clean and known to have been exercised, and is otherwise indistinguishable
+from logging that never worked.
+
 ## `[performance]` — SQLite memory tuning
 
 | Setting | Type | Default | Notes |

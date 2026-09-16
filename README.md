@@ -57,8 +57,8 @@ corpus-init
 #    Sign up at https://dash.voyageai.com/  — or pick Gemini in the wizard
 #    to use Google AI Studio's free tier instead.
 
-# 4. Run the first ingest
-corpus-ingest --source notes -v
+# 4. Point it at a folder — survey, plan, confirm, ingest, in one command
+corpus-index ~/Documents              # add --dry-run to see the plan first
 
 # 5. Try it from the CLI
 corpus-query "the question you wish you could ask your archive"
@@ -67,6 +67,24 @@ corpus-query "the question you wish you could ask your archive"
 ```
 
 `corpus-init` walks you through 5 prompts (data path, format, embedder provider, etc.) and writes a working `corpus.toml`. No need to hand-edit anything to get started.
+
+**Step 3 is not optional and step 4 needs it.** `corpus-index` reads
+`corpus.toml` for the database path and embedder, so it fails with
+`corpus.toml not found` if you skip the wizard. From there it is genuinely one
+command per folder: it detects every file type present, names the sources,
+writes them to `corpus.toml`, prices the run, asks, and ingests.
+
+**Audio and video are a second command, on purpose.** `corpus-index` reports
+them as a gap and tells you so:
+
+```
+Of those, .m4a, .mov hold SPEECH that can be transcribed and indexed.
+Run `corpus-transcribe <path>` first, then re-run this command
+```
+
+Everything `corpus-index` does is seconds of I/O; transcription is hours of
+local compute, so it is not hidden behind a `y` at an indexing prompt. See
+[corpus-transcribe](#corpus-transcribe-speech-into-the-index).
 
 ## Configuration
 

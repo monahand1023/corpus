@@ -31,9 +31,26 @@ This is not a criticism of them; it is the reason the next layer exists.
 
 ```sh
 corpus-smoke --config corpus.toml               # this repo's server
-corpus-smoke --claude-config ~/.claude.json     # every archive Claude launches
+corpus-smoke --claude-config ~/.claude.json     # every archive Claude Code launches
 corpus-smoke --claude-config ~/.claude.json --probe 'live-mail=invoice'
+
+# Claude Desktop keeps a SEPARATE config. An archive wired to one is not
+# wired to the other, and nothing tells you -- the tools are simply absent.
+corpus-smoke --claude-config \
+  "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 ```
+
+**`--all` is not cosmetic.** By default only servers launched through
+`corpus-mcp` are in scope, so a fork with its own entry point is skipped
+silently and the summary still reads like a clean bill of health -- "1/2
+servers healthy" on a machine with four archives configured. Add `--all` when
+you want the whole fleet, and read the server names it printed, not just the
+ratio.
+
+**A live source needs its own `--probe`.** A generic probe against a live
+mailbox legitimately finds nothing, which is indistinguishable from the server
+being broken -- and if the probe text is unusual enough, it can fail the
+backend's own query syntax rather than returning an empty result.
 
 Spawns the real command from the real config and talks the real protocol:
 handshake, `tools/list`, `corpus_stats`, a search, and a clean exit on stdin

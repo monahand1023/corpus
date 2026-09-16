@@ -672,3 +672,47 @@ def test_repeated_stripping_still_stops_at_real_speech() -> None:
 def test_stripping_reaches_a_fixed_point_without_eating_the_text() -> None:
     plain = "an ordinary sentence with no sign-off in it at all"
     assert strip_caption_tail(plain) is plain
+
+
+# ---------------------------------------------------------------------------
+# The fast paths. Both are pure speedups, and the tests exist to keep them
+# that way: each pins the property that makes skipping work safe, not the
+# speed itself.
+# ---------------------------------------------------------------------------
+
+
+def test_the_length_guard_bounds_on_word_characters_not_raw_length() -> None:
+    """The adversarial case a raw-length guard gets wrong.
+
+    `subtitle_boilerplate` now rejects on length before normalising, because
+    normalising 2 KB of prose to compare against an 80-character sign-off was
+    70% of an index-quality scan. That is only safe if the bound counts what
+    SURVIVES normalisation: padding normalises away, so a long raw string can
+    still be a short sign-off.
+    """
+    padded = "." * 400 + "Thank you for watching"
+    assert len(padded) > 400
+    assert subtitle_boilerplate(padded) is True
+
+
+def test_a_long_document_is_rejected_without_normalising_it() -> None:
+    prose = "the quarterly numbers came in ahead of plan and the team moved on. " * 40
+    assert subtitle_boilerplate(prose) is False
+
+
+def test_the_guard_respects_caller_supplied_phrase_lists() -> None:
+    # The bound is derived from the lists actually in use; a caller passing a
+    # longer phrase must not have it silently cut off by a cached limit.
+    long_phrase = "thanks so very much indeed for watching this entire video today"
+    assert subtitle_boilerplate(long_phrase, phrases=frozenset({long_phrase})) is True
+
+
+def test_tail_search_before_substitution_leaves_output_identical() -> None:
+    """`strip_caption_tail` searches a bounded window, then substitutes.
+
+    The sign-off must still be removed when it follows a long head, which is
+    what proves the window is a search optimisation and not a truncation.
+    """
+    head = "and then we drove home and the kids fell asleep in the back. " * 40
+    assert strip_caption_tail(head + "Thanks for watching") == head.strip()
+    assert strip_caption_tail(head + "Thanks for watching this video.") == head.strip()

@@ -131,8 +131,15 @@ class JsonFilesChunker:
 
 ### If your source is transcribed audio or video
 
-Speech-to-text output needs one extra step in the chunker, and it is easy to
-miss because nothing fails without it.
+**First check whether you need a connector at all.** `corpus` ships one:
+`corpus-transcribe` writes a sidecar database and `type = "transcripts"` reads
+it, with every filter below already applied. Write your own only if your
+transcripts live in a shape that sidecar cannot hold — and consider filling
+the sidecar schema (`corpus.transcripts.store`) instead, which is the cheaper
+path.
+
+If you do write one, speech-to-text output needs extra steps in the chunker,
+and they are easy to miss because nothing fails without them.
 
 A model trained on audio paired with scraped subtitles reproduces caption
 boilerplate over silence -- "Thanks for watching", "ご視聴ありがとうございました",
@@ -140,14 +147,32 @@ boilerplate over silence -- "Thanks for watching", "ご視聴ありがとうご�
 becomes a chunk, embeds, ranks, and comes back as an answer.
 
 ```python
-from corpus.transcripts import strip_caption_tail, subtitle_boilerplate
+from corpus.transcripts import (
+    DEFAULT_MAX_LOOPING_SHARE,
+    looping_share,
+    strip_caption_tail,
+    subtitle_boilerplate,
+)
 
 # Cut a sign-off off the END of each window BEFORE judging the window.
 segments = [{**s, "text": strip_caption_tail(s.get("text") or "")} for s in segments]
-kept = [s for s in segments if s["text"] and not subtitle_boilerplate(s["text"])]
+kept = [
+    s for s in segments
+    if s["text"]
+    and not subtitle_boilerplate(s["text"])
+    and looping_share(s["text"]) < DEFAULT_MAX_LOOPING_SHARE
+]
 ```
 
-The two calls do different jobs and you want both. `subtitle_boilerplate` asks
+`looping_share` catches the transcriber stuck in a loop -- a phrase repeated
+to fill the window. It is a separate signal from `repeat_share` because that
+one structurally cannot see a repeated PHRASE, only a repeated unit; on one
+archive it scored at most 0.250 against its own 0.9 threshold while six
+transcripts were unmistakable loops. Apply it per window: measured on a live
+index, 163 loop chunks were single looping windows inside otherwise genuine
+recordings, which no per-file check can reach.
+
+The other two calls do different jobs and you want both. `subtitle_boilerplate` asks
 "is this window ENTIRELY a caption artefact?" and drops it.
 `strip_caption_tail` handles the commoner shape -- a sign-off glued to the end
 of real speech -- by cutting the tail and keeping the speech. Do not use the

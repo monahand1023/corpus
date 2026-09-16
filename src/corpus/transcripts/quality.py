@@ -280,6 +280,23 @@ def _normalise(text: str) -> str:
     return _WHITESPACE.sub(" ", folded).strip()
 
 
+# Word characters, for the cheap length bound below. `\W+` in one C-speed
+# regex pass rather than a Python loop over characters.
+_NON_WORD = re.compile(r"\W+", re.UNICODE)
+
+
+@cache
+def _longest_match_possible(phrases: frozenset[str], prefixes: tuple[str, ...]) -> int:
+    """The longest normalised text that could still match these rules.
+
+    Either the text IS a phrase, or it is a prefix plus the bounded name after
+    it. Anything longer cannot match however it normalises.
+    """
+    longest_phrase = max((len(p) for p in phrases), default=0)
+    longest_prefix = max((len(p) for p in prefixes), default=0)
+    return max(longest_phrase, longest_prefix + _CREDIT_TAIL_MAX_CHARS)
+
+
 def subtitle_boilerplate(
     text: str,
     *,
@@ -293,12 +310,31 @@ def subtitle_boilerplate(
     to short text so a real recording that happens to open with a similar
     phrase is not discarded.
     """
+    phrase_set = phrases if phrases is not None else SUBTITLE_BOILERPLATE
+    head_set = prefixes if prefixes is not None else SUBTITLE_CREDIT_PREFIXES
+
+    # Reject on LENGTH before normalising. `_normalise` runs NFD, strips marks,
+    # folds case and collapses whitespace over the whole string, which on a
+    # 1.4M-chunk index of ~2 KB documents was 70% of an index-quality scan --
+    # all of it spent proving that 2 KB of prose is not a 30-character
+    # sign-off. Counting word characters is one C-speed regex pass.
+    #
+    # Safe because it is a LOWER bound: `_normalise` only removes and collapses
+    # characters, and every word character it keeps survives into the result,
+    # so `len(normalised) >= word characters`. An anchor screen -- the trick
+    # `strip_caption_tail` uses -- does NOT work here: this list contains "the",
+    # "you" and "so", whose anchors match nearly every English chunk.
+    if len(_NON_WORD.sub("", text)) > _longest_match_possible(
+        frozenset(phrase_set), tuple(head_set)
+    ):
+        return False
+
     norm = _normalise(text)
     if not norm:
         return False
-    if norm in (phrases if phrases is not None else SUBTITLE_BOILERPLATE):
+    if norm in phrase_set:
         return True
-    heads = prefixes if prefixes is not None else SUBTITLE_CREDIT_PREFIXES
+    heads = head_set
     for head in heads:
         if not norm.startswith(head):
             continue
@@ -505,7 +541,17 @@ def strip_caption_tail(
     # Longest first: "gracias por ver el video" must win over "gracias por ver",
     # which would otherwise leave "el video" stranded.
     for phrase in sorted(phrases, key=len, reverse=True):
-        stripped = _tail_pattern(phrase).sub("", out)
+        pattern = _tail_pattern(phrase)
+        # Test against the TAIL, substitute on the whole string. The pattern is
+        # anchored with `$`, so a match can only sit in the last few hundred
+        # characters -- but `.sub()` scans the entire text, and the 5% of
+        # chunks that clear the screen were paying that once per phrase over
+        # ~2 KB each. Searching the window first makes the full scan happen
+        # only when there is really something to remove, and the removal
+        # itself is still done on `out`, so the result is unchanged.
+        if not pattern.search(out[-_SCREEN_WINDOW_CHARS:]):
+            continue
+        stripped = pattern.sub("", out)
         if stripped != out:
             out = stripped
             removed = True
