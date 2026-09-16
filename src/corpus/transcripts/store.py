@@ -380,14 +380,27 @@ def latest_policy(conn: sqlite3.Connection) -> str | None:
     because an earlier pipeline spelled its reasons differently. The newest
     policy is the one whose filter names the running code actually knows.
     """
-    try:
-        row = conn.execute(
-            "SELECT policy FROM no_text WHERE policy IS NOT NULL AND policy != ''"
-            " ORDER BY checked_at DESC LIMIT 1"
-        ).fetchone()
-    except sqlite3.Error:
-        return None
-    return str(row[0]) if row else None
+    # TRANSCRIPTS FIRST, and the order matters. After a re-judge the sidecar
+    # legitimately holds mixed policies: `rejudge_stored` restamps transcripts
+    # to the current rules but deliberately leaves no_text rows under the old
+    # ones, because a loosened threshold means those files should be RETRIED
+    # rather than silently marked current. Reading no_text therefore reports
+    # the superseded rule set, and anything judging the current filter list
+    # against it manufactures the false positives policy scoping exists to
+    # prevent. Transcripts are restamped by every run, so they carry the
+    # newest rules; no_text is the fallback for an archive that kept nothing.
+    for table, stamp in (("transcripts", "transcribed_at"), ("no_text", "checked_at")):
+        try:
+            row = conn.execute(
+                f"SELECT policy FROM {table}"
+                " WHERE policy IS NOT NULL AND policy != ''"
+                f" ORDER BY {stamp} DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error:
+            continue
+        if row:
+            return str(row[0])
+    return None
 
 
 def filter_activity(

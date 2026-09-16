@@ -1,0 +1,80 @@
+#!/bin/sh
+# Refuse to PUSH commits whose messages name a private project.
+#
+# WHY HERE AND NOT IN CI. The obvious home for this is a CI job, and that
+# cannot work: the patterns live in .git/private-name-patterns, which is
+# untracked BY DESIGN so a denylist of private names never reaches the public
+# remote. CI has no .git/ of yours and so has nothing to match against. Putting
+# the names in a repo secret would defeat the point -- it uploads them to the
+# very service the rule exists to keep them off.
+#
+# So the last useful moment is here, locally, immediately before the data
+# leaves the machine.
+#
+# WHAT THIS ADDS OVER commit-msg. That hook stops a bad message being written.
+# This one scans every commit actually being PUSHED, which catches the cases
+# it cannot: commits made with --no-verify, commits authored before the hook
+# existed, and history pulled in from elsewhere. The leak this project had was
+# exactly that shape -- a commit from before any guard existed, carried into a
+# fresh repository by a re-push.
+#
+# AND WHY GETTING IT RIGHT HERE MATTERS MORE THAN LATER: a force-push does not
+# undo it. GitHub keeps unreachable objects and serves them by SHA; only
+# GitHub Support can purge them.
+
+PATTERNS="$(git rev-parse --git-dir)/private-name-patterns"
+
+if [ ! -f "$PATTERNS" ]; then
+    echo "" >&2
+    echo "  NOTE: $PATTERNS is missing, so pushed commit messages are NOT" >&2
+    echo "  being checked for private names. It is untracked on purpose --" >&2
+    echo "  recreate it after a fresh clone. One regex per line." >&2
+    echo "" >&2
+    exit 0
+fi
+
+# Strip comments and blanks into a plain pattern file grep can read.
+ACTIVE="$(mktemp)"
+trap 'rm -f "$ACTIVE"' EXIT
+grep -v '^[[:space:]]*#' "$PATTERNS" | grep -v '^[[:space:]]*$' > "$ACTIVE"
+[ -s "$ACTIVE" ] || exit 0
+
+FOUND=0
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    # Deleting a ref pushes nothing.
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        RANGE="$local_sha"            # new branch: every reachable commit
+    else
+        RANGE="$remote_sha..$local_sha"
+    fi
+
+    for sha in $(git rev-list "$RANGE" 2>/dev/null); do
+        if git log -1 --format='%B' "$sha" | grep -qiEf "$ACTIVE"; then
+            if [ "$FOUND" -eq 0 ]; then
+                echo "" >&2
+                echo "  ################################################################" >&2
+                echo "  #             PUSH BLOCKED: private name in a message          #" >&2
+                echo "  ################################################################" >&2
+                echo "" >&2
+            fi
+            # The subject only. Printing the match would put the private
+            # string into terminal scrollback and CI logs.
+            echo "    $(git log -1 --format='%h %s' "$sha" | cut -c1-72)" >&2
+            FOUND=1
+        fi
+    done
+done
+
+if [ "$FOUND" -ne 0 ]; then
+    echo "" >&2
+    echo "  Reword those messages before pushing (git rebase -i, or amend)." >&2
+    echo "" >&2
+    echo "  Do NOT push and fix afterwards. A force-push makes a commit" >&2
+    echo "  UNREACHABLE, not absent: GitHub keeps serving it by SHA and only" >&2
+    echo "  GitHub Support can purge it. This project lost two months to that." >&2
+    echo "" >&2
+    exit 1
+fi
+exit 0

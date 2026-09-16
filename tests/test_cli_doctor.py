@@ -247,3 +247,46 @@ def test_no_sidecar_is_reported_as_not_checked(tmp_path, capsys) -> None:
     _check_filter_activity(str(tmp_path / "missing.db"), policy="p")
     out = capsys.readouterr().out
     assert "SKIPPED" in out or "NOT CHECKED" in out.upper(), out
+
+
+def test_an_empty_log_that_is_BRAND_NEW_warns_rather_than_fails(
+    tmp_path, capsys
+) -> None:
+    """A fresh install has an empty log, and that is not a defect.
+
+    Failing here would make `corpus-doctor` exit non-zero on a perfectly
+    healthy new archive, and a tool that cries wolf gets ignored -- which
+    costs more than the permissiveness saves.
+    """
+    from corpus.cli.doctor import _check_query_logs
+
+    log = tmp_path / "queries.jsonl"
+    log.write_text("")  # created just now
+    ok, _ = _check_query_logs([str(log)], 30)
+    out = capsys.readouterr().out
+
+    assert ok is True, "a log created moments ago cannot be suspicious yet"
+    assert "nothing" in out.lower()
+
+
+def test_an_empty_log_that_is_OLD_fails(tmp_path, capsys) -> None:
+    """Two months of logging with zero entries is a broken writer, not low demand.
+
+    This is the real case: an archive logged nothing for months because it was
+    never reachable from the app being used, and every doctor run passed.
+    """
+    import os
+    import time
+
+    from corpus.cli.doctor import _check_query_logs
+
+    log = tmp_path / "queries.jsonl"
+    log.write_text("")
+    old = time.time() - 60 * 24 * 3600
+    os.utime(log, (old, old))
+
+    ok, _ = _check_query_logs([str(log)], 30)
+    out = capsys.readouterr().out
+
+    assert ok is False, "an old empty log cannot tell low demand from a broken writer"
+    assert "60 days" in out or "days" in out, out

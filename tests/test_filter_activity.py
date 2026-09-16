@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 
 from corpus.transcripts import store
+from corpus.transcripts.store import Transcript, Window
 from corpus.verify import Coverage, dormant
 
 
@@ -173,3 +174,37 @@ def test_activity_can_be_scoped_to_one_population(tmp_path: Path) -> None:
         assert store.filter_activity(conn, table="dropped_windows") == {
             "caption_boilerplate": 1
         }
+
+
+def test_latest_policy_prefers_transcripts_which_are_restamped(tmp_path: Path) -> None:
+    """After a re-judge the sidecar legitimately holds MIXED policies.
+
+    `rejudge_stored` restamps transcripts to the current rules, but leaves
+    no_text rows under the old ones on purpose: a loosened threshold means
+    those files should be RETRIED, not silently marked current. So reading the
+    policy from no_text reports the superseded rule set, and dormancy then
+    judges the current filter list against an old vocabulary -- the exact
+    false positive the policy scoping was added to prevent.
+
+    Transcripts are restamped by every run, so they carry the current rules.
+    """
+    with store.open_store(tmp_path / "t.db") as conn:
+        store.save_no_text(conn, "/w/a.m4a", duration_s=1.0, policy="old",
+                           reason="silence")
+        t = Transcript(path="/w/b.m4a", text="real speech here",
+                       windows=[Window(0.0, 30.0, "real speech here", "en")],
+                       duration_s=30.0, model="m")
+        t.policy = "new"
+        store.save_transcript(conn, t)
+
+        assert store.latest_policy(conn) == "new"
+
+
+def test_latest_policy_falls_back_to_no_text_when_nothing_was_kept(
+    tmp_path: Path,
+) -> None:
+    # An archive that produced only rejections still has a newest rule set.
+    with store.open_store(tmp_path / "t.db") as conn:
+        store.save_no_text(conn, "/w/a.m4a", duration_s=1.0, policy="only",
+                           reason="silence")
+        assert store.latest_policy(conn) == "only"

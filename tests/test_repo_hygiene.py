@@ -33,8 +33,11 @@ blocks it from ever being committed, even via `git add -f`.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -176,4 +179,50 @@ def test_no_ticket_keys_from_a_private_archive() -> None:
         f"prefix instead ({', '.join(sorted(_PLACEHOLDER_PREFIXES))}), or add "
         "a genuinely standard prefix to _STANDARD_PREFIXES if that is what "
         "this is."
+    )
+
+
+# --- the guards themselves must exist -----------------------------------------
+#
+# CI cannot run the message checks: the patterns live in
+# .git/private-name-patterns, untracked by design so a denylist of private
+# names never reaches the public remote, and CI has no .git/ of yours. What CI
+# CAN verify is that the guards are present and wired up -- a hook that was
+# deleted or lost its executable bit fails silently, which is the failure mode
+# this whole area exists to remove.
+
+
+def _hooks_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / ".githooks"
+
+
+@pytest.mark.parametrize("hook", ["commit-msg", "pre-push", "pre-commit"])
+def test_the_guard_hooks_are_present_and_executable(hook: str) -> None:
+    path = _hooks_dir() / hook
+    assert path.is_file(), f"{hook} is missing"
+    assert os.access(path, os.X_OK), f"{hook} is not executable, so git skips it"
+
+
+def test_the_hooks_contain_no_private_names() -> None:
+    """The hooks are TRACKED, so a denylist inside one would publish it.
+
+    This is why the patterns live in .git/ instead -- and why the hooks must
+    be checked for the very strings they exist to suppress.
+    """
+    for hook in _hooks_dir().iterdir():
+        if not hook.is_file():
+            continue
+        text = hook.read_text(errors="replace")
+        # Pattern-based for the same reason as the ticket-key check below: a
+        # literal denylist here would itself be the leak.
+        assert "private-name-patterns" not in text or "git rev-parse" in text, (
+            f"{hook.name} should resolve the pattern file at runtime, "
+            f"never embed the names"
+        )
+
+
+def test_the_pre_push_hook_reads_its_patterns_from_outside_the_worktree() -> None:
+    text = (_hooks_dir() / "pre-push").read_text()
+    assert "git rev-parse --git-dir" in text, (
+        "patterns must be resolved inside .git/, which cannot be committed"
     )

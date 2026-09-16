@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -39,6 +40,11 @@ from corpus.eval.query_log_audit import (
     cross_archive_overlap,
 )
 from corpus.verify import Coverage
+
+# An empty log younger than this is a fresh install; older is a writer that
+# is not writing. Chosen so a week of real use has to pass before the check
+# accuses anything.
+EMPTY_LOG_SUSPICIOUS_DAYS = 7
 
 
 def _resolve_query_logs(args: argparse.Namespace) -> tuple[list[str], str]:
@@ -91,13 +97,29 @@ def _check_query_logs(paths: Sequence[str], min_real: int) -> tuple[bool, list[L
         reports.append(report)
         coverage = Coverage(report.total, "entries")
         if coverage.vacuous:
-            # A log with no entries cannot distinguish "nobody asks" from
-            # "logging never worked", and the second is the one that has
-            # actually happened here. Reporting ok would pick the wrong one.
-            print(f"  {path}: {coverage.describe()} -- logging is on but has "
-                  f"recorded nothing; this cannot tell low demand from a "
-                  f"broken writer")
-            ok = False
+            # An empty log cannot distinguish "nobody asks" from "logging
+            # never worked" -- but HOW LONG it has been empty can. A log
+            # created moments ago is a fresh install; one empty for months is
+            # a broken writer, which is exactly what happened here: an archive
+            # logged nothing for two months because it was never reachable
+            # from the app in use, and every run passed.
+            #
+            # Failing on the fresh case would make this exit non-zero on a
+            # healthy new archive, and a tool that cries wolf gets ignored.
+            age_days = (time.time() - path.stat().st_mtime) / 86400
+            if age_days >= EMPTY_LOG_SUSPICIOUS_DAYS:
+                print(
+                    f"  {path}: {coverage.describe()} after {age_days:.0f} days "
+                    f"-- logging is on but has recorded nothing; that is a "
+                    f"broken writer, not low demand"
+                )
+                ok = False
+            else:
+                print(
+                    f"  {path}: {coverage.describe()} -- logging is on and this "
+                    f"log is {age_days:.0f} days old, so there is nothing to "
+                    f"conclude yet"
+                )
             continue
         status = "ok" if report.ok else "PROBLEM"
         print(
