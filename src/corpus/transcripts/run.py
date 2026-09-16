@@ -21,6 +21,7 @@ omitted from it silently keeps stale answers alive.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -30,7 +31,13 @@ from pathlib import Path
 from corpus.survey.media import MEDIA_EXTENSIONS
 from corpus.survey.walk import walk_files
 from corpus.transcripts import quality, store
-from corpus.transcripts.pipeline import Outcome, Settings, transcribe_file
+from corpus.transcripts.pipeline import (
+    Outcome,
+    Settings,
+    filter_windows,
+    transcribe_file,
+)
+from corpus.transcripts.segment import join_windows
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +127,163 @@ def rejudge_stored(
             )
             demoted += 1
     return rejudged, demoted
+
+
+@dataclass
+class RefilterStats:
+    """What a re-filter did, and — just as important — what it did not."""
+
+    rejudged: int = 0
+    text_changed: int = 0
+    windows_dropped: int = 0
+    demoted: int = 0
+    skipped_other_model: int = 0
+    skipped_no_segments: int = 0
+    skipped_wide_windows: int = 0
+
+    def describe(self) -> str:
+        parts = [
+            f"{self.rejudged:,} re-filtered",
+            f"{self.text_changed:,} shortened",
+            f"{self.windows_dropped:,} windows dropped",
+            f"{self.demoted:,} demoted",
+        ]
+        skipped = (
+            self.skipped_other_model
+            + self.skipped_no_segments
+            + self.skipped_wide_windows
+        )
+        if skipped:
+            parts.append(
+                f"{skipped:,} skipped "
+                f"({self.skipped_other_model:,} from another model, "
+                f"{self.skipped_no_segments:,} with no stored windows, "
+                f"{self.skipped_wide_windows:,} not windowed by this pipeline)"
+            )
+        return ", ".join(parts)
+
+
+def _windows_from_segments(
+    segments: str | None,
+) -> list[tuple[str, float, bool]]:
+    """Stored segments as `(text, duration, continues_previous)`.
+
+    `continues_previous` is not stored and IS load-bearing on rejoin, so it is
+    reconstructed from the geometry. Windows inside one speech region overlap
+    by `window_s - step`, so `start < previous end` means a cut made
+    mid-speech, whose duplicated text is an artefact to trim. A window that
+    begins after a gap follows real silence, and its repetition may be real.
+    """
+    try:
+        parsed = json.loads(segments or "[]")
+    except (TypeError, ValueError):
+        return []
+    out: list[tuple[str, float, bool]] = []
+    prev_end: float | None = None
+    for seg in parsed if isinstance(parsed, list) else []:
+        if not isinstance(seg, dict):
+            continue
+        start = float(seg.get("start") or 0.0)
+        end = float(seg.get("end") or 0.0)
+        continues = prev_end is not None and start < prev_end - 1e-9
+        prev_end = end
+        out.append(((seg.get("text") or "").strip(), max(end - start, 1e-3), continues))
+    return out
+
+
+def refilter_stored(
+    conn: sqlite3.Connection,
+    *,
+    policy: str,
+    settings: Settings,
+    model_name: str,
+    paths: set[str] | None = None,
+) -> RefilterStats:
+    """Re-apply the current TEXT filters to stored windows. No model time.
+
+    A re-transcribe of one live archive was measured at 61.7 GPU-hours from
+    its own recorded timings, to re-run what amounts to a set of regexes. The
+    per-window text is already in `segments`, so it does not have to be
+    decoded again.
+
+    WHAT MAKES THIS EQUIVALENT. Stored segments are the windows that survived
+    the PREVIOUS filter, so applying a stricter one reaches exactly the state a
+    re-decode would. It holds only while the DECODE is unchanged — `window_s`,
+    `overlap_s`, the VAD threshold and the model decide which audio becomes
+    which window, and none of that can be re-derived from text.
+
+    So: a row from another model is skipped and counted, never restamped; a
+    row with no stored windows is skipped; and a `window_s` that could not have
+    produced the stored windows raises rather than quietly restamping a policy
+    that was never applied. "I could not do this" and "I did this and nothing
+    changed" must not look alike — the one rule this codebase keeps relearning.
+    """
+    stale = store.stale_transcripts(conn, policy=policy)
+    stats = RefilterStats()
+    for path, text, duration_s, languages in stale:
+        if paths is not None and path not in paths:
+            continue
+        row = conn.execute(
+            "SELECT segments, model FROM transcripts WHERE path = ?", (path,)
+        ).fetchone()
+        if row is None:
+            continue
+        segments, stored_model = row[0], row[1]
+        if stored_model and model_name and stored_model != model_name:
+            stats.skipped_other_model += 1
+            continue
+        windows = _windows_from_segments(segments)
+        if not windows:
+            stats.skipped_no_segments += 1
+            continue
+        # A window wider than `window_s` did not come from this geometry.
+        # Found on a live sidecar: 104 rows held ONE "window" spanning the
+        # whole file, up to 2,251 seconds, because they were RESTORATION
+        # records -- text recovered from `no_text` and written back with a
+        # synthetic window. Re-judging a whole file as a single window would
+        # be a different operation wearing this one's name.
+        #
+        # Skipped per row, not raised: one unusable row must not abandon the
+        # rest, and must not be quietly restamped either.
+        if max(d for _t, d, _c in windows) > settings.window_s + 1e-6:
+            stats.skipped_wide_windows += 1
+            continue
+
+        stats.rejudged += 1
+        kept, dropped = filter_windows(windows, settings)
+        stats.windows_dropped += len(dropped)
+        new_text = join_windows(kept)
+        verdict = quality.judge_transcript(
+            new_text,
+            duration_s=duration_s,
+            languages=languages,
+            expected_languages=settings.expected_languages or None,
+            max_repeat_share=settings.max_repeat_share,
+            max_looping_share=settings.max_looping_share,
+            max_chars_per_second=settings.max_chars_per_second,
+            unspoken_max_chars=settings.unspoken_max_chars,
+        )
+        if not new_text or not verdict.keep:
+            store.demote_transcript(
+                conn, path, duration_s=duration_s, policy=policy,
+                reason=verdict.reason or "no_text", rejected_text=new_text or text,
+            )
+            stats.demoted += 1
+            continue
+        if new_text != text:
+            stats.text_changed += 1
+            kept_segments = [
+                seg
+                for i, seg in enumerate(json.loads(segments or "[]"))
+                if i not in {idx for idx, _r in dropped}
+            ]
+            conn.execute(
+                "UPDATE transcripts SET text = ?, segments = ? WHERE path = ?",
+                (new_text, json.dumps(kept_segments), path),
+            )
+            conn.commit()
+        store.restamp_transcript(conn, path, policy=policy)
+    return stats
 
 
 def transcribe_directory(

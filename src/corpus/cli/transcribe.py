@@ -123,6 +123,45 @@ def _dry_run(
     return 0 if not backend_problem else 2
 
 
+def _refilter(db: Path, settings: Settings) -> int:
+    """Re-apply text filters to stored windows. No model, no audio, no GPU."""
+    from corpus.transcripts import store
+    from corpus.transcripts.run import refilter_stored
+
+    if not db.is_file():
+        print(f"error: no sidecar at {db}", file=sys.stderr)
+        return 1
+    conn = store.connect(db)
+    try:
+        model = conn.execute(
+            "SELECT model FROM transcripts WHERE model != '' "
+            "GROUP BY model ORDER BY count(*) DESC LIMIT 1"
+        ).fetchone()
+        model_name = model[0] if model else ""
+        policy = store.policy_fingerprint(settings.as_policy(model_name))
+        print(f"corpus-transcribe --refilter: {db}")
+        print(f"  model {model_name or '(unrecorded)'}, policy {policy}")
+        print("  no audio is decoded; only stored window text is re-judged\n")
+        try:
+            stats = refilter_stored(
+                conn, policy=policy, settings=settings, model_name=model_name
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"  {stats.describe()}")
+        if stats.demoted:
+            print(
+                f"\n  {stats.demoted:,} transcript(s) no longer pass and moved to "
+                "no_text; their text is retained there, so this is auditable."
+            )
+        if stats.text_changed or stats.demoted:
+            print("\n  Re-run corpus-ingest to update the index.")
+        return 0
+    finally:
+        conn.close()
+
+
 def main_argv(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="corpus-transcribe",
@@ -157,6 +196,18 @@ def main_argv(argv: list[str]) -> int:
              "mislabel silence as languages nobody in the recording speaks, "
              "and naming yours lets that be used as a rejection signal.",
     )
+    parser.add_argument(
+        "--refilter",
+        action="store_true",
+        help=(
+            "Re-apply the current TEXT filters to windows already stored in "
+            "the sidecar, without decoding any audio. Use after changing a "
+            "quality threshold: re-transcribing one 380-hour archive was "
+            "measured at 61.7 GPU-hours to re-run what amounts to a regex. "
+            "Refuses on rows from a different model or a different window "
+            "geometry, which only a real re-transcribe can redo."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -170,6 +221,8 @@ def main_argv(argv: list[str]) -> int:
     settings = Settings(expected_languages=frozenset(args.languages))
     if args.dry_run:
         return _dry_run(root, db, args.excludes, args.rate, settings)
+    if args.refilter:
+        return _refilter(db, settings)
 
     from corpus.transcripts.audio import ffmpeg_available
     from corpus.transcripts.backends import BackendUnavailableError, default_backend
