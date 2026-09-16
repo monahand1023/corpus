@@ -127,3 +127,49 @@ def test_activity_can_be_scoped_to_one_policy(tmp_path: Path) -> None:
         }
         assert store.filter_activity(conn, policy="new") == {"silence": 1}
         assert store.filter_activity(conn, policy="old") == {"no_speech_detected": 1}
+
+
+def test_the_latest_policy_can_be_identified(tmp_path: Path) -> None:
+    """So dormancy defaults to ONE rule set instead of mixing vocabularies.
+
+    Run across all policies on a real sidecar, three filters looked dormant
+    purely because an earlier pipeline spelled its reasons differently. The
+    newest policy is the one whose filter list the current code actually has.
+    """
+    with store.open_store(tmp_path / "t.db") as conn:
+        store.save_no_text(conn, "/w/a.m4a", duration_s=1.0, policy="old",
+                           reason="no_speech_detected")
+        store.save_no_text(conn, "/w/b.m4a", duration_s=1.0, policy="new",
+                           reason="silence")
+        assert store.latest_policy(conn) == "new"
+
+
+def test_latest_policy_is_none_on_an_empty_sidecar(tmp_path: Path) -> None:
+    with store.open_store(tmp_path / "t.db") as conn:
+        assert store.latest_policy(conn) is None
+
+
+def test_activity_can_be_scoped_to_one_population(tmp_path: Path) -> None:
+    """Per-window and whole-file filters are different populations.
+
+    A reason that only a per-window check can produce will always look dormant
+    if it is judged against whole-file verdicts, and vice versa. Reporting
+    them together guarantees false positives -- which is exactly what a real
+    sidecar produced: filters flagged dormant that simply cannot appear in the
+    table being counted.
+    """
+    with store.open_store(tmp_path / "t.db") as conn:
+        store.save_no_text(conn, "/w/a.m4a", duration_s=1.0, policy="p",
+                           reason="looping_repetition")
+        store.save_dropped_windows(
+            conn, "/w/b.m4a",
+            [{"window_start": 0.0, "text": "x", "reason": "caption_boilerplate"}],
+            policy="p",
+        )
+
+        assert store.filter_activity(conn, table="no_text") == {
+            "looping_repetition": 1
+        }
+        assert store.filter_activity(conn, table="dropped_windows") == {
+            "caption_boilerplate": 1
+        }

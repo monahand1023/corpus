@@ -38,6 +38,7 @@ from corpus.eval.query_log_audit import (
     audit_query_log,
     cross_archive_overlap,
 )
+from corpus.verify import Coverage
 
 
 def _resolve_query_logs(args: argparse.Namespace) -> tuple[list[str], str]:
@@ -88,6 +89,16 @@ def _check_query_logs(paths: Sequence[str], min_real: int) -> tuple[bool, list[L
             continue
         report = audit_query_log(path, min_real_for_conclusions=min_real)
         reports.append(report)
+        coverage = Coverage(report.total, "entries")
+        if coverage.vacuous:
+            # A log with no entries cannot distinguish "nobody asks" from
+            # "logging never worked", and the second is the one that has
+            # actually happened here. Reporting ok would pick the wrong one.
+            print(f"  {path}: {coverage.describe()} -- logging is on but has "
+                  f"recorded nothing; this cannot tell low demand from a "
+                  f"broken writer")
+            ok = False
+            continue
         status = "ok" if report.ok else "PROBLEM"
         print(
             f"  {path}: {status} -- {report.total} entries, "
@@ -177,16 +188,109 @@ def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool:
             "from the deployment's interpreter)"
         )
         return False
+    coverage = Coverage(len(queries), "queries")
+    if coverage.vacuous:
+        # Every finding this audit could report is one it cannot reach. The
+        # realistic route is a module that imports fine but whose query list
+        # is empty or renamed.
+        print(f"\ngold set          [ FAIL ] {coverage.describe()}")
+        print("                  A gold set that asks nothing proves nothing.")
+        return False
     findings = audit_queries(
         queries,
         lookup=sqlite_lookup(db_path),
         documents=sqlite_documents(db_path, queries),
     )
-    print(f"\ngold set          {len(queries)} queries")
+    print(f"\ngold set          {coverage.describe()}")
     has_error = report_findings(findings, stream=sys.stdout)
     if not findings:
         print("  [  ok  ] no findings")
     return not has_error
+
+
+# Every rejection reason the transcription pipeline can record. A reason
+# missing from a large, single-policy sample is a filter that never fires --
+# which means it is unnecessary or broken, with no third option.
+# TWO populations, judged separately. A reason only a per-window check can
+# produce looks dormant forever if it is counted against whole-file verdicts,
+# and vice versa -- reporting them together produced exactly that on a real
+# sidecar. Each list names only what its own table can contain.
+WHOLE_FILE_FILTERS = (
+    "silence",
+    "empty",
+    "subtitle_boilerplate",
+    "degenerate_repetition",
+    "looping_repetition",
+    "impossible_speech_rate",
+    "only_unspoken_languages",
+)
+PER_WINDOW_FILTERS = (
+    "empty",
+    "caption_boilerplate",
+    "degenerate_repetition",
+    "looping_repetition",
+    "impossible_speech_rate",
+)
+
+
+def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) -> bool:
+    """Name the filters that never fired. A warning, never a build failure.
+
+    Dormancy is evidence to act on, not proof of a defect: a filter can be
+    legitimately quiet on one archive. It reports and does not fail, because a
+    check that fails on something ambiguous gets switched off, and then the
+    real signal goes with it.
+    """
+    print("\nfilter activity")
+    if not sidecar or not Path(sidecar).expanduser().is_file():
+        print("  SKIPPED (no transcript sidecar; pass --transcripts PATH)")
+        return True
+
+    from corpus.transcripts import store
+    from corpus.verify import MIN_VERDICTS_FOR_DORMANCY, dormant
+
+    try:
+        with store.open_store(sidecar, read_only=True) as conn:
+            # Default to the NEWEST rule set rather than all of them. Mixing
+            # vocabularies manufactures dead filters that are not dead: on a
+            # real sidecar three looked dormant purely because an earlier
+            # pipeline spelled its reasons differently.
+            scope = policy if policy is not None else store.latest_policy(conn)
+            populations = {
+                "whole-file": (
+                    store.filter_activity(conn, policy=scope, table="no_text"),
+                    WHOLE_FILE_FILTERS,
+                ),
+                "per-window": (
+                    store.filter_activity(
+                        conn, policy=scope, table="dropped_windows"
+                    ),
+                    PER_WINDOW_FILTERS,
+                ),
+            }
+    except Exception as exc:
+        print(f"  SKIPPED (could not read: {type(exc).__name__})")
+        return True
+
+    for label, (activity, known) in populations.items():
+        coverage = Coverage(sum(activity.values()), f"{label} verdicts")
+        if coverage.examined < MIN_VERDICTS_FOR_DORMANCY:
+            # Zero rejections out of three files is not evidence of anything,
+            # and a guard that fires on noise gets switched off.
+            print(
+                f"  [ info ] {coverage.describe()} -- too small to judge "
+                f"dormancy (needs {MIN_VERDICTS_FOR_DORMANCY})"
+            )
+            continue
+        idle = dormant(activity, known=known, coverage=coverage)
+        if not idle:
+            print(f"  [  ok  ] {coverage.describe()}, every filter has fired")
+            continue
+        print(f"  [ warn ] {coverage.describe()}; never fired: {', '.join(idle)}")
+        print("           A filter that never fires is unnecessary or broken.")
+        print("           Judged within one rule set and one population, so "
+              "this is not a mismatch.")
+    return True
 
 
 def _check_index_quality(db_path: str | None) -> bool:
@@ -270,6 +374,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Gold set module to audit (default: tests/eval_queries.py if present)",
     )
     parser.add_argument(
+        "--transcripts",
+        default=None,
+        metavar="PATH",
+        help="Transcript sidecar to check for filters that never fire "
+             "(default: inferred from a `transcripts` source in --config)",
+    )
+    parser.add_argument(
         "--min-real-queries",
         type=int,
         default=30,
@@ -298,15 +409,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     _check_cross_archive(reports)
 
     db_path = args.db
-    if db_path is None and args.config:
+    sidecar = args.transcripts
+    if args.config and (db_path is None or sidecar is None):
         from corpus.cli._common import load_config_or_exit
 
-        db_path = str(load_config_or_exit(args.config).db_path)
+        cfg = load_config_or_exit(args.config)
+        if db_path is None:
+            db_path = str(cfg.db_path)
+        if sidecar is None:
+            # A `transcripts` source points at the sidecar, so the operator
+            # does not have to name it twice.
+            for source in cfg.sources:
+                if source.type == "transcripts":
+                    sidecar = str(source.path)
+                    break
 
     for name, check, needs in (
         ("served vs evaluated", _check_served_vs_evaluated(args.config), args.config),
         ("gold set", _check_gold_set(args.queries, db_path), args.queries and db_path),
         ("index quality", _check_index_quality(db_path), db_path),
+        (
+            "filter activity",
+            _check_filter_activity(sidecar),
+            sidecar,
+        ),
     ):
         if needs:
             ran[name] = check

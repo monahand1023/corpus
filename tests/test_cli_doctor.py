@@ -151,3 +151,99 @@ def test_a_broken_detector_fails_the_doctor_rather_than_being_skipped(
     assert ok is False, "a broken detector must fail, not skip"
     assert "SKIPPED" not in out, out
     assert "[ FAIL ]" in out, out
+
+
+# --- the remaining checks must also refuse to pass on a zero denominator -----
+
+
+def test_a_gold_set_with_no_queries_fails_rather_than_reporting_no_findings(
+    tmp_path, capsys
+) -> None:
+    """An empty gold set audited cleanly: "0 queries" then "[ ok ] no findings".
+
+    The realistic route is a gold set whose module imports fine but whose
+    QUERIES list is empty or renamed -- every finding it could have reported
+    is a finding it cannot reach.
+    """
+    from corpus.cli.doctor import _check_gold_set
+
+    queries = tmp_path / "eval_queries.py"
+    queries.write_text("EVAL_QUERIES = []\n")
+    ok = _check_gold_set(str(queries), _index(tmp_path, [("notes", "a.md", "text")]))
+    out = capsys.readouterr().out
+
+    assert ok is False, "a gold set that asks nothing proves nothing"
+    assert "examined nothing" in out, out
+
+
+def test_a_real_gold_set_reports_its_coverage(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_gold_set
+
+    queries = tmp_path / "eval_queries.py"
+    queries.write_text(
+        'EVAL_QUERIES = [{"query": "ducks at the pond", "expected_keys": ["a.md"]}]\n'
+    )
+    _check_gold_set(str(queries), _index(tmp_path, [("notes", "a.md", "ducks pond")]))
+    out = capsys.readouterr().out
+    assert "1 queries" in out, out
+
+
+def test_an_empty_query_log_is_not_a_passing_check(tmp_path, capsys) -> None:
+    """A log with zero entries told us nothing about demand, and said [ok]."""
+    from corpus.cli.doctor import _check_query_logs
+
+    log = tmp_path / "queries.jsonl"
+    log.write_text("")
+    ok, _reports = _check_query_logs([str(log)], 30)
+    out = capsys.readouterr().out
+
+    assert "examined nothing" in out or ok is False, out
+
+
+# --- dormant filters ---------------------------------------------------------
+
+
+def _sidecar(tmp_path, verdicts, policy="p"):
+    from corpus.transcripts import store
+
+    db = tmp_path / "transcripts.db"
+    with store.open_store(db) as conn:
+        for i, reason in enumerate(verdicts):
+            store.save_no_text(
+                conn, f"/w/{i}.m4a", duration_s=1.0, policy=policy, reason=reason
+            )
+    return str(db)
+
+
+def test_a_filter_that_never_fires_is_named(tmp_path, capsys) -> None:
+    """A dead knob reads exactly like a knob with nothing to reject.
+
+    This project shipped one: a repetition check thresholded at 0.9 whose
+    highest score across 74 real transcripts was 0.250.
+    """
+    from corpus.cli.doctor import _check_filter_activity
+
+    # 250 verdicts, all one reason -- above the dormancy floor.
+    db = _sidecar(tmp_path, ["silence"] * 250)
+    ok = _check_filter_activity(db, policy="p")
+    out = capsys.readouterr().out
+
+    assert "looping_repetition" in out, out
+    assert ok is True, "dormancy is a warning, not a build failure"
+
+
+def test_a_small_sample_says_nothing_about_dormancy(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_filter_activity
+
+    db = _sidecar(tmp_path, ["silence"] * 3)
+    _check_filter_activity(db, policy="p")
+    out = capsys.readouterr().out
+    assert "too small" in out.lower() or "looping_repetition" not in out, out
+
+
+def test_no_sidecar_is_reported_as_not_checked(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_filter_activity
+
+    _check_filter_activity(str(tmp_path / "missing.db"), policy="p")
+    out = capsys.readouterr().out
+    assert "SKIPPED" in out or "NOT CHECKED" in out.upper(), out

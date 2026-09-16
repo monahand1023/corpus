@@ -371,8 +371,30 @@ def demote_transcript(
     conn.commit()
 
 
+def latest_policy(conn: sqlite3.Connection) -> str | None:
+    """The most recently recorded rule set, or None when nothing is recorded.
+
+    Dormancy has to be judged within ONE rule set. Counting verdicts written
+    under older rules against the current filter list manufactures dead
+    filters that are not dead -- on a real sidecar, three looked dormant only
+    because an earlier pipeline spelled its reasons differently. The newest
+    policy is the one whose filter names the running code actually knows.
+    """
+    try:
+        row = conn.execute(
+            "SELECT policy FROM no_text WHERE policy IS NOT NULL AND policy != ''"
+            " ORDER BY checked_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    return str(row[0]) if row else None
+
+
 def filter_activity(
-    conn: sqlite3.Connection, *, policy: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    policy: str | None = None,
+    table: str | None = None,
 ) -> dict[str, int]:
     """How many times each rejection reason actually fired.
 
@@ -392,10 +414,17 @@ def filter_activity(
         # because an earlier pipeline spelled the reasons differently.
         where += " AND policy = ?"
         params = (policy,)
-    for table in ("no_text", "dropped_windows"):
+    # Per-window and whole-file rejections are different POPULATIONS. A
+    # reason only a per-window check can produce looks dormant forever if it
+    # is judged against whole-file verdicts, so a caller comparing a filter
+    # list must scope to the table that list belongs to.
+    tables = (table,) if table else ("no_text", "dropped_windows")
+    for name in tables:
+        if name not in ("no_text", "dropped_windows"):
+            raise ValueError(f"unknown table: {name}")
         try:
             rows = conn.execute(
-                f"SELECT reason, count(*) FROM {table}{where} GROUP BY reason",
+                f"SELECT reason, count(*) FROM {name}{where} GROUP BY reason",
                 params,
             )
         except sqlite3.Error:
