@@ -37,7 +37,6 @@ from corpus.transcripts import quality
 from corpus.transcripts.segment import (
     OVERLAP_S,
     WINDOW_S,
-    Window,
     file_timeout,
     fixed_windows,
     join_windows,
@@ -119,7 +118,7 @@ class Outcome:
         return self.transcript is not None
 
 
-def _window_is_junk(text: str, window: Window, settings: Settings) -> str | None:
+def _window_is_junk(text: str, duration_s: float, settings: Settings) -> str | None:
     """Why this window's text should be discarded, or None to keep it.
 
     Per-WINDOW, not per-file. A recording can be entirely real and still
@@ -137,10 +136,68 @@ def _window_is_junk(text: str, window: Window, settings: Settings) -> str | None
     if quality.looping_share(stripped) >= settings.max_window_looping_share:
         return "looping_repetition"
     if quality.impossible_speech_rate(
-        stripped, window.duration, ceiling=settings.max_chars_per_second
+        stripped, duration_s, ceiling=settings.max_chars_per_second
     ):
         return "impossible_speech_rate"
     return None
+
+
+# Per-window reasons that mean "this text repeats", as opposed to "there is
+# nothing here". Only these are reinstated when dropping would empty a
+# transcript -- see `filter_windows`.
+_REPETITION_REASONS = frozenset({"looping_repetition", "degenerate_repetition"})
+
+
+def filter_windows(
+    windows: Sequence[tuple[str, float, bool]], settings: Settings
+) -> tuple[list[tuple[str, bool]], list[tuple[int, str]]]:
+    """Split windows into kept `(text, continues_previous)` and dropped
+    `(index, reason)`.
+
+    Indices, not text: two windows of one recording can hold identical text
+    (that is what a loop IS), so matching them back up by value mislabels
+    which one was dropped.
+
+    THE FALLBACK, and why it is not optional. The case for a STRICT per-window
+    threshold is that dropping a window costs one chunk while the rest of the
+    recording survives. On a short recording there is no rest: the file is one
+    window, so dropping it IS deleting the recording -- the exact outcome the
+    permissive whole-transcript ceiling exists to prevent, arrived at through
+    the side door.
+
+    Measured on a full transcript archive before this existed: 176 recordings
+    would have been emptied, 174 of them single-window, including a child's
+    "Happy Birthday to you" repeated eight times, "I'm so excited!" three
+    times, and a toddler saying "Daddy". The same recordings a 0.6
+    whole-transcript ceiling had deleted earlier the same day.
+
+    So when dropping would leave NOTHING, repetition-dropped windows are
+    reinstated and the permissive `judge_transcript` decides the file's fate.
+    Boilerplate is not reinstated: "Thank you. Thank you." is the model
+    filling silence, not a song, and putting it back would return an empty
+    result to search.
+    """
+    verdicts = [
+        _window_is_junk(text, duration, settings)
+        for text, duration, _ in windows
+    ]
+    if not any(v is None for v in verdicts) and any(
+        v in _REPETITION_REASONS for v in verdicts
+    ):
+        # Nothing would survive and at least one drop was repetition:
+        # reinstate those and let the permissive whole-transcript rule judge.
+        verdicts = [None if v in _REPETITION_REASONS else v for v in verdicts]
+
+    kept: list[tuple[str, bool]] = []
+    dropped: list[tuple[int, str]] = []
+    for i, ((text, _d, continues), reason) in enumerate(
+        zip(windows, verdicts, strict=True)
+    ):
+        if reason is None:
+            kept.append((text.strip(), continues))
+        else:
+            dropped.append((i, reason))
+    return kept, dropped
 
 
 def transcribe_file(
@@ -205,33 +262,45 @@ def transcribe_file(
             )
         )
 
-    kept: list[tuple[str, bool]] = []
-    stored: list[StoredWindow] = []
-    languages: list[str] = []
+    # Transcribe every window first, then filter as a set. Filtering inside
+    # the loop cannot see whether anything else survives, and that is exactly
+    # the judgement `filter_windows` has to make: dropping the ONLY window is
+    # deleting the recording, not trimming it.
+    results = []
     for window in plan:
         begin = int(window.start * 16_000)
         finish = int(window.end * 16_000)
-        result = backend.transcribe_window(samples[begin:finish])
-        reason = _window_is_junk(result.text, window, settings)
-        if reason:
-            outcome.dropped.append(
-                DroppedWindow(
-                    window_start=window.start,
-                    no_speech=result.no_speech if result.no_speech is not None else -1.0,
-                    avg_logprob=(
-                        result.avg_logprob if result.avg_logprob is not None else -1.0
-                    ),
-                    text=result.text,
-                    reason=reason,
+        results.append((window, backend.transcribe_window(samples[begin:finish])))
+
+    kept, dropped_pairs = filter_windows(
+        [(r.text, w.duration, w.continues_previous) for w, r in results], settings
+    )
+    dropped_reason = dict(dropped_pairs)
+
+    stored: list[StoredWindow] = []
+    languages: list[str] = []
+    for i, (window, result) in enumerate(results):
+        reason = dropped_reason.get(i)
+        if reason is None:
+            stored.append(
+                StoredWindow(
+                    window.start, window.end, result.text.strip(), result.language
                 )
             )
+            if result.language:
+                languages.append(result.language)
             continue
-        kept.append((result.text.strip(), window.continues_previous))
-        stored.append(
-            StoredWindow(window.start, window.end, result.text.strip(), result.language)
+        outcome.dropped.append(
+            DroppedWindow(
+                window_start=window.start,
+                no_speech=result.no_speech if result.no_speech is not None else -1.0,
+                avg_logprob=(
+                    result.avg_logprob if result.avg_logprob is not None else -1.0
+                ),
+                text=result.text,
+                reason=reason,
+            )
         )
-        if result.language:
-            languages.append(result.language)
 
     text = join_windows(kept)
     outcome.elapsed_s = time.monotonic() - started

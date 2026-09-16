@@ -286,9 +286,44 @@ failures are in the sample it is measured against. That is why the margin
 check now prints the nearest recording's text beside the number.
 
 So `DEFAULT_MAX_WINDOW_LOOPING_SHARE` (0.6) is now separate from
-`DEFAULT_MAX_LOOPING_SHARE` (0.85). Measured against the live archive, the
-split deletes **nothing** — no transcript scores above 0.85 — and changes only
-which windows inside 184 recordings become chunks.
+`DEFAULT_MAX_LOOPING_SHARE` (0.85).
+
+#### …and "one chunk" is false when there is only one window
+
+The argument above — a dropped window costs one chunk, the rest of the
+recording survives — has a precondition nobody stated: **there has to be a
+rest.** A short recording is a single window, so dropping it *is* deleting the
+recording, arriving at the outcome the permissive ceiling exists to prevent
+through the side door.
+
+Simulated against the live archive before anything was written: the strict
+window rule would have emptied **176 recordings, 174 of them single-window**,
+including
+
+```
+"a birthday line, then another.."        0.647
+"an exclamation, three times"
+"a greeting, then a chant"
+"an objection, three times"
+```
+
+— the same recordings a 0.6 *whole-transcript* ceiling had deleted earlier
+the same day, reached by a different route. **The lesson did not transfer
+because the new code did not look like the old mistake.**
+
+`filter_windows` therefore never lets per-window dropping empty a transcript:
+if nothing would survive and any drop was a REPETITION, those windows are
+reinstated and the permissive `judge_transcript` decides. Boilerplate is not
+reinstated — "Thank you. Thank you." is the model filling silence, not a song,
+and putting it back returns an empty result to search.
+
+Measured on the live archive with the fallback in place:
+
+| | |
+|---|---|
+| recordings deleted | **2** (both pure "Thank you.") |
+| recordings with loop windows stripped | 1,108 |
+| windows dropped | 1,424 |
 
 Repetition is measured with character n-grams for scripts without word spaces.
 Splitting on whitespace makes a wall of identical Khmer or Japanese syllables a

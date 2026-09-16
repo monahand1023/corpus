@@ -48,10 +48,7 @@ def test_a_window_that_is_nothing_but_a_loop_is_dropped():
     indexed, searchable chunk of a model talking to itself."""
     from corpus.transcripts.pipeline import _window_is_junk as drop
 
-    class _W:
-        duration = 30.0
-
-    assert drop(PURE_LOOP, _W(), Settings()) == "looping_repetition"
+    assert drop(PURE_LOOP, 30.0, Settings()) == "looping_repetition"
 
 
 def test_the_whole_recording_is_still_kept_when_only_its_tail_loops():
@@ -71,13 +68,81 @@ def test_a_short_real_repeat_survives_the_window_filter():
     not be dropped by the stricter window rule."""
     from corpus.transcripts.pipeline import _window_is_junk as drop
 
-    class _W:
-        duration = 4.0
-
-    assert drop("Papa! Papa! Papa! Papa!", _W(), Settings()) is None
+    assert drop("Papa! Papa! Papa! Papa!", 4.0, Settings()) is None
 
 
 def test_the_window_threshold_reaches_the_policy_fingerprint():
     """A threshold the fingerprint cannot see is a threshold whose change
     does not invalidate the verdicts it produced."""
     assert "max_window_looping_share" in Settings().as_policy("m")
+
+
+# --- "a dropped window costs one chunk" is false when there is only one -------
+
+
+def test_a_single_window_recording_is_not_deleted_by_the_window_filter():
+    """The argument for a STRICT window threshold was that dropping a window
+    costs one chunk while the rest of the recording survives. On a short
+    recording there is no rest: the file is one window, so dropping it IS
+    deleting the recording -- the precise failure the permissive transcript
+    ceiling exists to prevent.
+
+    Measured before this was caught, on a full transcript archive: 176
+    recordings would have been emptied, 174 of them single-window, including
+
+        "a birthday line, then another.."   (0.647)
+        "an exclamation, three times"
+        "a greeting, then a chant"
+
+    -- the exact material the archive exists for, and the same recordings a
+    0.6 whole-transcript ceiling deleted earlier the same day.
+    """
+    from corpus.transcripts.pipeline import filter_windows
+
+    song = "Happy Birthday to you. " * 8
+    kept, dropped = filter_windows([(song, 30.0, False)], Settings())
+    assert [t for t, _ in kept] == [song.strip()], (
+        f"the only window was dropped: {dropped}"
+    )
+
+
+def test_a_looping_window_inside_a_real_recording_is_still_dropped():
+    """The permissive side must not swallow the strict one. Real speech
+    either side means the loop can go and the recording survives."""
+    from corpus.transcripts.pipeline import filter_windows
+
+    real_a = "We walked down to the harbour and the boats were all out."
+    loop = "そのため、" * 30
+    real_b = "Then we found a bakery and sat outside for an hour."
+    kept, dropped = filter_windows(
+        [(real_a, 30.0, False), (loop, 30.0, True), (real_b, 30.0, True)],
+        Settings(),
+    )
+    assert [t for t, _ in kept] == [real_a, real_b]
+    assert dropped == [(1, "looping_repetition")]
+
+
+def test_windows_that_are_all_boilerplate_are_still_dropped_entirely():
+    """The fallback is for REPETITION only. "Thank you. Thank you." is not a
+    song the archive's owner wants -- it is the model filling silence, and
+    reinstating it would put an empty result back into search."""
+    from corpus.transcripts.pipeline import filter_windows
+
+    kept, dropped = filter_windows(
+        [("Thank you.", 20.0, False), ("Thank you.", 20.0, True)], Settings()
+    )
+    assert kept == []
+    assert {r for _, r in dropped} == {"caption_boilerplate"}
+    assert [i for i, _ in dropped] == [0, 1]
+
+
+def test_an_all_looping_multi_window_file_also_falls_back():
+    """Not a single-window special case. Three looping windows and nothing
+    else is still a recording whose fate the permissive whole-transcript
+    ceiling should decide, not the strict per-window one."""
+    from corpus.transcripts.pipeline import filter_windows
+
+    chant = "Papa Papa Papa Papa Papa Papa Papa Papa Papa Papa "
+    windows = [(chant, 30.0, i > 0) for i in range(3)]
+    kept, _ = filter_windows(windows, Settings())
+    assert len(kept) == 3, "a chant across three windows was deleted"
