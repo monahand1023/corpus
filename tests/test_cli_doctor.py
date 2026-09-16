@@ -89,11 +89,13 @@ def _index(tmp_path, rows) -> str:
     c = sqlite3.connect(p)
     c.executescript(
         "CREATE TABLE chunks (id TEXT PRIMARY KEY, source_type TEXT NOT NULL,"
-        " source_key TEXT NOT NULL, content TEXT NOT NULL);"
+        " source_key TEXT NOT NULL, content TEXT NOT NULL,"
+        " content_hash TEXT NOT NULL DEFAULT '');"
     )
     c.executemany(
-        "INSERT INTO chunks (id, source_type, source_key, content) VALUES (?,?,?,?)",
-        [(str(i), st, k, t) for i, (st, k, t) in enumerate(rows)],
+        "INSERT INTO chunks (id, source_type, source_key, content, content_hash)"
+        " VALUES (?,?,?,?,?)",
+        [(str(i), st, k, t, str(hash(t))) for i, (st, k, t) in enumerate(rows)],
     )
     c.commit()
     c.close()
@@ -397,3 +399,44 @@ def test_the_check_can_load_a_consumers_registration_first(capsys) -> None:
         CONNECTOR_REGISTRY["markdown"] = _BUILTIN_BUILDERS["markdown"]
         sys.modules.pop("_fake_consumer", None)
         assert CONNECTOR_REGISTRY["markdown"] is original or True
+
+
+# --- duplicate content -------------------------------------------------------
+
+
+def test_duplicate_passages_are_reported_with_the_documents_involved(
+    tmp_path, capsys
+) -> None:
+    """Report, never delete. Some duplication is legitimate."""
+    from corpus.cli.doctor import _check_duplicate_content
+
+    db = _index(tmp_path, [
+        ("tr", "/vol/one/clip.mov", "first half of a long talk about migrations"),
+        ("tr", "/vol/one/clip.mov", "second half of a long talk about migrations"),
+        ("tr", "/backup/clip.mov", "first half of a long talk about migrations"),
+        ("tr", "/backup/clip.mov", "second half of a long talk about migrations"),
+    ])
+    ok = _check_duplicate_content(db)
+    out = capsys.readouterr().out
+
+    assert ok is True, "duplication is reported, not failed -- some is legitimate"
+    assert "clip.mov" in out
+    assert "50" in out or "%" in out
+
+
+def test_a_clean_index_reports_no_duplication(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_duplicate_content
+
+    _check_duplicate_content(_index(tmp_path, [
+        ("notes", "a.md", "one distinct passage"),
+        ("notes", "b.md", "another distinct passage"),
+    ]))
+    assert "[  ok  ]" in capsys.readouterr().out
+
+
+def test_an_empty_index_cannot_report_clean_duplication(tmp_path, capsys) -> None:
+    from corpus.cli.doctor import _check_duplicate_content
+
+    _check_duplicate_content(_index(tmp_path, []))
+    out = capsys.readouterr().out
+    assert "examined nothing" in out or "SKIPPED" in out

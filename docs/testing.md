@@ -357,6 +357,13 @@ a check that passed:
 corpus-doctor --config corpus.toml --load docs_rag.transcripts
 ```
 
+- **duplicate content** — passages indexed from more than one document.
+  Reported, never deduplicated: an email thread quotes what it replies to and
+  a template repeats its boilerplate, so deciding which copies are waste needs
+  a person. On a live archive it found 6.5% redundancy and, within minutes,
+  55 backup files (`.bak-*`) occupying 3.3% of the index -- stale copies
+  competing with the live notes in every search.
+
 **The rule worth taking away: NOT CHECKED is not a pass.** Distinguish "I
 looked and it was clean" from "I could not look", and make the second louder.
 

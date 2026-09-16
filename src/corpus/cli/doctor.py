@@ -367,6 +367,52 @@ def _check_shadowed_components(load: str | None = None) -> bool:
     return True
 
 
+def _check_duplicate_content(db_path: str | None) -> bool:
+    """Passages indexed from more than one document.
+
+    Measured on a live archive: 6.5% of the index, traced to 168 recordings
+    present twice under different paths -- 17.8 GPU-hours transcribed twice
+    and a search that can return the same passage from two files.
+
+    Reported, never deduplicated. Some duplication is legitimate and must not
+    be touched: an email thread quotes what it replies to, a template repeats
+    its boilerplate. A second archive measured 1.2% and almost all of it was
+    quoting. Nothing here can tell that apart from a file copied into two
+    folders -- a person can, given the evidence.
+    """
+    print("\nduplicate content")
+    if not db_path:
+        print("  SKIPPED (no --config or --db)")
+        return True
+
+    from corpus.survey.duplicates import find_duplicate_content
+
+    try:
+        report = find_duplicate_content(db_path)
+    except Exception as exc:
+        print(f"  SKIPPED (could not scan: {type(exc).__name__})")
+        return True
+
+    if report.coverage.vacuous:
+        print(f"  SKIPPED ({report.coverage.describe()})")
+        return True
+    if not report.redundant_chunks:
+        print(f"  [  ok  ] {report.coverage.describe()}, no passage appears twice")
+        return True
+
+    print(
+        f"  [ info ] {report.redundant_chunks:,} of {report.coverage.describe()} "
+        f"({report.percent:.1f}%) duplicate another document"
+    )
+    for left, right, shared in report.duplicate_documents[:5]:
+        print(f"           {shared:>4} shared: {Path(left).name} / {Path(right).name}")
+    print("           Some of this is legitimate (quoted mail, shared "
+          "boilerplate).")
+    print("           Pairs sharing MANY passages are usually one file in two "
+          "places.")
+    return True
+
+
 def _check_threshold_margins(sidecar: str | None) -> bool:
     """How close is each threshold to the real data it must not reject?
 
@@ -582,6 +628,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sidecar,
         ),
         ("threshold margins", _check_threshold_margins(sidecar), sidecar),
+        ("duplicate content", _check_duplicate_content(db_path), db_path),
         (
             "shadowed components",
             _check_shadowed_components(args.load),
