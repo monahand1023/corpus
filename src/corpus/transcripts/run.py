@@ -190,9 +190,19 @@ def rejudge_stored(
         if verdict.keep:
             store.restamp_transcript(conn, path, policy=policy)
         else:
+            # The window geometry travels with the rejection: without it
+            # the decision cannot be re-judged, because the rate rule
+            # divides by the WINDOW's duration and only the file's survives.
+            stored_segments = ""
+            row = conn.execute(
+                "SELECT segments FROM transcripts WHERE path = ?", (path,)
+            ).fetchone()
+            if row is not None and row[0]:
+                stored_segments = row[0]
             store.demote_transcript(
                 conn, path, duration_s=duration_s, policy=policy,
                 reason=verdict.reason or "no_text", rejected_text=text,
+                segments=stored_segments,
             )
             demoted += 1
     return rejudged, demoted
@@ -347,6 +357,7 @@ def refilter_stored(
             store.demote_transcript(
                 conn, path, duration_s=duration_s, policy=policy,
                 reason=verdict.reason or "no_text", rejected_text=new_text or text,
+                segments=segments or "",
             )
             stats.demoted += 1
             continue

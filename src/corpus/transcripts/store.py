@@ -105,6 +105,13 @@ _ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "no_text": (
         ("reason", "TEXT NOT NULL DEFAULT ''"),
         ("rejected_text", "TEXT NOT NULL DEFAULT ''"),
+        # The WINDOW geometry, without which a rejection cannot be re-judged.
+        # `rejected_text` alone is the joined text, and the speech-rate rule
+        # divides by the WINDOW's duration -- so re-judging from text plus the
+        # FILE duration spreads a burst across the whole recording and calls
+        # it speech. That is exactly the defect that put decode loops into a
+        # live index. Kept so "auditable" is true rather than advertised.
+        ("segments", "TEXT NOT NULL DEFAULT ''"),
     ),
     "transcripts": (("policy", "TEXT NOT NULL DEFAULT ''"),),
     "dropped_windows": (("reason", "TEXT NOT NULL DEFAULT ''"),),
@@ -448,19 +455,28 @@ def demote_transcript(
     policy: str,
     reason: str,
     rejected_text: str,
+    segments: str = "",
 ) -> None:
     """Move a transcript the current rules reject into `no_text`.
 
     The text is kept as `rejected_text` rather than dropped, so a rule that
     turns out to be too aggressive can be audited and reversed against real
     evidence instead of a re-run.
+
+    `segments` is the WINDOW GEOMETRY, and without it that promise does not
+    hold. The pipeline filters windows first and the speech-rate rule divides
+    by the WINDOW's duration; the joined text plus the FILE's duration
+    re-judges a 1.7-second burst as if it were spread over a minute. Measured
+    on a live sidecar, re-judging rejections from text alone would have
+    restored the three decode loops that had just been removed -- and looked
+    right doing it.
     """
     conn.execute("DELETE FROM transcripts WHERE path = ?", (path,))
     conn.execute(
         "INSERT OR REPLACE INTO no_text"
-        " (path, duration_s, policy, reason, rejected_text, checked_at)"
-        " VALUES (?,?,?,?,?,?)",
-        (path, duration_s, policy, reason, rejected_text, _now()),
+        " (path, duration_s, policy, reason, rejected_text, segments, checked_at)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (path, duration_s, policy, reason, rejected_text, segments, _now()),
     )
     conn.commit()
 
