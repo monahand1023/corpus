@@ -444,3 +444,31 @@ def test_a_comments_only_pattern_file_still_allows_the_push(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_the_installer_verifies_every_hook_it_enables():
+    """It checked `pre-commit` and enabled all three.
+
+    `install-hooks.sh` verifies one hook is executable, then points
+    `core.hooksPath` at the whole directory -- which enables `commit-msg`
+    and `pre-push` too, unverified. `pre-push` is the private-name guard:
+    the one whose failure mode is a string reaching a public remote, where
+    a force-push cannot undo it.
+
+    So the script's own success message ("corpus hooks installed") covered
+    two hooks it had never looked at. If either lost its executable bit,
+    git would skip it silently and the installer would still say installed.
+    """
+    import re
+    from pathlib import Path
+
+    script = Path("scripts/install-hooks.sh").read_text()
+    # The hooks the script enables by setting core.hooksPath.
+    enabled = {p.name for p in Path(".githooks").iterdir() if p.is_file()}
+    assert enabled, "no hooks found to verify"
+
+    for hook in sorted(enabled):
+        assert re.search(rf"\b{re.escape(hook)}\b", script), (
+            f"install-hooks.sh enables {hook} by setting core.hooksPath but "
+            "never verifies it is executable"
+        )
