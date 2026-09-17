@@ -99,6 +99,10 @@ def test_addresses_are_assembled_in_reading_order(tmp_path: Path) -> None:
 def test_the_note_is_preserved_verbatim(tmp_path: Path) -> None:
     # Usually the highest-signal field, and the only one that says why this
     # person is in the address book at all.
+    # Invented. This was a verbatim note about a REAL contact, including a
+    # third party's relationship -- personal data about people who never
+    # chose to be in a public repo. The test needs multi-line free text under
+    # labelled fields, not that text.
     note = "Employer: Northwind\nPhone 1 type: mobile\nNotes: met at the depot\n"
     _write(tmp_path, "C:ABPerson.abcdp", {"First": "Sam", "Note": note})
 

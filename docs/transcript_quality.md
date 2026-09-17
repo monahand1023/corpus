@@ -301,12 +301,8 @@ Simulated against the live archive before anything was written: the strict
 window rule would have emptied **176 recordings, 174 of them single-window**,
 including
 
-```
-a birthday song addressed to the singer, then to someone else   0.647
-an excited exclamation, three times
-a greeting followed by a chant of kin-terms
-an objection repeated three times
-```
+They are short, single-window and heavily repetitive — songs, chants, a
+toddler — and the lowest of them scores **0.647**.
 
 — the same recordings a 0.6 *whole-transcript* ceiling had deleted earlier
 the same day, reached by a different route. **The lesson did not transfer

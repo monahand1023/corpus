@@ -29,7 +29,10 @@ def _log(tmp_path: Path, queries: list[str], name: str = "queries.jsonl") -> Pat
     return path
 
 
-REAL = [
+# Invented queries that are NOT synthetic-looking -- the distinction this
+# module tests. These were real logged queries from a personal archive, two of
+# them domestic; the audit only needs them to be unlike the seeded ones.
+NON_SYNTHETIC = [
     "what did we decide about the billing provider",
     "when does the warranty on the boiler run out",
     "the quote for replacing the side gate",
@@ -42,7 +45,7 @@ REAL = [
 def test_the_projects_own_health_probe_is_an_error(tmp_path: Path) -> None:
     # corpus-smoke drove every server with this, leaving three archives whose
     # logged queries were almost entirely the probe.
-    report = audit_query_log(_log(tmp_path, [*REAL, "notes from last year"]))
+    report = audit_query_log(_log(tmp_path, [*NON_SYNTHETIC, "notes from last year"]))
     assert "synthetic-probe-in-log" in _kinds(report)
     assert not report.ok
 
@@ -59,7 +62,7 @@ def test_test_suite_fixtures_are_an_error(tmp_path: Path) -> None:
 
 
 def test_a_clean_log_of_real_questions_passes(tmp_path: Path) -> None:
-    report = audit_query_log(_log(tmp_path, REAL), min_real_for_conclusions=1)
+    report = audit_query_log(_log(tmp_path, NON_SYNTHETIC), min_real_for_conclusions=1)
     assert report.ok
     assert report.findings == []
     assert report.distinct_real == 3
@@ -72,7 +75,7 @@ def test_one_query_dominating_a_log_is_reported(tmp_path: Path) -> None:
     # A string no fixture list knows about is still suspicious when it is most
     # of the log. A person asking the same thing 40 times is possible;
     # something automated is likelier.
-    queries = ["some unrecognised harness string"] * 40 + REAL
+    queries = ["some unrecognised harness string"] * 40 + NON_SYNTHETIC
     report = audit_query_log(_log(tmp_path, queries), min_real_for_conclusions=1)
     assert "one-query-dominates" in _kinds(report)
 
@@ -87,7 +90,7 @@ def test_a_repeated_query_below_the_threshold_is_not_reported(tmp_path: Path) ->
 
 
 def test_a_very_short_query_counts_as_a_fixture(tmp_path: Path) -> None:
-    report = audit_query_log(_log(tmp_path, ["q", "x", *REAL]))
+    report = audit_query_log(_log(tmp_path, ["q", "x", *NON_SYNTHETIC]))
     assert report.fixture == 2
 
 
@@ -98,7 +101,7 @@ def test_a_thin_log_says_it_cannot_support_conclusions(tmp_path: Path) -> None:
     # Logging that is configured but never exercised is indistinguishable from
     # logging that works and shows low use. The report has to say which
     # question it cannot answer.
-    report = audit_query_log(_log(tmp_path, REAL))
+    report = audit_query_log(_log(tmp_path, NON_SYNTHETIC))
     assert "too-thin-to-conclude" in _kinds(report)
     # A thin log is a warning, not an error: it is honest, merely unusable.
     assert report.ok

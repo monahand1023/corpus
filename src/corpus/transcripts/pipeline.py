@@ -190,10 +190,10 @@ def filter_windows(
     the side door.
 
     Measured on a full transcript archive before this existed: 176 recordings
-    would have been emptied, 174 of them single-window, including a child's
-    "Happy Birthday to you" repeated eight times, "I'm so excited!" three
-    times, and a toddler saying "Daddy". The same recordings a 0.6
-    whole-transcript ceiling had deleted earlier the same day.
+    would have been emptied, 174 of them single-window: a birthday line sung
+    over and over, an exclamation repeated three times, a toddler naming a
+    parent. The same recordings a 0.6 whole-transcript ceiling had deleted
+    earlier the same day.
 
     So when dropping would leave NOTHING, repetition-dropped windows are
     reinstated and the permissive `judge_transcript` decides the file's fate.

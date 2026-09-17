@@ -32,11 +32,12 @@ from corpus.transcripts.run import refilter_stored
 LOOP = "そのため、" * 30
 REAL_A = "We walked down to the harbour and the boats were all out."
 REAL_B = "Then we found a bakery and sat outside for an hour."
-# The REAL text of a family recording from the live archive, not a synthetic
-# repeat. It scores 0.6471: above the 0.6 window ceiling, below the 0.85
-# transcript one -- which is precisely the band the fallback exists for. A
-# tidier `"Happy Birthday to you. " * 8` scores 0.8667 and would be rejected
-# on its own merits, proving nothing about the fallback.
+# An UNTIDY repeat, which is the point: it scores 0.6471, above the 0.6 window
+# ceiling and below the 0.85 transcript one -- precisely the band the fallback
+# exists for. A tidy `"Happy Birthday to you. " * 8` scores 0.8667 and would be
+# rejected on its own merits, proving nothing. Real family recordings repeat
+# like this, imperfectly; that is why a synthetic-looking fixture cannot stand
+# in for one here.
 SONG = (
     "a birthday line, then another "
     "Happy Birthday to you. Happy Birthday to you."

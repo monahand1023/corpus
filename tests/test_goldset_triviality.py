@@ -31,13 +31,13 @@ from corpus.eval.triviality import (
 
 def test_a_query_accepting_most_of_the_archive_is_flagged():
     report = triviality_report(
-        {"my wife's phone photos": 27_946, "a bridge over a river": 7},
-        documents=196_575,
+        {"everything anyone ever photographed": 14_000, "one specific bridge": 7},
+        documents=100_000,
         top_k=5,
     )
-    assert report.trivial == ["my wife's phone photos"]
+    assert report.trivial == ["everything anyone ever photographed"]
     assert not report.is_clean
-    assert "27,946" in report.describe()
+    assert "14,000" in report.describe()
 
 
 def test_a_normal_gold_set_is_not_flagged():
@@ -50,7 +50,7 @@ def test_a_normal_gold_set_is_not_flagged():
              941, 929, 923, 908, 654, 610, 607, 597, 368, 231, 200, 38, 7]
         )
     }
-    report = triviality_report(sizes, documents=196_575, top_k=5)
+    report = triviality_report(sizes, documents=100_000, top_k=5)
     assert report.is_clean, report.describe()
 
 
@@ -58,9 +58,9 @@ def test_the_set_wide_floor_is_what_a_random_retriever_would_score():
     """The number that says whether a gate is earned at all. A floor of
     0.708 over a set a coin flip scores 0.700 on is not a gate."""
     report = triviality_report(
-        {"a": 27_946, "b": 27_946}, documents=196_575, top_k=5
+        {"a": 14_000, "b": 14_000}, documents=100_000, top_k=5
     )
-    assert report.random_recall == pytest.approx(0.535, abs=0.01)
+    assert report.random_recall == pytest.approx(0.530, abs=0.01)
 
 
 def test_an_empty_archive_does_not_divide_by_zero():
@@ -111,14 +111,14 @@ def test_the_eval_reports_the_random_baseline_beside_the_score(tmp_path, capsys)
     from corpus.cli.eval import _report_triviality
 
     _report_triviality(
-        key_counts={"broad": 27_946, "narrow": 7},
-        documents=196_575,
+        key_counts={"broad": 14_000, "narrow": 7},
+        documents=100_000,
         top_k=5,
     )
     out = capsys.readouterr().out
 
     assert "random retriever" in out
-    assert "0.268" in out or "0.267" in out, out  # (0.535 + 0.000) / 2
+    assert "0.265" in out or "0.264" in out, out  # (0.530 + 0.000) / 2
     assert "broad" in out, "the offending query was not named"
 
 
@@ -127,7 +127,7 @@ def test_the_eval_says_nothing_when_the_gold_set_is_sound(tmp_path, capsys):
     and this one has to be read on the run where it matters."""
     from corpus.cli.eval import _report_triviality
 
-    _report_triviality(key_counts={"a": 7, "b": 38}, documents=196_575, top_k=5)
+    _report_triviality(key_counts={"a": 7, "b": 38}, documents=100_000, top_k=5)
     out = capsys.readouterr().out
 
     assert out.strip() == "", f"printed on a clean gold set:\n{out}"

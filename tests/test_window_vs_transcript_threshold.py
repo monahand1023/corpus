@@ -88,14 +88,12 @@ def test_a_single_window_recording_is_not_deleted_by_the_window_filter():
     ceiling exists to prevent.
 
     Measured before this was caught, on a full transcript archive: 176
-    recordings would have been emptied, 174 of them single-window, including
+    recordings would have been emptied, 174 of them single-window. They are
+    short, single-window and heavily repetitive -- songs, chants, a toddler --
+    and the lowest of them scores 0.647.
 
-        "a birthday line, then another.."   (0.647)
-        "an exclamation, three times"
-        "a greeting, then a chant"
-
-    -- the exact material the archive exists for, and the same recordings a
-    0.6 whole-transcript ceiling deleted earlier the same day.
+    That is the exact material the archive exists for, and the same recordings
+    a 0.6 whole-transcript ceiling deleted earlier the same day.
     """
     from corpus.transcripts.pipeline import filter_windows
 
