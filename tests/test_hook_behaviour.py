@@ -374,3 +374,73 @@ def test_pre_push_allows_ordinary_text_on_an_ordinary_branch(tmp_path):
     result = _push_range(repo, sha, ref="refs/heads/feature-work")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_pre_push_blocks_when_it_cannot_list_the_commits(tmp_path):
+    """`git rev-list "$RANGE"` with stderr discarded and status unread.
+
+    When `$remote_sha` is not a local object -- a stale remote-tracking ref,
+    someone else's force-push, a gc'd object, a shallow clone -- rev-list
+    exits 128 with empty stdout. The loop body never runs, FOUND stays 0,
+    and the hook falls through to `exit 0` printing NOTHING. Zero commits
+    scanned is indistinguishable from zero commits matching.
+
+    The same file already fails CLOSED on grep exit >= 2. This is the one
+    place it did not.
+    """
+    repo = _repo(tmp_path, f"{SECRET}\n")
+    sha = _commit(repo, "ok.txt", b"fine\n")
+    missing = "0" * 39 + "1"  # a well-formed sha that is not in this repo
+    result = subprocess.run(
+        [str(HOOKS / "pre-push"), "origin", "https://example.invalid/x.git"],
+        cwd=repo, capture_output=True, text=True,
+        input=f"refs/heads/main {sha} refs/heads/main {missing}\n",
+    )
+
+    assert result.returncode == 1, (
+        "the hook could not list what it was about to push and allowed it"
+    )
+    assert "BLOCKED" in result.stderr
+
+
+def test_pre_push_blocks_when_the_pattern_file_is_unreadable(tmp_path):
+    """Three outcomes collapsed into one silent pass.
+
+    A failed `mktemp`, an unreadable pattern file, and a pattern file that
+    legitimately holds only comments all reached the same `exit 0`. Only the
+    last is correct. The MISSING-file case at least prints a NOTE; the
+    unreadable one printed nothing at all.
+    """
+    repo = _repo(tmp_path, f"{SECRET}\n")
+    sha = _commit(repo, "ok.txt", b"fine\n")
+    patterns = repo / ".git" / "private-name-patterns"
+    patterns.chmod(0o000)
+    try:
+        result = subprocess.run(
+            [str(HOOKS / "pre-push"), "origin", "https://example.invalid/x.git"],
+            cwd=repo, capture_output=True, text=True,
+            input=f"refs/heads/main {sha} refs/heads/main {'0' * 40}\n",
+        )
+    finally:
+        patterns.chmod(0o600)
+
+    assert result.returncode == 1, (
+        "an unreadable pattern file read as 'nothing to check' and the push "
+        "was allowed"
+    )
+    assert "BLOCKED" in result.stderr
+
+
+def test_a_comments_only_pattern_file_still_allows_the_push(tmp_path):
+    """The one case that legitimately exits 0. It must stay distinguishable
+    from the two failures above, or the fix is just a stricter hook that
+    people disable."""
+    repo = _repo(tmp_path, "# only a comment\n\n")
+    sha = _commit(repo, "ok.txt", b"fine\n")
+    result = subprocess.run(
+        [str(HOOKS / "pre-push"), "origin", "https://example.invalid/x.git"],
+        cwd=repo, capture_output=True, text=True,
+        input=f"refs/heads/main {sha} refs/heads/main {'0' * 40}\n",
+    )
+
+    assert result.returncode == 0, result.stderr

@@ -45,13 +45,38 @@ DEFAULT_TIMEOUT = 180.0
 
 # `python -m sample_rag.mcp_server`, and the console script a consumer
 # installs for a live (non-indexed) variant of the same archive.
+def note_stdin_eof_unverified(report: ServerReport) -> None:
+    """Record that the process exit was NOT observed here.
+
+    This line used to read `report.add("exited on stdin EOF", True, ...)` --
+    a literal True, with a comment above it saying the exit was "worth
+    asserting rather than assuming". Nothing was polled, no returncode was
+    read, no process was waited on. It also sat outside the try, so a server
+    whose handshake timed out still got a tick beside the failure.
+
+    It is not measurable from here: `stdio_client` owns the subprocess and
+    never exposes its exit status. So the report says what is true -- that
+    this run did not check -- and names the test that does, because a line
+    that only says "unverified" teaches people to skip it.
+    """
+    report.add(
+        "exited on stdin EOF",
+        None,
+        "not checked here -- stdio_client owns the process and does not "
+        "expose its exit; covered by tests/test_mcp_lifecycle.py",
+    )
+
+
 _RAG_MODULE = re.compile(r"[\w.-]*[_-]rag(?:\.mcp_server|-live)\b")
 
 
 @dataclass
 class Check:
     name: str
-    ok: bool
+    # None means NOT OBSERVED -- neither a pass nor a failure. Distinct from
+    # False on purpose: this report exists to say what was actually seen, and
+    # one line in it used to claim a pass for something nothing could see.
+    ok: bool | None
     detail: str = ""
 
 
@@ -62,9 +87,12 @@ class ServerReport:
 
     @property
     def ok(self) -> bool:
-        return all(c.ok for c in self.checks)
+        # An unobserved check is an absence, not a failure. Failing on it
+        # would make smoke red against every healthy server, and a report
+        # that is always red is a report nobody reads.
+        return all(c.ok is not False for c in self.checks)
 
-    def add(self, name: str, ok: bool, detail: str = "") -> None:
+    def add(self, name: str, ok: bool | None, detail: str = "") -> None:
         self.checks.append(Check(name, ok, detail))
 
 
@@ -209,10 +237,7 @@ async def _smoke_one(
     except Exception as exc:
         report.add("handshake", False, f"{type(exc).__name__}: {exc}")
 
-    # Leaving the context manager closes stdin. A stdio server that does not
-    # exit on EOF is the leak class the lifecycle work was about, so the exit
-    # is worth asserting rather than assuming.
-    report.add("exited on stdin EOF", True, "client closed cleanly")
+    note_stdin_eof_unverified(report)
     return report
 
 
@@ -420,7 +445,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         for r in reports:
             print(f"\n{'PASS' if r.ok else 'FAIL'}  {r.server}")
             for c in r.checks:
-                mark = "  ok  " if c.ok else " FAIL "
+                # Three states: an unobserved check must not render as
+                # either a tick or a failure.
+                mark = "  ok  " if c.ok else (" FAIL " if c.ok is False else " n/a  ")
                 print(f"  [{mark}] {c.name}" + (f" -- {c.detail}" if c.detail else ""))
         passed = sum(1 for r in reports if r.ok)
         print(f"\n{passed}/{len(reports)} servers healthy")

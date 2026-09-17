@@ -44,8 +44,26 @@ if ! printf 'canary\n' | grep -qiE 'canary'; then
 fi
 
 # Strip comments and blanks into a plain pattern file grep can read.
-ACTIVE="$(mktemp)"
+ACTIVE="$(mktemp)" || {
+    echo "" >&2
+    echo "  PUSH BLOCKED: could not create a temporary file, so the" >&2
+    echo "  private-name check cannot run." >&2
+    echo "" >&2
+    exit 1
+}
 trap 'rm -f "$ACTIVE"' EXIT
+
+# READABLE, not merely present. An unreadable pattern file made both greps
+# exit 2, left ACTIVE empty, and fell through to the `exit 0` below -- so
+# "I could not read the rules" and "the rules are all comments" produced the
+# same silent pass. Only the second is a reason to allow a push.
+if [ ! -r "$PATTERNS" ]; then
+    echo "" >&2
+    echo "  PUSH BLOCKED: $PATTERNS exists but cannot be read, so NO" >&2
+    echo "  private-name pattern is being checked." >&2
+    echo "" >&2
+    exit 1
+fi
 grep -v '^[[:space:]]*#' "$PATTERNS" | grep -v '^[[:space:]]*$' > "$ACTIVE"
 [ -s "$ACTIVE" ] || exit 0
 
@@ -146,7 +164,30 @@ while read -r local_ref local_sha _remote_ref remote_sha; do
         exit 1
     fi
 
-    for sha in $(git rev-list "$RANGE" 2>/dev/null); do
+    # LISTED, not assumed. `git rev-list` exits 128 with empty stdout when
+    # $remote_sha is not a local object -- a stale tracking ref, someone
+    # else's force-push, a gc'd object, a shallow clone. stderr was
+    # discarded and the status unread, so the loop ran zero times, FOUND
+    # stayed 0, and the hook exited 0 having scanned nothing. Zero commits
+    # scanned read exactly like zero commits matching.
+    #
+    # This file already fails closed on grep exit >= 2. This was the one
+    # place it did not.
+    COMMITS="$(git rev-list "$RANGE" 2>/dev/null)"
+    if [ "$?" -ne 0 ]; then
+        echo "" >&2
+        echo "  ################################################################" >&2
+        echo "  #      PUSH BLOCKED: could not list the commits to check       #" >&2
+        echo "  ################################################################" >&2
+        echo "" >&2
+        echo "  git rev-list failed for $RANGE, so NOTHING was scanned." >&2
+        echo "  Usually a stale remote-tracking ref: run \`git fetch\` and" >&2
+        echo "  try again." >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    for sha in $COMMITS; do
         # MESSAGE AND CONTENT. This read only `%B` until two real filenames
         # from a personal work archive were pushed inside a test fixture,
         # under the clean subject "use invented paths, not real archive
