@@ -34,6 +34,16 @@ class SourceNotFound(LookupError):
     """No chunks carry the source being renamed."""
 
 
+class ForeignChunkIds(ValueError):
+    """The stored ids were not built by this engine's `chunk_id`.
+
+    A rename recomputes every id from (source_type, source_key, kind, index).
+    That is only safe when the chunker that WROTE them derives ids the same
+    way -- otherwise the rename imposes a scheme the consumer's own chunker
+    will not reproduce, and the next ingest sees every chunk as new.
+    """
+
+
 class TargetExists(ValueError):
     """The new name is already in use.
 
@@ -75,6 +85,31 @@ def rename_source(db_path: Path | str, old: str, new: str) -> int:
                 f"{clash:,} chunks already use source_type={new!r}. Renaming "
                 "onto an existing source would collide their chunk ids and "
                 "silently overwrite one with the other."
+            )
+
+        # VERIFY THE SCHEME BEFORE IMPOSING IT. A consumer is free to derive
+        # chunk ids however it likes -- one here uses a truncated sha256 --
+        # and rewriting those into this engine's readable form leaves ids its
+        # chunker will never produce again. The next ingest then treats every
+        # chunk as new: the whole source is re-embedded, the renamed rows
+        # become orphans, and the prune deletes them. Nothing errors anywhere
+        # along the way.
+        #
+        # Checked against the OLD name, which is what the stored ids encode.
+        foreign = [
+            row["id"]
+            for row in rows
+            if row["id"]
+            != f"{old}:{row['source_key']}:{row['chunk_kind']}:{row['chunk_index']}"
+        ]
+        if foreign:
+            raise ForeignChunkIds(
+                f"{len(foreign):,} of {len(rows):,} chunks in {old!r} have ids "
+                "this engine did not build. Renaming would rewrite them into "
+                "a scheme the chunker that wrote them does not use, and the "
+                "next ingest would re-embed the whole source and prune what "
+                "was renamed. Rename the source in that consumer's own "
+                "configuration and re-ingest instead."
             )
 
         conn.execute("BEGIN")
