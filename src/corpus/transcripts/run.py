@@ -22,10 +22,12 @@ omitted from it silently keeps stale answers alive.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import logging
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +69,33 @@ class RunStats:
         return self.transcribed + self.empty + self.failed
 
 
+# An archive's own "which media is in scope" policy, supplied by the consumer.
+#
+# `--exclude GLOB` cannot stand in for it. `fnmatch` is case-sensitive on
+# POSIX, so `*karaoke*` misses `Karaoke Track.m4a` where the archive's own
+# `pat in path.lower()` does not -- and the policies that live here include
+# "never transcribe media from another person's iMessage or WhatsApp backup".
+# Translating that into globs silently changes it, and a silent change there
+# means transcribing someone who never agreed.
+#
+# A ContextVar for the same reason `source_excludes` is one: the consumer
+# wraps the engine's entry point, and every walk inside the block sees it
+# without the engine growing a parameter for a rule it cannot evaluate.
+_media_scope: contextvars.ContextVar[Callable[[Path], bool] | None] = (
+    contextvars.ContextVar("corpus_media_scope", default=None)
+)
+
+
+@contextmanager
+def media_scope(predicate: Callable[[Path], bool]) -> Iterator[None]:
+    """Keep only media the predicate returns True for, inside this block."""
+    token = _media_scope.set(predicate)
+    try:
+        yield
+    finally:
+        _media_scope.reset(token)
+
+
 def find_media(
     root: Path | str,
     *,
@@ -88,11 +117,17 @@ def find_media(
     """
     stats = stats if stats is not None else WalkStats()
     wanted = {e.lower() for e in extensions}
-    found = [
-        walked.path
-        for walked in walk_files(Path(root), excludes=tuple(excludes), stats=stats)
-        if walked.path.suffix.lower() in wanted
-    ]
+    in_scope = _media_scope.get()
+    found = []
+    for walked in walk_files(Path(root), excludes=tuple(excludes), stats=stats):
+        if walked.path.suffix.lower() not in wanted:
+            continue
+        # Counted, not silently dropped: "0 files found" has to stay a
+        # question anyone can answer afterwards.
+        if in_scope is not None and not in_scope(walked.path):
+            stats.files_excluded += 1
+            continue
+        found.append(walked.path)
     yield from sorted(found)
 
 
