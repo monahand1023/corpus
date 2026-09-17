@@ -31,8 +31,8 @@ from corpus.cli.smoke import (
 
 
 def test_launch_dir_reads_uv_directory_flag() -> None:
-    args = ["--directory", "/repo/a mail consumer", "run", "corpus-mcp"]
-    assert _launch_dir(args) == Path("/repo/a mail consumer")
+    args = ["--directory", "/repo/consumer", "run", "corpus-mcp"]
+    assert _launch_dir(args) == Path("/repo/consumer")
 
 
 def test_launch_dir_accepts_the_other_launcher_spellings() -> None:

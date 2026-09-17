@@ -1,10 +1,10 @@
 """The same passage indexed from more than one document.
 
-WHAT THIS FOUND. On one live archive, 12,076 chunks -- 6.5% of the index --
+WHAT THIS FOUND. On one live archive, 6.5% of the index --
 were passages that also appear under a different document. Tracing the
 transcript source: 168 recordings were present twice under different paths,
 byte-identical and the same duration. That is 17.8 GPU-hours of audio
-transcribed twice, ~1,884 redundant chunks embedded and paid for, and a search
+transcribed twice, redundant chunks embedded and paid for, and a search
 that can return the same passage twice from two files, quietly eating result
 slots.
 

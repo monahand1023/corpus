@@ -7,8 +7,8 @@ the dim guard's own error says "Re-ingest from scratch with the new dim",
 which in practice means `corpus-reset --all`. That destroys everything stored
 only in the database and nowhere else:
 
-    one archive:  248,143 contextualized chunks
-    another:       11,841 contextualized chunks + 6,138 summaries
+    one archive:  a quarter-million contextualized chunks
+    another:      tens of thousands of blurbs and summaries
 
 All of it Anthropic spend, with no on-disk backup. The safe operation is much
 narrower than a re-ingest: only the VECTORS change. `chunks`, `chunks_fts`,

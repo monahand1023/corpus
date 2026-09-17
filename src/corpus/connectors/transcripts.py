@@ -55,6 +55,7 @@ from corpus.transcripts import (
 )
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.hash import chunk_id, sha256
+from corpus.util.scrub import scrub
 from corpus.util.tokens import estimate_tokens
 
 # A window that survived filtering but says almost nothing is not worth a chunk
@@ -222,10 +223,10 @@ class TranscriptChunker:
         kept = [s for s in segments if worth_indexing((s.get("text") or "").strip())]
 
         # The length floor must not silently delete a whole recording.
-        # Measured on 271 transcribed files, 17 produced NO chunks at all and
-        # were not junk -- "I love you." (11 chars), 'ありがとうございますよかった、撮れた'.
-        # Short voice memos and three-second clips whose entire transcript is
-        # one sentence. Each was counted as a document and indexed as nothing:
+        # Measured on a sample of transcribed files, 6% produced NO chunks at
+        # all and were not junk: an eleven-character sentence, a short thank
+        # you. Short voice memos and three-second clips whose entire
+        # transcript is one sentence. Each was counted as a document and indexed as nothing:
         # present in the archive, unfindable forever.
         #
         # A short window inside a long recording is still worth dropping. A
@@ -243,7 +244,18 @@ class TranscriptChunker:
 
         out: list[Chunk] = []
         for idx, seg in enumerate(kept):
-            text = (seg.get("text") or "").strip()
+            # SCRUBBED, like every other chunker. This one did not, and
+            # transcripts are the worst source type to miss: they are speech,
+            # so a credential here was read ALOUD -- dictated on a call,
+            # walked through on a screen share. It went into the index
+            # verbatim and into the embedding request, which leaves the
+            # machine. scrub.py's threat model is "the .db file leaks"; this
+            # was the one path where that model did not hold.
+            #
+            # Before the hash, not after: a hash of the unscrubbed text would
+            # leak the original through change detection, since a re-ingest
+            # would only look unchanged while the secret was still present.
+            text = scrub((seg.get("text") or "").strip())
             start, end = seg.get("start"), seg.get("end")
             out.append(
                 Chunk(

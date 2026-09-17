@@ -1,7 +1,7 @@
 # Transcribed audio: what goes wrong, and what to do about it
 
 Speech-to-text models invent text. This is not an edge case — on one real
-real archive, roughly 6% of transcripts contained nothing a person
+archive of transcripts, roughly 6% of transcripts contained nothing a person
 said. If you index that output without filtering it, your search results fill
 with sentences nobody spoke.
 
@@ -160,7 +160,7 @@ knowledge at all.
 
 The ceiling was set at **25.0 c/s** when the fastest genuine content in the
 reference archive was **14.7** — 70% of headroom, comfortable. Re-measured
-across **7,186 real transcripts** on 2026-09-16, the archive had grown and
+across **a full real archive of transcripts** on 2026-09-16, the archive had grown and
 real speech reached **24.85 c/s**: a French speaker mid-conversation,
 surviving the filter by **0.6%**. One slightly faster talker and it would have
 deleted a real recording, which is the failure every other threshold here is
@@ -173,7 +173,7 @@ It is now **40.0**, sitting between the two things actually measured:
 
 | | c/s | |
 |---|---|---|
-| fastest real speech | 24.85 | 7,186 transcripts |
+| fastest real speech | 24.85 | a full real archive |
 | **ceiling** | **40.00** | 61% above real speech |
 | documented decode loop | 59.91 | still caught, by 50% |
 
@@ -222,7 +222,7 @@ so the threshold was set at **0.6**.
 
 #### That threshold was wrong, and the sample is why
 
-Applied to the same project's **full full transcript archive**, 0.6 removed
+Applied to the same project's **full archive of transcripts**, 0.6 removed
 **241 transcripts**, and real material turned out to reach **0.5984** — a
 margin of 0.3%, not the comfortable gap the sample showed. Sampling what it
 rejected, at every band:
@@ -357,7 +357,7 @@ nothing.
 
 Per-**window**, per-**transcript**, and on the rescue path, because junk
 reaches an index by whichever one you skip. Measured 2026-09-11 on a live
-45,092-chunk index (it has grown since; the ratios are the point, not the
+index (it has grown since; the ratios are the point, not the
 total): 716 chunks were loops, but only 553 belonged to transcripts a
 whole-transcript judgement rejects. The other 163 were single looping windows
 inside genuine recordings — real material either side, so no per-file verdict

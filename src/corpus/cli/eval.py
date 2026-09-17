@@ -151,6 +151,22 @@ def _print_human(records: Sequence[QueryRecord], top_k: int) -> None:
         print()
 
 
+def _all_source_keys(db_path: str | Path) -> list[str]:
+    """Every distinct source_key, or [] when the index cannot be read."""
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT source_key FROM chunks")]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
 def _document_count(db_path: str | Path) -> int:
     """Distinct documents in the archive, or 0 when it cannot be read.
 
@@ -233,6 +249,52 @@ def _build_json(
 _CHECKABLE_METRICS = ("recall_at_k", "mrr", "ndcg_at_k")
 
 
+# What a thresholds file may record about WHERE its numbers came from.
+#
+# A floor is a claim about a specific gold set, and nothing connected the two.
+# One archive's floors were measured against an 8-query, transcripts-only set;
+# the set grew to 24 and the floors stayed, leaving the recall gate six queries
+# below its measurement -- a gate that could not fail. The drift is always in
+# that direction: the set grows, the measurement rises, the floor stays. It
+# never drifts toward failing, which is exactly why nobody notices.
+_PROVENANCE_KEY = "measured"
+
+
+def _load_threshold_provenance(path: Path) -> dict[str, Any]:
+    """What gold set these floors were measured against, or {} if unrecorded."""
+    try:
+        data: Any = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    block = data.get(_PROVENANCE_KEY)
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def _warn_on_stale_thresholds(
+    provenance: dict[str, Any], *, n_queries: int | None
+) -> None:
+    """Say so when the gold set is not the one the floors were measured from.
+
+    SILENT when the file records nothing, which is every thresholds file that
+    existed before this was added. Nagging their owners on every run is how a
+    warning stops being read.
+    """
+    recorded = provenance.get("n_queries")
+    if not isinstance(recorded, int) or not n_queries or recorded == n_queries:
+        return
+    direction = "grew" if n_queries > recorded else "shrank"
+    print(
+        f"\n=== Thresholds ===\n"
+        f"  These floors were measured against {recorded} queries; this gold "
+        f"set has {n_queries}.\n"
+        f"  The set {direction} since the floors were set, so they describe a "
+        "different\n  measurement than the one above. Re-measure with "
+        "--repeat and update both."
+    )
+
+
 def _load_thresholds(path: Path) -> dict[str, float]:
     """Load a `--check` thresholds JSON file.
 
@@ -246,6 +308,15 @@ def _load_thresholds(path: Path) -> dict[str, float]:
         raise ValueError("thresholds file must contain a JSON object")
     thresholds: dict[str, float] = {}
     for key, value in data.items():
+        if key == _PROVENANCE_KEY:
+            # Not a metric. Kept out of `thresholds` so it is never gated on.
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"{_PROVENANCE_KEY!r} must be an object describing the gold "
+                    "set these floors were measured against, e.g. "
+                    '{"n_queries": 24, "date": "2026-09-16"}'
+                )
+            continue
         if key not in _CHECKABLE_METRICS:
             raise ValueError(f"unknown threshold metric: {key!r}")
         if not isinstance(value, int | float):
@@ -429,6 +500,13 @@ def main() -> int:
         queries,
         lookup=sqlite_lookup(config.db_path),
         documents=sqlite_documents(config.db_path, queries),
+        # BOTH of these, or two checks silently do not run. They are optional
+        # on `audit_queries` so a caller with no index still gets the
+        # structural checks -- which makes forgetting them here look exactly
+        # like a gold set with nothing wrong. corpus-doctor passed them and
+        # this command, the one with the authority to REFUSE to run, did not.
+        documents_total=_document_count(config.db_path),
+        all_keys=_all_source_keys(config.db_path),
     )
     if report_findings(findings, stream=sys.stderr) and not args.allow_gold_issues:
         print(
@@ -506,9 +584,14 @@ def main() -> int:
             except ValueError as e:
                 print(f"Invalid thresholds file {check_path}: {e}", file=sys.stderr)
                 return 2
-            return 0 if _print_gate(
-                spreads, thresholds, n_queries=runs[-1].n if runs else None
-            ) else 1
+            n = runs[-1].n if runs else None
+            # Before the verdict, not after: a floor measured against a
+            # different gold set is not a floor about THIS measurement, and
+            # the reader needs to know that while looking at the numbers.
+            _warn_on_stale_thresholds(
+                _load_threshold_provenance(check_path), n_queries=n
+            )
+            return 0 if _print_gate(spreads, thresholds, n_queries=n) else 1
 
         return 0
     finally:

@@ -9,9 +9,9 @@ Gap — no connector     .heic .jpg .m4a .mov .mp4 .png .sketch
 Indexable              .zip .md .txt .csv .mp3(tags only)
 ```
 
-The capability exists and works — 381 hours transcribed, 45,092 chunks as of
+The capability exists and works — a full real archive transcribed as of
 2026-09-11, a
-gold set, measured retrieval — but it lives in a private consumer (`a document consumer`)
+gold set, measured retrieval — but it lives in a private consumer (a private consumer)
 as a 1,033-line script plus a 291-line connector. Nothing about it is secret;
 it was simply never packaged.
 
@@ -49,9 +49,9 @@ database and the connector that indexes one.
 
 **Why first:** it is pure Python, testable without a GPU, and it immediately
 lets anyone with a transcript database from *any* tool index it. It also makes
-a document consumer a thin consumer instead of a fork, which is the stated architecture.
+that consumer a thin one instead of a fork, which is the stated architecture.
 
-**Acceptance:** a document consumer deletes its local connector, imports corpus's, and its
+**Acceptance:** the consumer deletes its local connector, imports corpus's, and its
 gold set still scores recall@5 0.625 / MRR 0.442 / nDCG 0.486. Any change to
 that number means the move was not faithful.
 
@@ -110,10 +110,10 @@ as holding no speech rather than indexed.
 
 - `default_backend()` checked the platform only, so on Apple Silicon without
   the extra it returned a backend that could not work — and the failure
-  surfaced on the first window of every file. A 7,000-file archive would have
-  recorded 7,000 identical ImportErrors before anyone learned which package to
-  install. Fixed with `preflight()`, which also runs in the dry run, so the
-  cheapest possible moment tells you.
+  surfaced on the first window of every file. A full archive would have
+  recorded one identical ImportError per file before anyone learned which
+  package to install. Fixed with `preflight()`, which also runs in the dry
+  run, so the cheapest possible moment tells you.
 - The dry run counted the `transcripts` table only, so files judged to hold no
   speech were reported as outstanding work. On a real archive most files
   produce no text — the count understated the skip set in exactly the
@@ -123,7 +123,7 @@ as holding no speech rather than indexed.
 
 Deferred for four reasons, in descending order of weight.
 
-**1. "Images" is three separable features, not one.** `a media consumer` conflates
+**1. "Images" is three separable features, not one.** one consumer conflates
 generic OCR of image files, model captioning of photo content, and an Apple
 Photos library reader. They have different dependencies, different platforms
 and different value. Porting them as a unit is how a 600-line feature becomes
@@ -131,7 +131,7 @@ a 3,300-line one.
 
 **2. There is no quality filter for captions, and there is for speech.**
 Stages 1–3 were portable largely because `corpus.transcripts.quality` already
-existed and was derived from a real real archive — the filters are
+existed and was derived from a full real archive of transcripts — the filters are
 the hard-won part, and the pipeline around them is comparatively simple. No
 equivalent exists for captions. A captioner invents confidently too, and
 shipping captioning without knowing what its failure modes look like would
@@ -150,7 +150,7 @@ it carries the least weight, not the most. What does survive is the shape:
 `mlx-vlm` is Apple-only, so stage 2's backend-protocol exercise has to be
 repeated in full before any of it can ship publicly.
 
-**4. Demand is unmeasured, and measurable.** `a media consumer` has served **0**
+**4. Demand is unmeasured, and measurable.** one consumer has served **0**
 real logged queries. Stage 4's precondition is not a date — it is evidence
 that anyone asks image questions of an archive. `corpus-doctor`'s query-log
 audit is what answers that, and it currently says no one has.
@@ -166,7 +166,7 @@ costs nothing.
 | **~2 GB of deps.** torch + silero + mlx. | An optional extra, as `[reranker]` already is, with the same error message when missing. |
 | **Untestable in CI.** No GPU, no 3 GB model. | The pipeline is pure functions around one backend call; stage 2's acceptance is that all of them test without a model. |
 | **Multi-hour runs.** | Resumption already exists — the sidecar DB plus the `no_text` memo that saved 889 files on a crash recovery. Move it intact. |
-| **A faithless move.** Behaviour drifts during the port. | a document consumer's gold set is the regression test. Stage 1 acceptance is that the number does not move. |
+| **A faithless move.** Behaviour drifts during the port. | the consumer's gold set is the regression test. Stage 1 acceptance is that the number does not move. |
 | **Scope creep into photos.** | Stage 4 is explicitly deferred, with a stated precondition. |
 
 ## What this is not

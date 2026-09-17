@@ -391,7 +391,7 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
             # WHY it is too small. A large archive whose verdicts fell out of
             # scope when a threshold moved reads identically to a small one,
             # and the two need opposite responses. Measured live: a sidecar
-            # with 3,381 whole-file verdicts reported "2 -- too small".
+            # with thousands of whole-file verdicts reported "2 -- too small".
             caveat = scoped.describe()
             if caveat and scoped.total:
                 print(f"            {caveat}")

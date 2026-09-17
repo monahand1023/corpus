@@ -307,7 +307,7 @@ def refilter_stored(
             continue
         # A window wider than `window_s` did not come from this geometry.
         # Found on a live sidecar: 104 rows held ONE "window" spanning the
-        # whole file, up to 2,251 seconds, because they were RESTORATION
+        # whole file, over half an hour of it, because they were RESTORATION
         # records -- text recovered from `no_text` and written back with a
         # synthetic window. Re-judging a whole file as a single window would
         # be a different operation wearing this one's name.
@@ -376,15 +376,15 @@ def partition_by_duration(
 ) -> tuple[list[Path], list[Path]]:
     """Split `paths` into (long enough, too short).
 
-    WHY A FLOOR EXISTS AT ALL. Measured on a real archive of 58,024
+    WHY A FLOOR EXISTS AT ALL. Measured on a real photo library of
     photo-library videos: 81% are under four seconds -- the clip Apple stores
-    beside each Live Photo. Transcribing them adds ~46,800 files for ~33 hours
+    beside each Live Photo. Transcribing them adds four fifths of the library for tens of hours
     of ambience and floods the index with near-empty text that dilutes every
     search. The dry run cannot warn about it either: it reports total hours,
     which cannot show that four fifths of them are four seconds long.
 
     Probing is skipped entirely when there is no floor. It costs a subprocess
-    per file, and paying for 58,000 of them to decide nothing is the kind of
+    per file, and paying for all of them to decide nothing is the kind of
     cost that gets a feature switched off.
     """
     if min_seconds <= 0:
@@ -418,10 +418,10 @@ def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
     After a threshold change, re-walking the media roots is the wrong
     operation: the files to redo are already known, and a walk rediscovers
     everything the archive deliberately excluded. Measured on a live archive,
-    whose roots hold ~58,000 photo-library videos of which 81% are the
+    whose roots hold a photo library of which 81% are the
     sub-4-second clip Apple stores beside each Live Photo -- its own filters
     exclude those, plus karaoke backing tracks and a 15-second floor, and none
-    of those rules live in corpus. A blind re-walk would have queued ~46,800
+    of those rules live in corpus. A blind re-walk would have queued four fifths of it
     near-empty clips for ~33 hours of room tone.
 
     The sidecar's contents already encode every one of those decisions.
@@ -650,7 +650,7 @@ def transcribe_directory(
             # RECORDING the answer can fail too, and until this was wrapped
             # one bad value took the whole pass with it: a NaN avg_logprob --
             # which SQLite cannot store, so a NOT NULL column rejects it --
-            # aborted a live run at file 59 of 2,454. Transcription was
+            # aborted a live run 59 files into a long one. Transcription was
             # protected per file while the write beside it was not, so one
             # unstorable window discarded every file after it.
             try:

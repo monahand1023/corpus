@@ -1,6 +1,6 @@
 """An archive's own "which media is in scope" policy has to reach the walk.
 
-a document consumer excludes, among other things, media inside another person's iMessage
+one consumer excludes, among other things, media inside another person's iMessage
 and WhatsApp backups -- "their voices would be searchable here forever, and
 they never chose that". That policy lives in the ARCHIVE, as a predicate over
 the full path, and the engine has no business knowing it.

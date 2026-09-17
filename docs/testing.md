@@ -134,9 +134,9 @@ the retriever returns a perfectly good answer, it is missing from the key, and
 the eval reports a miss against software that is working. This has now bitten
 twice, in two different disguises:
 
-- *Capping the set.* A photo archive's largest trip has 1,456 photos; capping
-  answer sets at 400 turned a real 0.625 into a false 0.500 and made the
-  largest, easiest query look like a failure.
+- *Capping the set.* A photo archive's largest trip has far more than 400
+  photos; capping answer sets at 400 turned a real 0.625 into a false 0.500
+  and made the largest, easiest query look like a failure.
 - *Matching only the first message.* Labelling a mail thread by subject prefix
   missed every `Re:` in it, reducing a 93-message thread to one message and
   another thread to zero.
@@ -178,7 +178,7 @@ passing one. Measured across the three archives:
 
 The magnitude is archive-dependent — a denser archive has more near-ties for a
 perturbed vector to flip — which is precisely why it has to be measured per
-archive rather than assumed. On a larger 31-query gold set over a 45,594-chunk
+archive rather than assumed. On a larger 31-query gold set over a real
 archive, MRR moved **0.027** between identical runs.
 
 Two distinct ways a floor can sit too close to the measurement, reported

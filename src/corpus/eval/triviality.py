@@ -5,7 +5,7 @@ right question, and it has a failure mode: when a query accepts a large
 fraction of the archive, five arbitrary results contain an acceptable answer
 by chance, and the query scores well for a retriever that is doing nothing.
 
-Measured on a real real archive: one query accepted 27,946
+Measured on a real archive: one query accepted 14% of its documents
 documents, which five random results hit 53% of the time. Its contribution
 to the gate was a coin flip wearing the shape of a measurement. The other
 23 queries sat at or below 0.094, and the set as a whole scored 0.050

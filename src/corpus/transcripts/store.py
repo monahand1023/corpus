@@ -7,7 +7,7 @@ reads it whenever it likes; re-running either is cheap because both know what
 is already done.
 
 The schema is shaped by what a long run actually needs, and every table here
-earned its place on a real real archive:
+earned its place on a real archive:
 
 * `transcripts` — what was said. `policy` records the rules in force when the
   text was ACCEPTED. Rejections carried that from the start and acceptances
@@ -334,7 +334,7 @@ def failure_attempts(conn: sqlite3.Connection, path: str) -> int:
 #
 # SQLite HAS NO NaN: inserting one stores NULL, and these columns are NOT
 # NULL, so a NaN `avg_logprob` -- which Whisper produces on degenerate audio
-# -- raised IntegrityError and killed a whole pass at file 59 of 2,454.
+# -- raised IntegrityError and killed a whole pass 59 files into a long one.
 #
 # -1.0 is already what the pipeline writes when the model reported nothing at
 # all, so NaN and "not reported" are indistinguishable here. That is a real
@@ -542,13 +542,13 @@ class ActivityCoverage:
 
     "This archive is small" and "this instrument scoped itself out of a large
     archive" produce the same empty result and need opposite responses. A live
-    sidecar holding 3,381 whole-file verdicts reported "2 whole-file verdicts
+    sidecar holding thousands of whole-file verdicts reported "2 whole-file verdicts
     -- too small to judge dormancy": both numbers correct, the sentence
     misleading, because a threshold change had moved the policy fingerprint
-    and left 3,379 verdicts out of scope.
+    and left nearly all of them out of scope.
 
     The third case is its own: `dropped_windows.reason` arrived in a
-    migration, so every row written before it is NULL. 2,548 such rows read as
+    migration, so every row written before it is NULL. such rows read as
     "examined nothing" -- true of the reasons, false of the drops. An
     unreadable rule is not a dead one.
     """

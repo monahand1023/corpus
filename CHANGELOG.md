@@ -644,8 +644,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `::test_pptx_and_csv_and_tsv_members_become_documents`.
 - **Non-ASCII filenames inside `.zip` archives were being corrupted into
   mojibake, live in a real index.** Measured: 77.3% of one archive source's
-  chunks (2,544 of 3,292) and a few percent of another (1,492 of 21,550) — roughly
-  a few thousand chunks total. Root cause: many real-world zip tools write non-ASCII
+  chunks and a few percent of another — roughly a few thousand chunks total.
+  Root cause: many real-world zip tools write non-ASCII
   filenames as raw UTF-8 (or, for older Japanese-locale tools, Shift-JIS/
   CP932) bytes WITHOUT setting the standard "filename is UTF-8" flag bit
   (0x800) in the member header — `zipfile` then decodes the name as CP437
@@ -686,9 +686,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   encrypted PDF took down the whole source — and since
   `pypdf.errors.FileNotDecryptedError` derives from `Exception` rather than
   `ValueError`/`OSError`, it escaped the CLI's per-source handler too and would
-  abort an entire `--all` run. Found by ingesting 3,247 real PDFs, where a
-  single encrypted file left the source with zero chunks; after the fix, 2,719
-  documents and tens of thousands of chunks.
+  abort an entire `--all` run. Found by ingesting a real archive of PDFs, where
+  a single encrypted file left the source with zero chunks; after the fix,
+  thousands of documents and tens of thousands of chunks.
 - **A real `mypy` type error in the test suite** (`upsert_batch` was handed a
   `list[float] | None` where a `Sequence[float]` was required — the embedder's
   optional-embedding return type, not asserted away before use). CI only ran

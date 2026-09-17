@@ -1,7 +1,7 @@
 """How much does this eval move when NOTHING changes?
 
 WHY THIS EXISTS. A hosted embedding provider does not return a bit-identical
-vector for a fixed query. Measured on a live live archive: four
+vector for a fixed query. Measured on a live archive: four
 embeddings of one query differed, and ranks 2 and 3 swapped. Across five full
 runs of the same 31-query gold set, against an archive nothing had written to:
 
@@ -277,4 +277,4 @@ def gate_verdict(
     )
 
 
-__all__ = ["METRICS", "MAX_SLACK_QUERIES", "NOISE_SAFETY_FACTOR", "GateVerdict", "MetricSpread", "gate_verdict", "spread_report"]
+__all__ = ["MAX_SLACK_QUERIES", "METRICS", "NOISE_SAFETY_FACTOR", "GateVerdict", "MetricSpread", "gate_verdict", "spread_report"]

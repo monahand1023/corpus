@@ -83,7 +83,7 @@ def test_no_database_files_in_the_repository() -> None:
         "source tree, where an untracked file survives only as long as "
         ".gitignore stays correct -- and is exactly what `git clean -fdx` "
         "deletes outright. Move it into a private consumer repo's own "
-        "directory instead (the a mail consumer / a media consumer / a document consumer pattern: "
+        "directory instead (the private-consumer pattern: "
         "its own data/, its own corpus.toml, no public remote) and point "
         "db_path at it there."
     )

@@ -430,7 +430,7 @@ def _trivially_satisfiable(
 # half the archives get.
 
 # Enough keys per query to catch a query copied out of its own answer, without
-# reading a 1,456-document answer set to do it.
+# reading a large answer set to do it.
 ECHO_SAMPLE_PER_QUERY = 25
 
 _KEY_BATCH = 500

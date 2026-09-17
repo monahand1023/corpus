@@ -37,12 +37,12 @@ two real archives:
     on vector-only retrieval, Wilcoxon p=0.0002). See `DEFAULT_MIN_TOKENS`.
 
     CONFIRMED THE HARD WAY on a second archive, 2026-09-15. Transcribed audio
-    chunks one ~30-second window at a time, and exactly 1 of 45,092 chunks
+    chunks one ~30-second window at a time, and exactly one chunk in a whole archive
     cleared the 260-token floor -- so the floor was lowered to 10 to reach the
     documents a gold set showed were failing. That is a coverage argument, and
     coverage is the wrong quantity. At a floor of 10 a ~40-character chunk
     carries a ~141-character context: a share of roughly 78%, far past the 28%
-    already measured as harmful. Result on 34,872 contextualised chunks:
+    already measured as harmful. Result on a fully contextualised archive:
 
         recall@5  0.625 -> 0.500    MRR 0.442 -> 0.406    nDCG 0.486 -> 0.429
 

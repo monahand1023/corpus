@@ -284,7 +284,7 @@ class OlmConnector:
         # Near-duplicate skip, as ten other connectors already do -- and an
         # Outlook archive is the format where the same message appears most:
         # once in its folder, once in Deleted Items, once in a mirrored PST
-        # export. Measured on a live archive, 2,381 chunks (77% of everything
+        # export. Measured on a live archive, 77% of everything
         # losslessly removable across its filesystem sources) were duplicate
         # messages inside ONE olm source.
         #

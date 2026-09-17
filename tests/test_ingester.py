@@ -492,7 +492,7 @@ def test_zero_failures_still_prunes_genuine_removals(tmp_path: Path) -> None:
 
 
 def test_connector_without_failed_files_attribute_still_prunes(tmp_path: Path) -> None:
-    """Out-of-tree connectors (e.g. a mail consumer's EmailConnector) never set the
+    """Out-of-tree connectors (e.g. a consumer's email connector) never set the
     attribute. They must keep today's behavior exactly."""
 
     class _LegacyConnector:

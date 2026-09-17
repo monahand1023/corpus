@@ -119,7 +119,7 @@ SUBTITLE_CREDIT_PREFIXES: tuple[str, ...] = (
 #
 # It was set at 25.0 when the fastest genuine content measured 14.7 characters
 # per second -- 70% of headroom, comfortable. Re-measured 2026-09-16 across
-# 7,186 real transcripts, the archive had grown and real speech now reached
+# a full real archive, which had grown and real speech now reached
 # **24.85** c/s: a French speaker mid-conversation, surviving by 0.6%. The
 # threshold never moved. The data did, and one slightly faster speaker would
 # have had a real recording deleted -- the failure every other threshold in
@@ -127,7 +127,7 @@ SUBTITLE_CREDIT_PREFIXES: tuple[str, ...] = (
 #
 # 40.0 sits between the two things actually measured:
 #
-#     fastest real speech      24.85 c/s   (7,186 transcripts)
+#     fastest real speech      24.85 c/s   (full archive)
 #     THIS CEILING             40.00 c/s   -> 61% above real speech
 #     documented decode loop   59.91 c/s   -> still caught, by 50%
 #
@@ -593,7 +593,7 @@ def strip_caption_tail(
     # Returning the normalised, whitespace-collapsed copy in that case makes
     # the output differ from the input with nothing taken out -- and callers
     # compare the two to decide whether a sign-off was there. Doing so
-    # reported 5,585 contaminated chunks in a mail archive that had one.
+    # reported thousands of contaminated chunks in a mail archive that had one.
     if not removed:
         return text
     out = _WHITESPACE.sub(" ", out).strip()
@@ -623,20 +623,21 @@ _MIN_UNITS_FOR_RATIO = 4
 #
 # It was set to 0.6 from a 74-transcript sample where the next-highest real
 # text scored 0.379 -- an apparently comfortable gap. Applied to the same
-# project's full full transcript archive it removed 241 transcripts, and real
+# project's full transcript archive it removed 241 transcripts, and real
 # material turned out to reach **0.5984**: a margin of 0.3%.
 #
 # What the sample could not show is that REAL FAMILY SPEECH IS GENUINELY
 # REPETITIVE. Sampling what 0.6 rejected, at every band:
 #
-#     0.607  "お誕生日おめでとう" x8      Happy Birthday, sung
-#     0.703  "don't hit it hard..." x3    a parent talking to a child
-#     0.803  "just one cup of rice..."    real cooking instruction
-#     0.805  "¿Aquello es tuyo? ... Sean."    real multilingual family speech
-#     0.986  "そのため、" x40           a genuine decode loop
+#     0.607  a birthday song, one line sung eight times      real
+#     0.703  an adult repeating an instruction to a child     real
+#     0.803  a cooking measurement, restated                  real
+#     0.805  multilingual family speech containing a name     real
+#     0.986  one short phrase forty times          a genuine decode loop
 #
-# The English birthday video survived at 0.5955 while the Japanese one was
-# deleted at 0.607 -- same family, same event, separated by 0.012.
+# The same song in two languages, recorded at the same event, landed either
+# side of the threshold: one survived at 0.5955 and the other was deleted at
+# 0.607 -- separated by 0.012.
 #
 # 0.85 keeps the 92 clearest loops, restores 149 transcripts, and leaves 42%
 # of margin over real material. The asymmetry is the whole argument: an
@@ -662,8 +663,8 @@ DEFAULT_MAX_LOOPING_SHARE = 0.85
 # 0.6 is where the window filter sat before the transcript ceiling was
 # raised, and it was never the setting that deleted anything: a dropped
 # window is not a deleted recording. The floor of `_MIN_UNITS_FOR_LOOPING`
-# still protects short real repeats -- "Papa! Papa! Papa! Papa!" is 4 units
-# and is not measured at all.
+# still protects short real repeats -- a toddler chanting one word four times
+# is 4 units and is not measured at all.
 DEFAULT_MAX_WINDOW_LOOPING_SHARE = 0.6
 
 
@@ -708,10 +709,10 @@ def repeat_share(text: str) -> float:
 
 
 # Below this many units, a repeat is someone saying a word twice. Measured on a
-# real archive: genuine short repeats -- "Papa! Papa! Papa! Papa!" (18 units),
-# "Look! Look at that! Look!" (20), "Hey! Hey! Come here!" (21) -- all sit
-# below 24, and every degenerate loop found sat above it (33, 38, 49, 71, 79,
-# 111). The floor is what lets the threshold be strict without deleting the
+# real archive: genuine short repeats -- a toddler chanting one word (18
+# units), an exclamation repeated three times (20), a child's name called
+# twice followed by an instruction (21) -- all sit below 24, and every
+# degenerate loop found sat above it (33, 38, 49, 71, 79, 111). The floor is what lets the threshold be strict without deleting the
 # recordings the archive exists for.
 _MIN_UNITS_FOR_LOOPING = 24
 
@@ -732,7 +733,7 @@ def looping_share(text: str) -> float:
     Measured on 74 real transcripts: median 0.000, and the six true loops
     scored 0.712-0.886 against a next-highest of 0.379. That sample is NOT
     the basis for the threshold -- see `DEFAULT_MAX_LOOPING_SHARE`, where the
-    full full transcript archive put real material at 0.5984 and the gap the
+    full transcript archive put real material at 0.5984 and the gap the
     sample showed turned out not to exist.
     """
     units = _repetition_units(text)

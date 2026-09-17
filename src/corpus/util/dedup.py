@@ -9,13 +9,13 @@ WHAT THAT TRADE-OFF ACTUALLY COSTS, measured 2026-09-16 by running five
 connectors twice over one real archive -- once with this function and once
 with an exact hash -- and comparing the document counts:
 
-    word_docs      1,842 vs 1,843     1 distinct document merged
+    word_docs      one distinct document merged
     papers         2,741 vs 2,743     2
     web_clippings    266 vs   267     1
     spreadsheets     133 vs   133     0
     notes            496 vs   496     0
 
-Four documents in 5,478 (0.07%), and -- the part worth knowing -- the
+0.07% of documents, and -- the part worth knowing -- the
 stripping caught NOTHING an exact hash would have missed on that archive.
 The re-exported-with-a-new-timestamp case this exists for did not occur in
 it. The benefit is real but unobserved here; the cost is small and real.

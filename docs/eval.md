@@ -222,7 +222,7 @@ Floors sit just under the measured baseline (recall@5 = 1.000, nDCG@5 = 0.898 �
 
 The CI gate above is safe from this, because `provider="hash"` is deterministic. **A gate against your own archive is not.**
 
-A hosted embedding provider does not return a bit-identical vector for a fixed query. Measured directly: four embeddings of one query differed, and the retrieved ranks 2 and 3 swapped. Result ORDER moves run to run; set membership usually does not — so `recall@k` sits still while MRR and nDCG wander. On a 31-query gold set over a live archive, MRR moved **0.027** between identical runs against an archive nothing had written to.
+A hosted embedding provider does not return a bit-identical vector for a fixed query. Measured directly: four embeddings of one query differed, and the retrieved ranks 2 and 3 swapped. Result ORDER moves run to run; set membership usually does not — so `recall@k` sits still while MRR and nDCG wander. On a 31-query gold set over a real archive, MRR moved **0.027** between identical runs against an archive nothing had written to.
 
 Measure it before setting a floor:
 

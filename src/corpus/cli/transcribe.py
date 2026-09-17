@@ -64,7 +64,7 @@ def _report_withheld(stats: WalkStats) -> None:
     A `.photoslibrary` is pruned from every walk by default, which is right
     for indexing -- the bundle is Apple's SQLite, plists and derivatives --
     and wrong here, because `originals/` inside it is the home video. On a
-    reference archive that is ~8,100 clips of 15 seconds or more.
+    reference archive that is the long tail at 15 seconds or more.
 
     Printing "0 media files found" for a folder holding a photo library is
     the same failure this pipeline keeps producing in other forms: a refusal
@@ -276,9 +276,9 @@ def main_argv(argv: list[str]) -> int:
         metavar="N",
         help=(
             "Skip recordings shorter than N seconds. Measured on a real "
-            "archive of a real photo library: 81%% are under four "
+            "real photo library: 81%% of its videos are under four "
             "seconds -- the clip Apple stores beside each Live Photo -- which "
-            "is ~46,800 files and ~33 hours of room tone. A file whose "
+            "is four fifths of the library and tens of hours of room tone. A file whose "
             "duration cannot be read is KEPT, never skipped."
         ),
     )

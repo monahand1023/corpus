@@ -285,7 +285,7 @@ A directory name matches **exactly**: `"Backup"` is the folder called
 
 **What this is for.** `corpus-survey duplicates` reports documents whose every
 passage also appears under another document, which are the ones that can be
-dropped losslessly. On one archive that was 1,119 documents holding 3% of the
+dropped losslessly. On one archive that was a set of documents holding 3% of the
 index. Naming them was useless until there was a way to act:
 
 ```sh

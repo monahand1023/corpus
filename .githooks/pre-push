@@ -79,14 +79,71 @@ if [ "$?" -ge 2 ]; then
 fi
 
 FOUND=0
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r local_ref local_sha _remote_ref remote_sha; do
+    # THE REF NAME ITSELF. Branches and tags are published as refs and shown
+    # in the remote's UI; neither the message scan nor the diff scan looks at
+    # them, so `git push origin <private-name>-experiment` disclosed it with
+    # every guard reporting clean.
+    printf '%s\n' "$local_ref" | grep -qiEf "$ACTIVE"
+    RC=$?
+    if [ "$RC" -ge 2 ]; then
+        echo "" >&2
+        echo "  PUSH BLOCKED: the private-name scan errored on a ref name," >&2
+        echo "  so this push was NOT checked." >&2
+        exit 1
+    fi
+    if [ "$RC" -eq 0 ]; then
+        echo "" >&2
+        echo "  ################################################################" >&2
+        echo "  #            PUSH BLOCKED: private name in a REF name          #" >&2
+        echo "  ################################################################" >&2
+        echo "" >&2
+        echo "  The branch or tag being pushed names private material." >&2
+        echo "  (Not printed here -- printing it is the disclosure.)" >&2
+        echo "" >&2
+        echo "  Rename the ref and push that instead:" >&2
+        echo "    git branch -m <new-name>" >&2
+        echo "" >&2
+        exit 1
+    fi
+
     # Deleting a ref pushes nothing.
     case "$local_sha" in *[!0]*) ;; *) continue ;; esac
 
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
         RANGE="$local_sha"            # new branch: every reachable commit
+        # `git diff <sha>` compares the WORKTREE to that commit, not the
+        # commit's own contents -- so the binary scan below saw nothing on
+        # a new branch and reported clean. The empty tree is the correct
+        # base for "everything this ref introduces".
+        DIFFBASE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     else
         RANGE="$remote_sha..$local_sha"
+        DIFFBASE="$remote_sha"
+    fi
+
+    # BINARY BLOBS. Every content guard here scans text, and git renders a
+    # binary as "Binary files differ" -- so the scan below, and the audit of
+    # already-pushed history, both report it clean whatever is inside it.
+    # No binary has ever been committed to this repo (verified across the
+    # whole history), and that is the only reason those guards can be trusted
+    # retroactively. This keeps it true.
+    BINARIES="$(git diff --numstat "$DIFFBASE" "$local_sha" 2>/dev/null | awk '$1=="-" && $2=="-" {print $3}')"
+    if [ -n "$BINARIES" ]; then
+        echo "" >&2
+        echo "  ################################################################" >&2
+        echo "  #        PUSH BLOCKED: a binary file cannot be scanned         #" >&2
+        echo "  ################################################################" >&2
+        echo "" >&2
+        printf '    %s\n' $BINARIES >&2
+        echo "" >&2
+        echo "  This repo is source code and documentation. Every privacy" >&2
+        echo "  guard here reads text; git shows a binary as \"Binary files" >&2
+        echo "  differ\", so nothing can see what is inside one." >&2
+        echo "" >&2
+        echo "  Build test fixtures at run time instead of committing them." >&2
+        echo "" >&2
+        exit 1
     fi
 
     for sha in $(git rev-list "$RANGE" 2>/dev/null); do

@@ -341,7 +341,7 @@ Gap — no connector (report this first; it's the whole point)
   extension                 count         size
   .csv                         913        41.2 MB
   .pptx                        259        88.0 MB
-  -> 1,172 file(s), 129.2 MB that corpus cannot index today and will NOT
+  -> the file(s) and megabytes that corpus cannot index today and will NOT
      be searchable after this run.
 
 Noise (excluded from the plan, not ingested)
@@ -414,9 +414,9 @@ corpus-transcribe ~/Videos --min-seconds 15   # skip the Live Photo clips
 ```
 
 **`--min-seconds` is worth knowing about before you point this at a phone's
-video folder.** Measured on a real archive of a real photo library:
+video folder.** Measured on a real photo library:
 **81% are under four seconds** — the clip Apple stores beside each Live
-Photo. Transcribing them is ~46,800 files and ~33 hours of room tone, and it
+Photo. Transcribing them is four fifths of the library and tens of hours of room tone, and it
 floods the index with near-empty text that dilutes every search. The plain
 dry run cannot warn you, because total hours cannot show that four fifths of
 them are four seconds long.
@@ -438,8 +438,8 @@ corpus-transcribe --db data/transcripts.db --redo-stale .   # only what changed
 
 **`--refilter`** re-applies the current TEXT rules to the per-window text
 already in the sidecar. On one archive a full re-transcribe was 61.7
-GPU-hours by its own recorded timings; the re-filter did 7,227 transcripts in
-seconds, stripping loop windows from 1,108 recordings.
+GPU-hours by its own recorded timings; the re-filter did a whole archive in
+seconds, stripping loop windows from the affected recordings.
 
 It is equivalent only while the DECODE is unchanged — `window_s`,
 `overlap_s`, the VAD threshold and the model decide which audio becomes which
@@ -452,7 +452,7 @@ policy that was not applied.
 invalidated, taking the work list from the sidecar instead of walking the
 media roots. After a threshold change that is the right operation: a re-walk
 rediscovers everything the archive deliberately excluded, and those rules
-live in the archive, not in corpus. On one archive whose roots hold ~58,000
+live in the archive, not in corpus. On one archive whose roots hold a photo library of
 photo-library videos — 81% of them the sub-4-second clip Apple stores beside
 each Live Photo — a blind re-walk would have queued ~46,800 near-empty clips
 for ~33 hours of room tone.
@@ -512,7 +512,7 @@ silence, one model returned `"Thank you."` at `no_speech=0.782` and
 scores separates invention from speech.
 
 So the filters run on the TEXT, not on the model's scores, and they are the
-part of this that was derived from a real real archive rather than
+part of this that was derived from a real transcript archive rather than
 designed in the abstract (`corpus.transcripts.quality`):
 
 - **Caption boilerplate**, matched at the TAIL, not anywhere in the text.
@@ -844,7 +844,7 @@ If you need any of the above, `corpus` is the wrong starting point — though it
 
 `corpus` is a generic engine — a library that builds and serves an index, not a place to keep one. It never holds data itself.
 
-The intended shape is one private *consumer* repo per archive (the pattern used by `a mail consumer`, `a media consumer`, `a document consumer`, and similar projects): its own `data/` directory for the database, its own `corpus.toml` pointing at real source paths, and no public remote. That consumer repo depends on `corpus`; `corpus` never depends on knowing where anyone's data lives, and its own source tree is never where an index belongs.
+The intended shape is one private *consumer* repo per archive (one repo per archive): its own `data/` directory for the database, its own `corpus.toml` pointing at real source paths, and no public remote. That consumer repo depends on `corpus`; `corpus` never depends on knowing where anyone's data lives, and its own source tree is never where an index belongs.
 
 A database or a real `corpus.toml` inside `corpus`'s own package directory or repo root is always a mistake, even though nothing stops you from creating one by accident:
 

@@ -345,9 +345,9 @@ def test_no_sidecar_means_no_margin_opinion(tmp_path, capsys) -> None:
 
 
 def test_a_consumer_overriding_an_engine_connector_is_named(capsys) -> None:
-    """The a document consumer failure class, made visible.
+    """The consumer-shadowing failure class, made visible.
 
-    a document consumer held a full copy of the transcript connector and registered it
+    one consumer held a full copy of the transcript connector and registered it
     over the engine's. Engine fixes stopped reaching the archive and nothing
     said so -- the ingest reported success. A loop filter dropped 716 junk
     chunks in principle and 301 in practice; the fork kept shadowing the rest.

@@ -99,7 +99,7 @@ class MlxWhisperBackend:
         """Fail NOW if this backend cannot run, rather than per file.
 
         Without this the missing extra surfaced only when the first window was
-        transcribed, so a 7,000-file archive recorded 7,000 identical failures
+        transcribed, so a large archive recorded one identical failures
         before anyone learned which package to install. A precondition that is
         knowable before the run starts belongs before the run starts.
         """

@@ -338,3 +338,37 @@ def test_the_doctor_passes_the_key_list_so_the_sibling_check_can_run(tmp_path, c
     assert "unlisted-sibling" in out, (
         f"the doctor never gave the audit the key list:\n{out}"
     )
+
+
+def test_the_EVAL_runs_the_same_gold_set_audit_the_doctor_does():
+    """Two commands read the same gold set and applied different audits.
+
+    `corpus-doctor` passes `all_keys=` and `documents_total=`, with inline
+    comments warning that omitting them silently disables two checks.
+    `corpus-eval` -- the command that prints "Refusing to run: the answer key
+    is broken" -- omitted both, so the command with the authority to REFUSE
+    was the one running the weaker audit.
+
+    Checked by reading the call site: the audit's optional arguments are
+    exactly the shape that makes forgetting them invisible, so the test has
+    to assert they are passed rather than assert on behaviour that looks
+    identical either way.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("src/corpus/cli/eval.py").read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", getattr(node.func, "attr", "")) == "audit_queries"
+    ]
+    assert calls, "audit_queries is no longer called from corpus-eval at all"
+    for call in calls:
+        passed = {kw.arg for kw in call.keywords}
+        missing = {"all_keys", "documents_total"} - passed
+        assert not missing, (
+            f"corpus-eval calls audit_queries without {sorted(missing)}, which "
+            "silently disables the sibling and triviality checks"
+        )

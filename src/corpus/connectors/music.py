@@ -7,7 +7,7 @@ otherwise would cost hours of compute for nothing.
 
 **One document per album directory, not per track.** A track yields a title,
 an artist, and a number — three fields that make a document too thin to
-retrieve on and would turn a 4,000-file library into 4,000 near-identical
+retrieve on and would turn a music library into as many near-identical
 chunks competing with each other. An album is the unit people actually
 remember and ask about, and its track listing gives the document enough text
 to match against.
