@@ -151,6 +151,62 @@ def _print_human(records: Sequence[QueryRecord], top_k: int) -> None:
         print()
 
 
+def _document_count(db_path: str | Path) -> int:
+    """Distinct documents in the archive, or 0 when it cannot be read.
+
+    0 means "I could not judge this", and `triviality_report` says exactly
+    that rather than reporting a clean gold set -- the distinction this
+    codebase keeps having to make.
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        row = conn.execute("SELECT count(DISTINCT source_key) FROM chunks").fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+
+def _report_triviality(
+    *, key_counts: dict[str, int], documents: int, top_k: int
+) -> None:
+    """Print the random-retriever baseline, but only when it matters.
+
+    A gold-set query that accepts a large share of the archive scores well
+    for a retriever that does nothing, and nothing else in this output would
+    say so: recall@5 = 0.708 looks identical whether it was earned or fell
+    out of the size of the answer sets.
+
+    SILENT ON THE CLEAN PATH. A line printed on every run stops being read,
+    and this one has to be read on the run where it fires.
+    """
+    from corpus.eval.triviality import triviality_report
+
+    if not key_counts or documents <= 0:
+        return
+    try:
+        report = triviality_report(
+            key_counts, documents=documents, top_k=top_k
+        )
+    except ValueError as exc:
+        # A gold set naming more answers than the archive holds is a defect
+        # in the gold set. Say so; do not let it stop the eval.
+        print(f"=== Gold set ===\n  {exc}\n")
+        return
+    if report.is_clean:
+        return
+    print("=== Gold set ===")
+    for line in report.describe().splitlines():
+        print(f"  {line}")
+    print()
+
+
 def _build_json(
     records: Sequence[QueryRecord], top_k: int, hybrid: bool, rerank: bool
 ) -> dict[str, Any]:
@@ -416,6 +472,15 @@ def main() -> int:
             print(json.dumps(_build_json(records, args.top_k, not args.no_hybrid, args.rerank), indent=2))
         else:
             _print_human(records, args.top_k)
+            # Qualify the numbers just printed. A gold set whose queries a
+            # random retriever satisfies produces a healthy-looking recall
+            # that is mostly the size of its answer sets, and nothing else
+            # in this output distinguishes the two.
+            _report_triviality(
+                key_counts={q.query: len(q.expected_keys) for q in queries},
+                documents=_document_count(config.db_path),
+                top_k=args.top_k,
+            )
 
         if args.check:
             check_path = Path(args.check)
