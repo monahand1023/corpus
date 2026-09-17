@@ -260,3 +260,81 @@ def test_a_real_checkout_without_the_pattern_file_is_a_failure_not_a_skip():
         "`git clean -fdx` removes it. Recreate it: one regex per line, "
         "comments with #, then re-run `scripts/install-hooks.sh`."
     )
+
+
+def test_published_tags_are_audited_and_not_just_the_branch(tmp_path):
+    """A clean `main` hid a dirty tag, and this file reported clean.
+
+    `git push --force origin main` does NOT push tags. After a history
+    rewrite the branch moved and four tags still pointed at the ORIGINAL
+    commits -- one of which carried the string being removed. A fresh clone
+    was therefore still dirty while every check here passed, because the
+    audit above scans `origin/main` and nothing else.
+
+    Caught only because a clone was inspected with `--tags` by hand. That is
+    exactly the kind of noticing this file exists to stop relying on.
+
+    Two things are asserted, because they fail differently:
+      - every local tag points where the remote's does, so a rewrite that
+        forgot `--tags` is visible; and
+      - the patterns find nothing in the history reachable from any tag.
+    """
+    import subprocess
+
+    if not _pattern_file().is_file():
+        pytest.skip("no pattern file on this machine (untracked by design)")
+    patterns = _active_patterns()
+    if not patterns:
+        pytest.skip("pattern file has no active patterns")
+
+    remote = subprocess.run(
+        ["git", "ls-remote", "--tags", "origin"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+    )
+    if remote.returncode != 0:
+        pytest.skip("cannot reach origin to list its tags")
+
+    published: dict[str, str] = {}
+    for line in remote.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        name = ref.removeprefix("refs/tags/").removesuffix("^{}")
+        # A dereferenced entry (^{}) is the COMMIT an annotated tag points
+        # at, and is the one to compare against `rev-list -n1`.
+        if ref.endswith("^{}") or name not in published:
+            published[name] = sha
+    if not published:
+        pytest.skip("no tags on the remote")
+
+    drifted = []
+    for name, remote_sha in published.items():
+        local = _git("rev-list", "-n1", name)
+        if local.returncode != 0:
+            continue  # a tag the remote has and this clone does not
+        if local.stdout.strip() != remote_sha:
+            drifted.append(name)
+    assert not drifted, (
+        f"{len(drifted)} tag(s) point somewhere different on the remote than "
+        "they do here: " + ", ".join(sorted(drifted)) + ".\n\n"
+        "After a history rewrite this means `git push --force origin main` "
+        "was run without `--tags`, so the remote still serves the ORIGINAL "
+        "commits through those tags -- and a scan of origin/main alone "
+        "reports clean. Push them: git push --force origin --tags"
+    )
+
+    active = _active_pattern_file(tmp_path)
+    log = _git("log", "--format=%H%n%B", "-p", *published)
+    log_rc, history = log.returncode, log.stdout
+    del log
+    assert log_rc == 0, "could not read the tags' history, so it was not checked"
+
+    proc = subprocess.run(
+        ["grep", "-ciEf", str(active)], input=history, capture_output=True, text=True
+    )
+    rc, hits = proc.returncode, proc.stdout.strip()
+    del proc, history
+    assert rc < 2, "the scan errored, so the tags' history was not checked"
+    assert rc == 1, (
+        f"{hits} matching line(s) in history reachable from a published tag. "
+        "The branch can be clean while a tag still serves the original "
+        "commits. Not printed here; see the module docstring for how to look."
+    )
