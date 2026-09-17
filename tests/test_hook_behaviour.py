@@ -472,3 +472,34 @@ def test_the_installer_verifies_every_hook_it_enables():
             f"install-hooks.sh enables {hook} by setting core.hooksPath but "
             "never verifies it is executable"
         )
+
+
+def test_pre_push_blocks_when_the_pattern_file_is_missing(tmp_path):
+    """Missing was the one unreadable-rules case that still allowed a push.
+
+    This hook fails CLOSED when the pattern file cannot be read, and when it
+    contains a regex grep rejects. A file that is simply ABSENT produced a
+    NOTE and `exit 0` -- "I cannot check this" allowing the one action that
+    cannot be undone.
+
+    A push is not a commit. A bad commit is amendable; a pushed object is
+    served by SHA until Support purges it, which this project has now paid
+    for twice. `commit-msg` stays permissive for exactly that reason -- the
+    commit is still local and fixable -- and the push does not.
+
+    The remedy is one file, and the message says so, because a guard that
+    blocks without a way forward gets bypassed with --no-verify and then
+    protects nothing.
+    """
+    repo = _repo(tmp_path, f"{SECRET}\n")
+    (repo / ".git" / "private-name-patterns").unlink()
+    sha = _commit(repo, "ok.txt", b"fine\n")
+    result = _push_range(repo, sha)
+
+    assert result.returncode == 1, (
+        "a push went out with no private-name checking at all"
+    )
+    assert "BLOCKED" in result.stderr
+    assert "private-name-patterns" in result.stderr, (
+        "it blocked without saying what to create"
+    )

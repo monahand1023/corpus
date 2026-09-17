@@ -170,3 +170,93 @@ def test_no_private_name_is_in_the_history_already_pushed(tmp_path) -> None:
         "keeps serving unreachable objects by SHA, GitHub Support has to "
         "purge them afterwards."
     )
+
+
+# --- the two halves of "it skipped" ------------------------------------------
+#
+# The skip above conflates two situations that need opposite responses:
+#
+#   CI              has no `.git/private-name-patterns` and never will, because
+#                   publishing a denylist of private names defeats it. Skipping
+#                   is correct and permanent.
+#   A real checkout SHOULD have one. `core.hooksPath` and that file are both
+#                   per-clone and survive neither a fresh clone nor `git clean`.
+#                   Missing there means the strongest privacy detector is off
+#                   on the machine that does the pushing -- and it said SKIPPED,
+#                   which reads like the CI case.
+#
+# So the machinery is proved everywhere, and its absence is only tolerated
+# where it is genuinely unavailable.
+
+
+def _in_ci() -> bool:
+    import os
+
+    return os.environ.get("CI", "").lower() in {"1", "true", "yes"}
+
+
+def test_the_audit_machinery_works(tmp_path):
+    """A positive control that runs EVERYWHERE, including CI.
+
+    It cannot check this repo's real history without the real patterns, but
+    it can prove the scan would catch something -- planting a string in a
+    throwaway repo and asserting the same grep invocation finds it.
+
+    Without this, the audit could break entirely -- a bad flag, a changed
+    exit code, a renamed file -- and every run would report SKIPPED or clean,
+    forever. That is the failure this whole file exists to eliminate,
+    applied to itself.
+    """
+    import subprocess
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    (repo / "f.txt").write_text("SOURCE = 'zzplantedzz/thing.txt'\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "chore: add a file", "--no-verify"],
+        cwd=repo, check=True,
+    )
+
+    patterns = tmp_path / "patterns"
+    patterns.write_text("# a comment that must not become a regex\nzzplantedzz\n")
+    active = tmp_path / "active"
+    active.write_text("zzplantedzz\n")
+
+    history = subprocess.run(
+        ["git", "log", "--format=%H%n%B", "-p", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout
+    found = subprocess.run(
+        ["grep", "-ciEf", str(active)], input=history, capture_output=True, text=True
+    )
+    assert found.returncode == 0, (
+        "the scan did not find a string planted in a commit's diff -- the "
+        "audit is broken and would report every history clean"
+    )
+
+    clean = subprocess.run(
+        ["grep", "-ciEf", str(active)], input="nothing to see", capture_output=True,
+        text=True,
+    )
+    assert clean.returncode == 1, "the scan matches text it should not"
+
+
+def test_a_real_checkout_without_the_pattern_file_is_a_failure_not_a_skip():
+    """In CI this is expected and skipped. On a developer machine it is a
+    hole, and it looked identical to the CI case."""
+    if _in_ci():
+        pytest.skip("CI has no pattern file by design; see the module docstring")
+
+    assert _pattern_file().is_file(), (
+        f"{_pattern_file()} is missing on a real checkout, so the "
+        "pushed-history audit is NOT running here -- and it reported SKIPPED, "
+        "which is what CI legitimately reports.\n\n"
+        "That file is per-clone and untracked by design (publishing a "
+        "denylist of private names defeats it), so a fresh clone or a "
+        "`git clean -fdx` removes it. Recreate it: one regex per line, "
+        "comments with #, then re-run `scripts/install-hooks.sh`."
+    )

@@ -24,13 +24,31 @@
 
 PATTERNS="$(git rev-parse --git-dir)/private-name-patterns"
 
+# FAIL CLOSED ON A MISSING FILE TOO. This blocked when the pattern file was
+# unreadable, and when it held a regex grep rejects -- but a file that was
+# simply ABSENT printed a note and allowed the push. "I cannot check this"
+# permitting the one action that cannot be undone.
+#
+# A push is not a commit. A bad commit is amendable; a pushed object is
+# served by SHA until Support purges it. `commit-msg` stays permissive for
+# exactly that reason -- the commit is still local and fixable -- and this
+# does not.
 if [ ! -f "$PATTERNS" ]; then
     echo "" >&2
-    echo "  NOTE: $PATTERNS is missing, so pushed commit messages are NOT" >&2
-    echo "  being checked for private names. It is untracked on purpose --" >&2
-    echo "  recreate it after a fresh clone. One regex per line." >&2
+    echo "  ################################################################" >&2
+    echo "  #        PUSH BLOCKED: there are no patterns to check          #" >&2
+    echo "  ################################################################" >&2
     echo "" >&2
-    exit 0
+    echo "  $PATTERNS" >&2
+    echo "  does not exist, so NOTHING would be checked for private names." >&2
+    echo "" >&2
+    echo "  It is untracked on purpose -- a denylist of private names must" >&2
+    echo "  not be published -- so it does not survive a fresh clone or a" >&2
+    echo "  'git clean -fdx'. Recreate it: one regex per line, comments" >&2
+    echo "  with #. An intentionally empty file (comments only) is" >&2
+    echo "  accepted and allows the push." >&2
+    echo "" >&2
+    exit 1
 fi
 
 # Positive control: prove grep can match at all. A broken or missing grep
