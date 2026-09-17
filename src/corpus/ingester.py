@@ -128,6 +128,11 @@ class IngestResult:
     files_failed: int = 0
     pruning_performed: bool = True
     files_skipped: int = 0
+    # Chunks the embedder declined: neither indexed nor unchanged. They used
+    # to appear in NO total, so a run reported success with a quietly smaller
+    # index. Defaults to 0 because that is what every current embedder
+    # produces -- the contract is the only thing holding it that way.
+    chunks_dropped: int = 0
     # True when delete_orphans refused to prune because the orphan count
     # exceeded the blast-radius guard (OrphanPruneRefused) -- distinct from
     # pruning_performed=False due to failed_files, which is a DIFFERENT
@@ -340,6 +345,8 @@ class Ingester:
         chunks_seen = 0
         chunks_upserted = 0
         chunks_skipped = 0
+        # Chunks the embedder declined: neither indexed nor unchanged.
+        chunks_dropped = 0
         seen_ids: set[str] = set()
 
         buffer: list[Chunk] = []
@@ -350,9 +357,10 @@ class Ingester:
                 chunks_seen += 1
                 buffer.append(ch)
             if len(buffer) >= INGEST_BATCH:
-                u, s = self._flush(buffer)
+                u, s, d = self._flush(buffer)
                 chunks_upserted += u
                 chunks_skipped += s
+                chunks_dropped += d
                 buffer = []
             if documents % 200 == 0:
                 logger.info(
@@ -363,9 +371,10 @@ class Ingester:
                     chunks_skipped,
                 )
         if buffer:
-            u, s = self._flush(buffer)
+            u, s, d = self._flush(buffer)
             chunks_upserted += u
             chunks_skipped += s
+            chunks_dropped += d
 
         # ENUMERATION COMPLETENESS: reaching this line means connector.load()
         # ran to exhaustion, so seen_ids is the complete set for this source and
@@ -518,6 +527,7 @@ class Ingester:
             chunks_seen=chunks_seen,
             chunks_upserted=chunks_upserted,
             chunks_skipped=chunks_skipped,
+            chunks_dropped=chunks_dropped,
             orphans_deleted=orphans,
             tokens_used=self._embedder.total_tokens_used - tokens_before,
             tokens_counted=getattr(self._embedder, "counts_tokens", True),
@@ -533,23 +543,41 @@ class Ingester:
             prune_refused_detail=prune_refused_detail,
         )
 
-    def _flush(self, chunks: list[Chunk]) -> tuple[int, int]:
+    def _flush(self, chunks: list[Chunk]) -> tuple[int, int, int]:
         known = self._store.get_known_hashes([c.id for c in chunks])
         to_embed = [c for c in chunks if known.get(c.id) != c.content_hash]
         already = len(chunks) - len(to_embed)
         if not to_embed:
-            return 0, already
+            return 0, already, 0
 
         texts = [c.content for c in to_embed]
         embeddings = self._embedder.embed_documents(texts)
 
+        # COUNTED, not silently skipped. A chunk the embedder declines used to
+        # appear in neither total -- not upserted, not skipped -- so the run
+        # reported success with a quietly smaller index.
+        #
+        # Today `None` only ever means "blank input" by the Embedder contract,
+        # so this is currently always 0. The contract is the only thing holding
+        # that: an embedder that later returns None for a FAILED item would
+        # un-index content while reporting failed_files == 0, which also leaves
+        # the pruning gate open. Counting it means the number survives a change
+        # to the contract underneath.
         pairs: list[tuple[Chunk, list[float]]] = []
+        dropped = 0
         for chunk, emb in zip(to_embed, embeddings, strict=True):
             if emb is None:
+                dropped += 1
+                logger.warning(
+                    "  embedder returned nothing for chunk %s (%s); it will "
+                    "not be indexed",
+                    chunk.id,
+                    chunk.metadata.source_key,
+                )
                 continue
             pairs.append((chunk, emb))
         result = self._store.upsert_batch(pairs)
-        return result.upserted, result.skipped + already
+        return result.upserted, result.skipped + already, dropped
 
     def close(self) -> None:
         if self._owned_store:

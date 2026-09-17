@@ -209,6 +209,35 @@ class VoyageEmbedder:
             input_type=input_type,
             truncation=True,
         )
+        # TRUNCATION, MADE VISIBLE. `truncation=True` above means a text past
+        # the model's context is embedded from its opening tokens and comes
+        # back looking exactly like a complete one -- the chunk is then
+        # indexed by its first part only, with no error anywhere.
+        #
+        # The signal is free: if the server billed materially fewer tokens
+        # than Voyage's LOCAL tokenizer counted for the same texts, the
+        # difference is text that was discarded. No context-limit constant to
+        # hardcode, keep current, or get wrong for a model someone swaps in.
+        #
+        # Only when the local tokenizer is trusted -- it falls back to a char
+        # estimate when unavailable, and comparing an estimate against a real
+        # count would warn on every batch.
+        if self._tokenizer_ok:
+            sent = sum(self.token_counts(texts))
+            # 2%: the local tokenizer and the server disagree slightly on
+            # ordinary text, and a threshold at zero would fire constantly.
+            if sent and response.total_tokens < sent * 0.98:
+                logger.warning(
+                    "Voyage billed %d tokens for %d text(s) but the local "
+                    "tokenizer counted %d -- roughly %d tokens were TRUNCATED "
+                    "away. Those chunks are indexed by their opening only. "
+                    "Split them before the next ingest.",
+                    response.total_tokens,
+                    len(texts),
+                    sent,
+                    sent - response.total_tokens,
+                )
+
         self.total_tokens_used += response.total_tokens
         self._token_window.append((time.monotonic(), response.total_tokens))
         # SDK types embeddings as list[list[float]] | list[list[int]]; the int

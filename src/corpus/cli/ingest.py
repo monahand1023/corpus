@@ -200,6 +200,14 @@ def main() -> int:
             print(f"  chunks seen:      {r.chunks_seen:,}")
             print(f"  chunks upserted:  {r.chunks_upserted:,}")
             print(f"  chunks unchanged: {r.chunks_skipped:,}")
+            if r.chunks_dropped:
+                # Only when non-zero: it is always zero under the current
+                # embedder contract, and a line that is always zero is one
+                # nobody reads on the run where it is not.
+                print(
+                    f"  chunks DROPPED:   {r.chunks_dropped:,}  "
+                    "(embedder returned nothing; NOT indexed)"
+                )
             anomalies = [
                 d
                 for d in (
