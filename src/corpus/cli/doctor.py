@@ -31,7 +31,8 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from corpus.eval.query_log_audit import (
@@ -214,14 +215,64 @@ def _document_total(db_path: str) -> int:
         conn.close()
 
 
-def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool:
+@dataclass(frozen=True)
+class CheckSummary:
+    """Three outcomes, kept apart: passed, failed, and could-not-run.
+
+    A check that swallowed an exception and returned early used to return
+    True, landing in the numerator of "N/N checks passed" -- so the command
+    built to separate "I did not look" from "I looked and it was clean"
+    reported a blind run as a clean one.
+
+    `None` is the third state. A check whose error path forgets to return
+    anything is then counted correctly by accident rather than wrongly by
+    accident, which is the right way round for this failure mode.
+    """
+
+    total: int
+    passed: int
+    failed: list[str]
+    unran: list[str]
+    skipped: list[str]
+
+    @property
+    def ok(self) -> bool:
+        # A blind run is not a passing run, and CI reads the exit code.
+        return not self.failed and not self.unran
+
+    def describe(self) -> str:
+        head = "PROBLEMS FOUND" if self.failed else ("INCOMPLETE" if self.unran else "OK")
+        line = f"{head}: {self.passed}/{self.total} checks passed"
+        if self.unran:
+            line += f", {len(self.unran)} COULD NOT RUN ({', '.join(self.unran)})"
+        if self.skipped:
+            line += f", {len(self.skipped)} SKIPPED ({', '.join(self.skipped)})"
+        return line
+
+
+def summarise_checks(
+    ran: Mapping[str, bool | None], *, skipped: list[str]
+) -> CheckSummary:
+    """Partition check results. `None` means the check could not examine anything."""
+    failed = [name for name, ok in ran.items() if ok is False]
+    unran = [name for name, ok in ran.items() if ok is None]
+    return CheckSummary(
+        total=len(ran),
+        passed=len(ran) - len(failed) - len(unran),
+        failed=failed,
+        unran=unran,
+        skipped=list(skipped),
+    )
+
+
+def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool | None:
     if not queries_path:
         print("\ngold set          SKIPPED (no --queries)")
         return True
     path = Path(queries_path).expanduser()
     if not path.is_file():
         print(f"\ngold set          SKIPPED (no such file: {path})")
-        return True
+        return None  # could not examine anything -- not a pass
     if not db_path:
         print("\ngold set          SKIPPED (needs --config or --db to read the index)")
         return True
@@ -336,7 +387,7 @@ PER_WINDOW_FILTERS = (
 )
 
 
-def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) -> bool:
+def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) -> bool | None:
     """Name the filters that never fired. A warning, never a build failure.
 
     Dormancy is evidence to act on, not proof of a defect: a filter can be
@@ -377,7 +428,7 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
             }
     except Exception as exc:
         print(f"  SKIPPED (could not read: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     for label, (activity, known, scoped) in populations.items():
         coverage = Coverage(sum(activity.values()), f"{label} verdicts")
@@ -413,7 +464,7 @@ def _check_filter_activity(sidecar: str | None, *, policy: str | None = None) ->
     return True
 
 
-def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool:
+def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool | None:
     """Do the stored chunks still match what the chunker would produce?
 
     A source is ingested, the chunker changes, and nothing re-ingests it. The
@@ -441,7 +492,7 @@ def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool:
         config = CorpusConfig.load(config_path)
     except Exception as exc:
         print(f"  SKIPPED (could not load config: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     drifted_sources = []
     unreachable: list[tuple[str, str]] = []
@@ -486,7 +537,7 @@ def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool:
     return True
 
 
-def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) -> bool:
+def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) -> bool | None:
     """What the last transcription pass could not finish.
 
     The sidecar's `failures` table is where a pass records every file it gave
@@ -545,7 +596,7 @@ def _check_transcribe_health(sidecar: str | None, *, policy: str | None = None) 
             ).fetchall()
     except Exception as exc:
         print(f"  SKIPPED (could not read: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     stale = [r for r in failures if r[0] in settled]
     live = [r for r in failures if r[0] not in settled]
@@ -618,7 +669,7 @@ def _apply_load(load: str | None) -> bool:
     return True
 
 
-def _check_shadowed_components(load: str | None = None) -> bool:
+def _check_shadowed_components(load: str | None = None) -> bool | None:
     """Name any connector a consumer has registered over the engine's own.
 
     THE FAILURE THIS MAKES VISIBLE. A consumer repository held a full copy of
@@ -653,7 +704,7 @@ def _check_shadowed_components(load: str | None = None) -> bool:
                 return True
         except Exception as exc:
             print(f"  SKIPPED (could not load {load}: {type(exc).__name__}: {exc})")
-            return True
+            return None  # could not examine anything -- not a pass
 
     shadowed = sorted(
         name
@@ -670,7 +721,7 @@ def _check_shadowed_components(load: str | None = None) -> bool:
     return True
 
 
-def _check_duplicate_content(db_path: str | None) -> bool:
+def _check_duplicate_content(db_path: str | None) -> bool | None:
     """Passages indexed from more than one document.
 
     Measured on a live archive: 6.5% of the index, traced to 168 recordings
@@ -694,7 +745,7 @@ def _check_duplicate_content(db_path: str | None) -> bool:
         report = find_duplicate_content(db_path)
     except Exception as exc:
         print(f"  SKIPPED (could not scan: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     if report.coverage.vacuous:
         print(f"  SKIPPED ({report.coverage.describe()})")
@@ -716,7 +767,7 @@ def _check_duplicate_content(db_path: str | None) -> bool:
     return True
 
 
-def _check_threshold_margins(sidecar: str | None) -> bool:
+def _check_threshold_margins(sidecar: str | None) -> bool | None:
     """How close is each threshold to the real data it must not reject?
 
     Reported, never enforced. A threshold may legitimately sit near data it is
@@ -740,7 +791,7 @@ def _check_threshold_margins(sidecar: str | None) -> bool:
             ).fetchall()
     except Exception as exc:
         print(f"  SKIPPED (could not read: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     if not rows:
         print("  SKIPPED (no transcripts to measure against)")
@@ -803,7 +854,7 @@ def _check_threshold_margins(sidecar: str | None) -> bool:
     return True
 
 
-def _check_index_quality(db_path: str | None) -> bool:
+def _check_index_quality(db_path: str | None) -> bool | None:
     if not db_path:
         print("\nindex quality     SKIPPED (no --config or --db)")
         return True
@@ -824,7 +875,7 @@ def _check_index_quality(db_path: str | None) -> bool:
         return False
     except Exception as exc:
         print(f"  SKIPPED (could not scan: {type(exc).__name__})")
-        return True
+        return None  # could not examine anything -- not a pass
 
     # Vacuous BEFORE clean: a scan that examined nothing found nothing, and
     # the second half of that sentence is the part people read.
@@ -922,7 +973,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # counting it as one would be the same inflation this command exists to
     # catch -- a summary reading "4/4 clean" when three of them never ran is
     # exactly how the query logs came to be trusted.
-    ran: dict[str, bool] = {}
+    # bool | None: None is "this check could not examine anything", which is
+    # neither a pass nor a fail and must not be counted as either.
+    ran: dict[str, bool | None] = {}
     skipped: list[str] = []
 
     log_paths, log_skip_reason = _resolve_query_logs(args)
@@ -977,12 +1030,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             skipped.append(name)
 
-    failed = [name for name, ok in ran.items() if not ok]
-    print(
-        f"\n{'PROBLEMS FOUND' if failed else 'OK'}: "
-        f"{len(ran) - len(failed)}/{len(ran)} checks passed"
-        + (f", {len(skipped)} SKIPPED ({', '.join(skipped)})" if skipped else "")
-    )
+    summary = summarise_checks(ran, skipped=skipped)
+    failed = summary.failed
+    print("\n" + summary.describe())
+    if summary.unran:
+        print(
+            "  A check that could not run is not a passing one either. These "
+            "reported\n  an error while looking and were counted as neither "
+            "pass nor fail."
+        )
     if skipped:
         print(
             "  A skipped check is not a passing one. Each skip above says "
@@ -993,7 +1049,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "  A number measured through a contaminated instrument is worse "
             "than no number, because it still gets acted on."
         )
-    return 1 if failed else 0
+    # A blind run is not a passing run: an errored check moves the exit code,
+    # because CI reads only that.
+    return 0 if summary.ok else 1
 
 
 if __name__ == "__main__":
