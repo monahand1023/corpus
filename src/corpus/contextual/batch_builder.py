@@ -107,12 +107,6 @@ def _chunks_block(window_chunks: list[StoredChunk]) -> str:
     return "\n".join(lines)
 
 
-def _window_user_message(doc_body: str, window_chunks: list[StoredChunk]) -> str:
-    """Single-string user message (body + chunks) for the local Ollama path, which
-    sends a plain string rather than Anthropic cache_control content blocks."""
-    body = doc_body[:MAX_DOC_CHARS]
-    return f"Document:\n<document>\n{body}\n</document>\n\n" + _chunks_block(window_chunks)
-
 
 def build_batch_requests(
     chunks: list[StoredChunk],

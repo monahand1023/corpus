@@ -19,7 +19,6 @@ from corpus.contextual.contextualizer import (
     DEFAULT_MIN_TOKENS,
     MAX_CHUNK_CHARS,
     MAX_DOC_CHARS,
-    build_context_prompt,
     estimate_chunk_cost_tokens,
     should_contextualize,
 )
@@ -116,26 +115,74 @@ def test_min_tokens_is_tunable_per_call() -> None:
 # --- prompt construction ----------------------------------------------------
 
 
-def test_oversized_document_is_truncated() -> None:
-    prompt = build_context_prompt("x" * (MAX_DOC_CHARS * 2), "chunk")
+# These three assert truncation and prompt shape on the path that is
+# ACTUALLY SENT. They used to assert them on `build_context_prompt`, which
+# no production code ever called -- so the properties were covered on a
+# function that could not affect a bill, while the live builder had them
+# and nothing checked. Sending an untruncated document is a real cost and a
+# real request failure, which is exactly the kind of thing a test should be
+# standing over.
 
-    assert len(prompt) < MAX_DOC_CHARS * 2
-    assert "[truncated]" in prompt
+
+def _sent_text(body: str, chunk_text: str) -> str:
+    """The user-message text this builder would actually send.
+
+    Read out of the request structure rather than a JSON dump of the whole
+    thing: the system prompt is long English prose and contributes its own
+    letters, so counting characters in the serialised request measures the
+    template as much as the payload.
+    """
+    chunks = [
+        StoredChunk(
+            id="c1",
+            source_type="notes",
+            source_key="d.md",
+            content=chunk_text,
+            metadata={"chunk_index": 0},
+            title="T",
+            url=None,
+        )
+    ]
+    requests = build_batch_requests(chunks, {"d.md": body}, window_size=1)
+    assert requests, "the builder produced no request"
+    messages = requests[0]["params"]["messages"]
+    parts = []
+    for message in messages:
+        content = message["content"]
+        if isinstance(content, str):
+            parts.append(content)
+        else:
+            parts.extend(b.get("text", "") for b in content)
+    return "\n".join(parts)
+
+
+def _between(text: str, open_tag: str, close_tag: str) -> str:
+    start = text.index(open_tag) + len(open_tag)
+    return text[start : text.index(close_tag, start)].strip()
+
+
+def test_oversized_document_is_truncated() -> None:
+    sent = _sent_text("x" * (MAX_DOC_CHARS * 2), "chunk")
+
+    # The delimited block, not a letter count over the whole message: the
+    # surrounding template contains its own x's ("index", "emit_chunk_contexts")
+    # and counting them measures the prompt wording rather than the payload.
+    assert len(_between(sent, "<document>", "</document>")) == MAX_DOC_CHARS
 
 
 def test_oversized_chunk_is_truncated() -> None:
     # The model places the chunk; it does not summarize it, so sending all of
     # a long chunk buys nothing and is billed.
-    prompt = build_context_prompt("doc", "y" * (MAX_CHUNK_CHARS * 2))
+    sent = _sent_text("doc", "y" * (MAX_CHUNK_CHARS * 2))
 
-    assert prompt.count("y") == MAX_CHUNK_CHARS
+    assert len(_between(sent, '<chunk index="0">', "</chunk>")) == MAX_CHUNK_CHARS
 
 
 def test_prompt_contains_both_halves() -> None:
-    prompt = build_context_prompt("THE DOCUMENT", "THE CHUNK")
+    sent = _sent_text("THE DOCUMENT", "THE CHUNK")
 
-    assert "THE DOCUMENT" in prompt
-    assert "THE CHUNK" in prompt
+    assert "THE DOCUMENT" in sent
+    assert "THE CHUNK" in sent
 
 
 # --- windowing, which is what makes it affordable ---------------------------

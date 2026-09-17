@@ -128,14 +128,6 @@ Chunk to contextualize:
 Write a 1-2 sentence context for this chunk:"""
 
 
-def build_context_prompt(doc_body: str, chunk_content: str) -> str:
-    """The user message for one context-generation call."""
-    if len(doc_body) > MAX_DOC_CHARS:
-        doc_body = doc_body[:MAX_DOC_CHARS] + "\n...[truncated]"
-    return _USER_TEMPLATE.format(
-        doc_body=doc_body, chunk_content=chunk_content[:MAX_CHUNK_CHARS]
-    )
-
 
 def should_contextualize(token_count: int | None, min_tokens: int = DEFAULT_MIN_TOKENS) -> bool:
     """Whether a chunk earns a context sentence.

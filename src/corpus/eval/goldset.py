@@ -178,12 +178,6 @@ def _duplicate_queries(queries: Sequence[Any]) -> Iterable[GoldFinding]:
             )
 
 
-def _word_runs(text: str, size: int) -> set[tuple[str, ...]]:
-    words = [w.casefold() for w in _WORD.findall(text)]
-    if len(words) < size:
-        return set()
-    return {tuple(words[i : i + size]) for i in range(len(words) - size + 1)}
-
 
 def _longest_shared_run(query: str, content: str) -> list[str]:
     """The longest run of consecutive query words appearing in `content`."""
