@@ -19,19 +19,74 @@ log stop moving.
 
 THE MODEL IS LOADED ONCE PER WORKER, not once per file, so the cost of a
 replacement is paid only when a file actually hangs.
+
+THE DEADLINE IS ONLY AS ALIVE AS THE PARENT HOLDING IT. Polling happens here,
+in the parent, so a parent killed hard -- SIGKILL, a crash, the OOM killer --
+takes the enforcement with it while the child is still inside a file. Its
+daemon flag does not help: that is honoured by an atexit hook, which a hard
+kill never runs. Between files the child is waiting on `recv()` and sees EOF,
+so it exits on its own; INSIDE a file it never returns to `recv()` to find
+out. Measured on this machine: one such orphan held the GPU at 93% for 20h15m
+and wrote nothing for the last 12h37m of it, because the process meant to
+receive its results no longer existed. So the child watches for the parent
+disappearing too -- the same bound, enforced from the side that still exists.
 """
 
 from __future__ import annotations
 
 import contextlib
 import multiprocessing
+import os
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+#: How often a child checks that its parent is still there. One syscall at
+#: this interval is nothing beside a transcription, and it bounds how long an
+#: orphan can hold the GPU.
+PARENT_POLL_SECONDS = 1.0
+
+#: Distinct from 0 and 1 so an orphaned exit is identifiable in a crash log.
+EXIT_ORPHANED = 3
+
 
 class WorkerTimeout(Exception):
     """A file exceeded its deadline and its worker was replaced."""
+
+
+def _exit_when_orphaned(
+    parent_pid: int, interval: float = PARENT_POLL_SECONDS
+) -> None:  # pragma: no cover - runs in a child thread
+    """Hard-exit this process once `parent_pid` is no longer our parent.
+
+    `os._exit`, not `sys.exit`: raising in a daemon thread ends the thread and
+    leaves the main thread inside Metal exactly where it was. There is also
+    nothing left to clean up for -- the pipe's far end died with the parent,
+    so no result can be delivered and no shutdown needs to be orderly.
+    """
+    while True:
+        time.sleep(interval)
+        if os.getppid() != parent_pid:
+            os._exit(EXIT_ORPHANED)
+
+
+def _child_bootstrap(
+    target: Callable[[Any], None], conn: Any, parent_pid: int
+) -> None:  # pragma: no cover - runs in a child
+    """Start the orphan watch, then hand over to the real worker body.
+
+    This wraps EVERY target rather than living inside `_worker_main`, because
+    the guarantee belongs to running as this class's child -- not to one
+    particular payload. A test double that hangs gets it too, which is the
+    only way the property can be tested at all.
+    """
+    watcher = threading.Thread(
+        target=_exit_when_orphaned, args=(parent_pid,), daemon=True
+    )
+    watcher.start()
+    target(conn)
 
 
 def _worker_main(conn: Any) -> None:  # pragma: no cover - runs in a child
@@ -79,7 +134,11 @@ class TranscribeWorker:
         # threading state, which is not safe to use after fork on macOS.
         ctx = multiprocessing.get_context("spawn")
         self._conn, child = ctx.Pipe()
-        self._proc = ctx.Process(target=self._target, args=(child,), daemon=True)
+        self._proc = ctx.Process(
+            target=_child_bootstrap,
+            args=(self._target, child, os.getpid()),
+            daemon=True,
+        )
         self._proc.start()
         child.close()
 
@@ -134,4 +193,4 @@ class TranscribeWorker:
             self._conn.close()
 
 
-__all__ = ["TranscribeWorker", "WorkerTimeout"]
+__all__ = ["EXIT_ORPHANED", "PARENT_POLL_SECONDS", "TranscribeWorker", "WorkerTimeout"]
