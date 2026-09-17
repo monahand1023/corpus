@@ -290,14 +290,50 @@ def scan_published_artifacts(
     )
 
 
+class GitUnavailable(RuntimeError):
+    """git could not be asked. NOT the same as a clean history."""
+
+
 def reachable_messages(repo_path: Path | str = ".") -> list[str]:
     """Every commit message reachable from HEAD. The local half of the check."""
+    # THREE outcomes, not two. `git log HEAD` fails both when this is not a
+    # repository AND when it is a repository whose HEAD is unborn -- a fresh
+    # `git init` with no commits. The first is "I could not look"; the second
+    # is a real, clean answer of "nothing to scan". Asked separately so they
+    # cannot collapse into each other.
+    is_repo = subprocess.run(
+        ["git", "-C", str(repo_path), "rev-parse", "--git-dir"],
+        capture_output=True, text=True, check=False,
+    )
+    if is_repo.returncode != 0:
+        raise GitUnavailable(
+            f"not a git repository, or git could not run, at {repo_path}: "
+            f"{is_repo.stderr.strip() or 'no stderr'}"
+        )
+    has_head = subprocess.run(
+        ["git", "-C", str(repo_path), "rev-parse", "--verify", "--quiet", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    if has_head.returncode != 0:
+        return []  # a repository with no commits: nothing to scan, and clean
+
     proc = subprocess.run(
         ["git", "-C", str(repo_path), "log", "--format=%B%x00", "HEAD"],
         capture_output=True, text=True, check=False,
     )
     if proc.returncode != 0:
-        return []
+        # RAISE, do not return []. An empty list is what a genuinely empty
+        # history returns, so returning it here made "git could not run" --
+        # not a repo, a bad HEAD, git missing, a permission problem --
+        # indistinguishable from "there is nothing to scan".
+        #
+        # This module exists to keep "I could not look" apart from "I looked
+        # and it was clean". The one in-repo caller happened to guard against
+        # it; an exported function should not depend on that.
+        raise GitUnavailable(
+            f"git log failed in {repo_path} (exit {proc.returncode}): "
+            f"{proc.stderr.strip() or 'no stderr'}"
+        )
     return [m.strip() for m in proc.stdout.split("\0") if m.strip()]
 
 
@@ -321,6 +357,7 @@ def surfaces_to_check() -> Iterable[str]:
 
 
 __all__ = [
+    "GitUnavailable",
     "MessageScan",
     "OrphanScan",
     "SurfaceScan",

@@ -372,3 +372,30 @@ def test_the_EVAL_runs_the_same_gold_set_audit_the_doctor_does():
             f"corpus-eval calls audit_queries without {sorted(missing)}, which "
             "silently disables the sibling and triviality checks"
         )
+
+
+def test_an_unreadable_index_says_so_rather_than_saying_nothing(capsys):
+    """`_document_count`'s docstring promises the opposite of what happens.
+
+        0 means "I could not judge this", and `triviality_report` says
+        exactly that rather than reporting a clean gold set
+
+    It does not. The only caller returns silently on `documents <= 0`, and
+    silence is ALSO what a sound gold set produces -- the report is
+    deliberately quiet on the clean path. So an unreadable, locked or moved
+    index renders identically to a gold set with nothing wrong, and the
+    contract written directly above it says it will not.
+
+    `triviality_report` already handles this correctly: its `describe()`
+    returns "cannot judge triviality ... (this is not a clean result)". The
+    caller just never let it speak.
+    """
+    from corpus.cli.eval import _report_triviality
+
+    _report_triviality(key_counts={"a": 5}, documents=0, top_k=5)
+    out = capsys.readouterr().out
+
+    assert out.strip(), "an unreadable index produced the same silence as a clean one"
+    assert "not a clean result" in out.lower(), (
+        "it reported an absence without saying the absence proves nothing"
+    )

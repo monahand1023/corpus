@@ -204,7 +204,20 @@ def _report_triviality(
     """
     from corpus.eval.triviality import triviality_report
 
-    if not key_counts or documents <= 0:
+    if not key_counts:
+        return
+    if documents <= 0:
+        # NOT silent. Silence is what a SOUND gold set produces here, so
+        # returning quietly made "I could not read the index" render
+        # identically to "there is nothing wrong" -- the exact distinction
+        # `_document_count`'s own docstring promises to preserve.
+        print("=== Gold set ===")
+        print(
+            "  could not read the archive to judge whether any query is "
+            "trivially\n  satisfiable, so this says nothing either way "
+            "(not a clean result)."
+        )
+        print()
         return
     try:
         report = triviality_report(
