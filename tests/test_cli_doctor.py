@@ -183,7 +183,14 @@ def test_a_real_gold_set_reports_its_coverage(tmp_path, capsys) -> None:
 
     queries = tmp_path / "eval_queries.py"
     queries.write_text(
-        'EVAL_QUERIES = [{"query": "ducks at the pond", "expected_keys": ["a.md"]}]\n'
+        # A dataclass, not a dict: corpus-eval reads these as ATTRIBUTES,
+        # so a dict gold set raises AttributeError and never runs.
+        'from dataclasses import dataclass\n'
+        '@dataclass\n'
+        'class Q:\n'
+        '    query: str\n'
+        '    expected_keys: list\n'
+        'EVAL_QUERIES = [Q("ducks at the pond", ["a.md"])]\n'
     )
     _check_gold_set(str(queries), _index(tmp_path, [("notes", "a.md", "ducks pond")]))
     out = capsys.readouterr().out

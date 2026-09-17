@@ -254,26 +254,172 @@ def _query_echoes_answer(
             break
 
 
+def _unusable_shapes(queries: Sequence[Any]) -> Iterable[GoldFinding]:
+    """Queries `corpus-eval` could not run at all.
+
+    The eval reads `q.query` and `q.expected_keys` as ATTRIBUTES, so a gold
+    set written as dicts raises AttributeError and never runs. This audit
+    reads the same fields with getattr defaults, so it read that same file as
+    a list of empty negative controls and reported "no expected keys ... if
+    the keys come from a labelling function, it matched nothing".
+
+    Two readings of one file, and the diagnostic was the forgiving one --
+    which is the worse way round for a tool whose job is to say what is
+    wrong before the expensive command runs.
+    """
+    for query in queries:
+        missing = [
+            name for name in ("query", "expected_keys") if not hasattr(query, name)
+        ]
+        if not missing:
+            continue
+        yield GoldFinding(
+            query=repr(query)[:80],
+            kind="unusable-query-shape",
+            detail=(
+                f"a {type(query).__name__} with no attribute "
+                f"{' or '.join(missing)}. corpus-eval reads these as "
+                "attributes and will raise AttributeError on this gold set. "
+                "Use a dataclass (or any object with those attributes), not a "
+                "mapping."
+            ),
+            severity="error",
+        )
+
+
 def audit_queries(
     queries: Sequence[Any],
     *,
     lookup: _KeyLookup | None = None,
     documents: dict[str, str] | None = None,
+    documents_total: int = 0,
+    top_k: int = 5,
+    all_keys: Sequence[str] | None = None,
 ) -> list[GoldFinding]:
     """Every check, most severe first.
 
     `lookup` maps candidate keys to the subset present in the index; `documents`
-    maps key to text. Both optional -- without them the structural checks still
-    run, which is what makes this usable before an index exists.
+    maps key to text. `documents_total` is how many documents the archive
+    holds. All optional -- without them the structural checks still run, which
+    is what makes this usable before an index exists.
+
+    Absent `documents_total` the triviality check cannot run and does not
+    guess: a query's difficulty is meaningless without knowing what it was
+    drawn from.
     """
+    unusable = list(_unusable_shapes(queries))
+    if unusable:
+        # Every other check reads `.query` and `.expected_keys` through
+        # getattr defaults, so an unusable shape would flow through all of
+        # them as an empty negative control and produce confident, wrong
+        # findings about a labelling function that is not there.
+        return unusable
     findings = [
         *_unindexed_keys(queries, lookup),
         *_empty_answer_sets(queries),
         *_capped_answer_sets(queries),
         *_duplicate_queries(queries),
         *_query_echoes_answer(queries, documents),
+        *_trivially_satisfiable(queries, documents_total, top_k),
+        *_unlisted_siblings(queries, all_keys),
     ]
     return sorted(findings, key=lambda f: 0 if f.severity == "error" else 1)
+
+
+def _unlisted_siblings(
+    queries: Sequence[Any], all_keys: Sequence[str] | None
+) -> Iterable[GoldFinding]:
+    """Documents with the same filename as an expected key, left unlabelled.
+
+    An archive keeps siblings, and a label naming one of them asserts the
+    others do not answer the question -- so the retriever returns a correct
+    document and is scored wrong. The query then looks like a retrieval
+    failure, which is the most expensive kind of wrong answer a gold set can
+    give: it sends someone to tune a retriever that is working.
+
+    Four labels in one real gold set had this, found in one afternoon: the
+    same doorbell recording in an iMovie library and on the drive it came
+    from; five ReleaseNotes.txt in one driver package; a Spanish handbook for
+    each of two sibling schools; 31 localisation files where two were named.
+
+    FILENAME ONLY, deliberately. Matching on content similarity would need
+    the documents and would fire on every archive with near-duplicates in it.
+    Measured before shipping: 3 of 24 queries on the archive where the
+    mistakes were made, and 0 of 24 on each of two other archives.
+    """
+    if not all_keys:
+        return
+    from posixpath import basename
+
+    by_base: dict[str, list[str]] = {}
+    for key in all_keys:
+        by_base.setdefault(basename(key).lower(), []).append(key)
+
+    for query in queries:
+        listed = set(_expected(query))
+        if not listed:
+            continue
+        siblings = sorted(
+            other
+            for key in listed
+            for other in by_base.get(basename(key).lower(), ())
+            if other not in listed
+        )
+        if not siblings:
+            continue
+        shown = ", ".join(siblings[:3]) + (" ..." if len(siblings) > 3 else "")
+        yield GoldFinding(
+            query=_text_of(query),
+            kind="unlisted-sibling",
+            detail=(
+                f"{len(siblings)} document(s) share a filename with an expected "
+                f"key but are not listed: {shown}. If they answer the question "
+                "too, the retriever returning one is scored WRONG and the query "
+                "reads as a retrieval failure."
+            ),
+            severity="warning",
+        )
+
+
+def _trivially_satisfiable(
+    queries: Sequence[Any], documents_total: int, top_k: int
+) -> Iterable[GoldFinding]:
+    """Queries a retriever that does nothing would satisfy by chance.
+
+    recall@k asks whether ANY acceptable answer reached the top k, so a query
+    accepting a large share of the archive is satisfied by arbitrary results.
+    Found live: one accepting 14% of an archive's documents, which five random
+    results hit 53% of the time -- a coin flip contributing to a gate as
+    though it were a measurement.
+
+    A WARNING, not an error. The same archive's other 23 queries were fine
+    and the gate as a whole was earned; a check that failed the build here
+    would fire on every gold set with broad topical questions in it and get
+    switched off, taking the real signal with it.
+    """
+    if documents_total <= 0:
+        return
+    from corpus.eval.triviality import DEFAULT_TRIVIAL_ABOVE, random_hit_rate
+
+    for query in queries:
+        expected = _expected(query)
+        if not expected:
+            continue  # a negative control, deliberately unanswerable
+        rate = random_hit_rate(
+            keys=len(expected), documents=documents_total, top_k=top_k
+        )
+        if rate > DEFAULT_TRIVIAL_ABOVE:
+            yield GoldFinding(
+                query=_text_of(query),
+                kind="trivially_satisfiable",
+                detail=(
+                    f"accepts {len(expected):,} of {documents_total:,} documents, "
+                    f"so {top_k} random results satisfy it {rate:.0%} of the time. "
+                    "It measures the size of its answer set, not the retriever. "
+                    "Narrow it or drop it."
+                ),
+                severity="warning",
+            )
 
 
 # --- reading an index, for the checks that need one -------------------------

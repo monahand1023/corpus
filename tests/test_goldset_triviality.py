@@ -131,3 +131,210 @@ def test_the_eval_says_nothing_when_the_gold_set_is_sound(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert out.strip() == "", f"printed on a clean gold set:\n{out}"
+
+
+# --- as a gold-set finding, so the doctor and the forks get it too -----------
+
+
+class _Q:
+    def __init__(self, query, expected_keys):
+        self.query = query
+        self.expected_keys = expected_keys
+
+
+def test_the_audit_flags_a_trivially_satisfiable_query():
+    """`corpus-eval` is not the only thing that reads a gold set, and it is
+    the expensive one -- it spends embedding calls to find out.
+
+    `audit_queries` is what `corpus-doctor` runs and what the forked private
+    eval CLIs import, so a check that lives only in the eval CLI is a check
+    half the archives never run. This one needs no retrieval at all: it is
+    arithmetic over the answer-set sizes.
+    """
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries(
+        [_Q("broad", [f"k{i}" for i in range(600)]), _Q("narrow", ["a"])],
+        documents_total=1000,
+        top_k=5,
+    )
+    trivial = [f for f in findings if f.kind == "trivially_satisfiable"]
+    assert len(trivial) == 1, [f.kind for f in findings]
+    assert trivial[0].query == "broad"
+    assert trivial[0].severity == "warning"
+    assert "600" in trivial[0].detail
+
+
+def test_the_audit_is_unchanged_when_it_is_not_told_the_archive_size():
+    """Optional, like `lookup` and `documents`: the structural checks have to
+    keep working before an index exists. Absent a size, this check cannot run
+    -- and must not invent a verdict."""
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries([_Q("broad", [f"k{i}" for i in range(600)])])
+    assert not [f for f in findings if f.kind == "trivially_satisfiable"]
+
+
+def test_the_doctor_passes_the_archive_size_so_the_check_can_run(tmp_path, capsys):
+    """A check wired up but never given its input is a check that reports
+    clean forever -- the defect this codebase has shipped in four places.
+
+    `audit_queries` takes `documents_total` as an OPTIONAL argument and
+    silently skips triviality without it. That is right for a caller with no
+    index, and lethal for the doctor, which has one.
+    """
+    import sqlite3
+
+    from corpus.cli.doctor import _check_gold_set
+
+    db = tmp_path / "index.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE chunks (id TEXT, source_type TEXT, source_key TEXT,"
+        " content TEXT, content_hash TEXT, metadata TEXT)"
+    )
+    for i in range(100):
+        conn.execute(
+            "INSERT INTO chunks VALUES (?,'notes',?,'body','h','{}')",
+            (f"c{i}", f"doc{i}.md"),
+        )
+    conn.commit()
+    conn.close()
+
+    queries = tmp_path / "eval_queries.py"
+    keys = ", ".join(f'"doc{i}.md"' for i in range(60))
+    # A dataclass, not a dict: dicts are what `unusable-query-shape` rejects,
+    # and corpus-eval could not run them either.
+    queries.write_text(
+        "from dataclasses import dataclass, field\n"
+        "@dataclass\n"
+        "class Q:\n"
+        "    query: str\n"
+        "    expected_keys: list\n"
+        f'EVAL_QUERIES = [Q("everything", [{keys}])]\n'
+    )
+
+    _check_gold_set(str(queries), str(db))
+    out = capsys.readouterr().out
+
+    assert "trivially_satisfiable" in out, (
+        f"the doctor never gave the audit the archive size:\n{out}"
+    )
+
+
+def test_a_gold_set_the_eval_cannot_run_is_named_as_such():
+    """The doctor and the eval disagreed about what a query IS.
+
+    `corpus-eval` reads `q.query` and `q.expected_keys` as attributes, so a
+    gold set written as dicts raises AttributeError and never runs. The
+    audit reads the same fields with `getattr(..., default)`, so the same
+    file passed through it as a list of empty NEGATIVE controls -- and
+    reported "no expected keys ... if the keys come from a labelling
+    function, it matched nothing", which sends someone to debug a labelling
+    function that is not there.
+
+    Two readings of the same file, and the diagnostic was the forgiving one.
+    """
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries([{"query": "ducks", "expected_keys": ["a.md"]}])
+    kinds = [f.kind for f in findings]
+
+    assert "unusable-query-shape" in kinds, kinds
+    bad = next(f for f in findings if f.kind == "unusable-query-shape")
+    assert bad.severity == "error"
+    assert "dict" in bad.detail
+    assert "empty-answer-set" not in kinds, (
+        "it is still being read as a negative control as well"
+    )
+
+
+# --- siblings the label left out ---------------------------------------------
+
+
+def test_an_unlisted_sibling_of_an_expected_key_is_flagged():
+    """Four labels in one gold set named one document of several identical ones.
+
+    An archive keeps siblings: a doorbell clip in the iMovie library AND on
+    the drive it came from; five ReleaseNotes.txt in one driver package; a
+    Spanish handbook for each of two schools; 31 localisation files. A label
+    naming one of them asserts the others do NOT answer the question, so the
+    retriever returns a correct document and is scored wrong -- and the query
+    looks like a retrieval failure worth chasing.
+
+    Measured before shipping: 3 of 24 queries on the archive where the
+    mistakes were made, 0 of 24 on each of two others. It fires where the
+    mistake is and stays quiet elsewhere, which is the only reason it is
+    worth having.
+    """
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries(
+        [_Q("release notes", ["pkg/audio/HDABus/ReleaseNotes.txt"])],
+        all_keys=[
+            "pkg/audio/HDABus/ReleaseNotes.txt",
+            "pkg/audio/HDMI/ReleaseNotes.txt",
+            "pkg/audio/SAFD/ReleaseNotes.txt",
+            "unrelated/notes.md",
+        ],
+    )
+    sib = [f for f in findings if f.kind == "unlisted-sibling"]
+    assert len(sib) == 1, [f.kind for f in findings]
+    assert sib[0].severity == "warning"
+    assert "2" in sib[0].detail
+    assert "unrelated/notes.md" not in sib[0].detail
+
+
+def test_a_complete_label_is_not_flagged():
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries(
+        [_Q("release notes", ["pkg/a/ReleaseNotes.txt", "pkg/b/ReleaseNotes.txt"])],
+        all_keys=["pkg/a/ReleaseNotes.txt", "pkg/b/ReleaseNotes.txt"],
+    )
+    assert not [f for f in findings if f.kind == "unlisted-sibling"]
+
+
+def test_without_the_key_list_the_sibling_check_does_not_guess():
+    from corpus.eval.goldset import audit_queries
+
+    findings = audit_queries([_Q("a", ["pkg/a/ReleaseNotes.txt"])])
+    assert not [f for f in findings if f.kind == "unlisted-sibling"]
+
+
+def test_the_doctor_passes_the_key_list_so_the_sibling_check_can_run(tmp_path, capsys):
+    """`all_keys` is optional, so forgetting it looks exactly like a gold set
+    with nothing wrong. Same trap as `documents_total`, same test."""
+    import sqlite3
+
+    from corpus.cli.doctor import _check_gold_set
+
+    db = tmp_path / "index.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE chunks (id TEXT, source_type TEXT, source_key TEXT,"
+        " content TEXT, content_hash TEXT, metadata TEXT)"
+    )
+    for key in ("pkg/a/ReleaseNotes.txt", "pkg/b/ReleaseNotes.txt"):
+        conn.execute(
+            "INSERT INTO chunks VALUES (?,'notes',?,'body','h','{}')", (key, key)
+        )
+    conn.commit()
+    conn.close()
+
+    queries = tmp_path / "eval_queries.py"
+    queries.write_text(
+        "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Q:\n"
+        "    query: str\n"
+        "    expected_keys: list\n"
+        'EVAL_QUERIES = [Q("release notes", ["pkg/a/ReleaseNotes.txt"])]\n'
+    )
+
+    _check_gold_set(str(queries), str(db))
+    out = capsys.readouterr().out
+
+    assert "unlisted-sibling" in out, (
+        f"the doctor never gave the audit the key list:\n{out}"
+    )

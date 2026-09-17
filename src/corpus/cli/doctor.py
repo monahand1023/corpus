@@ -177,6 +177,43 @@ def _check_served_vs_evaluated(config_path: str | None) -> bool:
     return True
 
 
+def _all_keys(db_path: str) -> list[str]:
+    """Every distinct source_key, or [] when the index cannot be read."""
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT source_key FROM chunks")]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def _document_total(db_path: str) -> int:
+    """Distinct documents in the index, or 0 when it cannot be read.
+
+    0 means "not known", and every caller treats it as "cannot judge" rather
+    than "nothing wrong".
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        row = conn.execute("SELECT count(DISTINCT source_key) FROM chunks").fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+
 def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool:
     if not queries_path:
         print("\ngold set          SKIPPED (no --queries)")
@@ -222,6 +259,15 @@ def _check_gold_set(queries_path: str | None, db_path: str | None) -> bool:
         queries,
         lookup=sqlite_lookup(db_path),
         documents=sqlite_documents(db_path, queries),
+        # The archive's SIZE, without which the triviality check silently
+        # does not run. It is optional on `audit_queries` so a caller with no
+        # index still gets the structural checks -- which makes forgetting it
+        # here look exactly like a gold set with nothing wrong.
+        documents_total=_document_total(db_path),
+        # The index's key list, without which the sibling check
+        # silently does not run -- and a gold set that names one of
+        # several identical documents looks clean.
+        all_keys=_all_keys(db_path),
     )
     print(f"\ngold set          {coverage.describe()}")
     has_error = report_findings(findings, stream=sys.stdout)
