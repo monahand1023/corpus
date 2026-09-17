@@ -85,6 +85,15 @@ NOISE_SAFETY_FACTOR = 2.0
 # archive's recall was identical in all five runs.
 _BINARY_METRICS = frozenset({"recall_at_k"})
 
+# Headroom, in QUERIES, past which a floor has stopped tracking the
+# measurement. Three is the smallest number that cannot be explained by
+# the intended shape (one query below) plus a noise allowance (a second),
+# so it flags a floor that has drifted rather than one set deliberately
+# loose. Found by a real gate sitting SIX queries below its measurement,
+# because the gold set grew from 8 queries to 24 underneath it and
+# nothing connects a threshold to the set it was measured from.
+MAX_SLACK_QUERIES = 3.0
+
 
 @dataclass(frozen=True)
 class MetricSpread:
@@ -156,6 +165,14 @@ class GateVerdict:
     noise_measured: bool
     # Observed run-to-run movement of this metric.
     noise: float
+    # Headroom expressed in QUERIES, for a metric quantised to 1/n, or
+    # None where that unit is meaningless (MRR and nDCG are continuous).
+    # Queries, not a ratio, because that is the unit the reader acts in:
+    # "six could regress before this fires" is a decision.
+    slack_queries: float | None = None
+    # The floor is so far below the measurement that it cannot fail. The
+    # mirror of `tight`, and just as useless a gate.
+    slack: bool = False
     # The smallest change this metric can express at all: 1/n for a metric
     # whose per-query score is 0 or 1, 0.0 for the continuous ones.
     resolution: float = 0.0
@@ -179,6 +196,12 @@ class GateVerdict:
             line += (
                 f"  TIGHT: headroom {headroom:+.3f} is under one query "
                 f"({self.resolution:.3f}), so any single regression fails"
+            )
+        if self.slack and self.slack_queries is not None:
+            line += (
+                f"  LOOSE: headroom {headroom:+.3f} is {self.slack_queries:.0f} "
+                "queries, so that many could regress before this fires. Was it "
+                "measured against a smaller gold set?"
             )
         if not self.flaky and not self.tight and not self.noise_measured:
             line += "  (noise unmeasured -- pass --repeat N)"
@@ -233,6 +256,11 @@ def gate_verdict(
         # bare `<` flagged a correctly-set gate on a real archive.
         tight = resolution > 0.0 and headroom < resolution * (1 - 1e-9)
 
+    # Only meaningful for a metric quantised to 1/n, and only for a gate
+    # that passes: a FAILING floor is not loose, it is above the measurement.
+    slack_queries = headroom / resolution if resolution > 0.0 and passed else None
+    slack = slack_queries is not None and slack_queries > MAX_SLACK_QUERIES
+
     return GateVerdict(
         metric=spread.metric,
         floor=floor,
@@ -243,8 +271,10 @@ def gate_verdict(
         noise_measured=noise_measured,
         noise=noise,
         resolution=resolution,
+        slack_queries=slack_queries,
+        slack=slack,
         required_headroom=required,
     )
 
 
-__all__ = ["METRICS", "NOISE_SAFETY_FACTOR", "GateVerdict", "MetricSpread", "gate_verdict", "spread_report"]
+__all__ = ["METRICS", "MAX_SLACK_QUERIES", "NOISE_SAFETY_FACTOR", "GateVerdict", "MetricSpread", "gate_verdict", "spread_report"]
