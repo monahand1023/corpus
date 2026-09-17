@@ -9,9 +9,39 @@ runs of the same 31-query gold set, against an archive nothing had written to:
     MRR        0.844  0.871  0.866  0.860  0.866     spread 0.027
     nDCG@5     0.806  0.822  0.818  0.813  0.818     spread 0.016
 
-Set membership is stable; ORDER is not -- which is exactly the split between
-recall@k and the rank-weighted metrics. Every number reported to three
-decimals had a third decimal that meant nothing.
+Every number reported to three decimals had a third decimal that meant
+nothing.
+
+THAT RUN SAID "recall@k IS THE STABLE ONE". IT IS NOT. A second archive, 24
+queries, three runs, nothing written to the index between them:
+
+    recall@5   0.750  0.792  0.750                   spread 0.042
+    MRR        0.580  0.585  0.580                   spread 0.005
+    nDCG@5     0.599  0.613  0.599                   spread 0.013
+
+recall@5 moved EIGHT TIMES what MRR did, and the module said it sits still.
+
+Both measurements are real and the reconciliation is the useful part. Order
+changes set membership only when a hit sits on the k BOUNDARY, and then it
+changes it completely: rank k+1 scores that query 0 where rank k scored it 1.
+Watched directly -- one query's first four results were identical across two
+runs and the fifth changed, taking the hit out of the top 5.
+
+The first archive scored 0.935, so its hits sat well clear of the boundary and
+none of them crossed. The second scores 0.750, so more of its hits are
+marginal. Boundary-adjacency is a property of the ARCHIVE, not of the metric.
+
+And recall@k is QUANTISED to 1/n: one boundary flip moves the whole metric by
+1/n -- here 1/24 = 0.042, exactly the spread observed -- while MRR and nDCG
+absorb the same flip as a small continuous change. Quantisation does not make
+a metric stable. It makes its noise arrive in one lump, which is why an
+archive can show spread 0.000 across five runs and then move a full 1/n on
+the sixth.
+
+None of this changes the arithmetic below: `required = max(2 * noise,
+resolution)` already takes whichever demands more headroom, so a binary metric
+that turns out to be noisy is handled. What it changes is which number you are
+entitled to trust on sight, and the answer is none of them.
 
 WHAT IT COSTS TO IGNORE. A gate set at a single measurement sits at an unknown
 distance from the instrument's own noise. One archive's CI floor for MRR sits

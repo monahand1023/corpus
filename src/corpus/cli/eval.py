@@ -259,12 +259,26 @@ def _print_spread(spreads: dict[str, MetricSpread], top_k: int) -> None:
     for metric in METRICS:
         label = metric.replace("_at_k", f"@{top_k}")
         print(f"  {label:<10} {spreads[metric].describe()}")
+    widest = max(METRICS, key=lambda m: spreads[m].spread)
+    widest_label = widest.replace("_at_k", f"@{top_k}")
     print(
         "\nA hosted embedder does not return a bit-identical vector for a fixed\n"
-        "query, so result ORDER moves while set membership usually does not --\n"
-        "which is why recall@k sits still and the rank-weighted metrics do not.\n"
-        "Set a gate below the worst run by at least twice this spread."
+        "query, so result ORDER moves between identical runs. Order changes set\n"
+        "MEMBERSHIP only when a hit sits on the k BOUNDARY -- and then it changes\n"
+        "it completely, because rank k+1 scores that query 0 where rank k scored\n"
+        "it 1."
     )
+    if spreads[widest].spread > 0:
+        print(
+            f"\n{widest_label} moved most here ({spreads[widest].spread:.3f}). "
+            "Do not assume that is\nthe rank-weighted metrics: recall@k is "
+            "QUANTISED to 1/n, so one boundary\nflip moves it by a whole 1/n "
+            "while MRR and nDCG absorb the same flip as a\nsmall continuous "
+            "change. Measured on a real archive: recall@5 spread 0.042\n"
+            "(= 1/24, one query) against MRR 0.005. Quantisation does not make a\n"
+            "metric stable; it makes its noise arrive in one lump."
+        )
+    print("\nSet a gate below the worst run by at least twice this spread.")
 
 
 def _print_gate(
