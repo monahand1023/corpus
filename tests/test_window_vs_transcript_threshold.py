@@ -25,7 +25,7 @@ from corpus.transcripts import quality
 from corpus.transcripts.pipeline import Settings
 
 # Scores 0.7895 -- squarely in the 0.75-0.80 band where a live archive's
-# pure decode loops sit ("Storbritannia" x N, "そのため、" x N). Above the
+# pure decode loops sit. Above the
 # strict window threshold, below the permissive transcript one, which is the
 # whole gap this file is about. A longer loop clears 0.85 on its own and
 # would not exercise it.
@@ -146,11 +146,12 @@ def test_an_all_looping_multi_window_file_also_falls_back():
     assert len(kept) == 3, "a chant across three windows was deleted"
 
 
-# Verbatim from a live archive: a 64-second video whose ENTIRE transcript is
-# this, produced from a 1.7-second window. 235 characters in 1.7 seconds is
-# 138 per second, against a ceiling of 40 -- 3.4x past the point where a human
-# throat is the explanation. It is indexed, searchable content today.
-INDEXED_DECODE_LOOP = "ta lom, e o lomi, a stl, e4,8,1" + ",0" * 100
+# The SHAPE of a real finding, rebuilt rather than copied: a minute-long
+# video whose entire transcript was a burst like this, produced from a
+# 1.7-second window. 234 characters in 1.7 seconds is 138 per second against
+# a ceiling of 40 -- 3.4x past the point where a human throat is the
+# explanation. Content of exactly this shape was indexed and searchable.
+INDEXED_DECODE_LOOP = "ta lom, e o lomi, a stl, e4,8,1" + ",0" * 101
 
 
 def test_a_reinstated_window_still_faces_the_checks_it_never_reached():

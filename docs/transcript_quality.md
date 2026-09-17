@@ -201,8 +201,7 @@ owner keeps the archive.
 That permissiveness was not the problem. **The metric was.**
 
 Transcribing 200 real recordings and reading the survivors, six were the model
-stuck in a loop — `"I am going to draw a small map."` repeated to fill the
-window. Every one passed. Across all 74 kept transcripts the metric's *highest*
+stuck in a loop — one short sentence repeated to fill the window. Every one passed. Across all 74 kept transcripts the metric's *highest*
 score was **0.250**, against a threshold of 0.9. On real data the check had
 never once fired.
 
