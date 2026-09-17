@@ -345,9 +345,21 @@ queries were asked of more than one archive. That is the measurement behind
 number was unobtainable until the logs were cleaned, because the pollution
 appeared in every archive and would have shown near-total shared demand.
 
-A check whose inputs are missing reports SKIPPED and is counted separately.
-A summary reading "4/4 clean" when three of them never ran is the same failure
-this command exists to catch.
+There are **three** outcomes, not two, and they are counted separately:
+
+| Outcome | Means | Exit code |
+|---|---|---|
+| passed / failed | the check examined something and reached a verdict | 0 / 1 |
+| `SKIPPED` | its inputs were not supplied — "you did not give me a path" | unchanged |
+| `COULD NOT RUN` | it had everything and still could not look, e.g. the database errored mid-query | non-zero |
+
+The third was added after the command was caught doing to itself exactly what
+it exists to catch. Eight checks swallowed an exception, printed
+`SKIPPED (could not read: OperationalError)` and returned True — landing in
+the numerator of `12/12 checks passed`, and reaching the exit code, so CI was
+green on a blind run. "I did not look" and "I looked and it was clean" are
+different facts; so are "you gave me nothing to look at" and "I tried and
+failed".
 
 ## Layer 0.5 — can this check fail?
 
@@ -365,6 +377,11 @@ a check that passed:
 | `1/2 servers healthy` | two of four archives were silently out of scope |
 | `no transcription artefacts` | the scan examined an empty index |
 | six clean privacy audits | all six walked reachable git objects; the leak was unreachable |
+| `12/12 checks passed` | three of them errored internally and returned True |
+| `--refilter: 0 re-filtered` | it scoped by a policy hash that cannot see a code change |
+| `exited on stdin EOF ✓` | a literal `True`, outside the try, printed even after a timeout |
+| a privacy audit reporting clean | it scanned `origin/main`; a tag still served the old commits |
+| `0.0% headroom` on a threshold | the nearest rows were junk it failed to catch, not material at risk |
 
 `corpus.verify` is the shared answer:
 

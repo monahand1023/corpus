@@ -10,6 +10,75 @@ The sample corpus does still exercise the chunker: `notes/ingest-lifecycle.md` i
 
 Relevance is **binary**: for a given query, a retrieved chunk's `source_key` either counts (it's a member of that query's `expected_keys`) or it doesn't — no graded 0–3 relevance scale. `expected_keys` is an **OR-set**: if a query has two valid answer docs, either one showing up counts as a hit, not both.
 
+### In plain words
+
+> Never met these metrics before? [`understanding-evals.md`](understanding-evals.md#51-retrieval-eval-corpus-eval--the-tractable-half)
+> builds them up from zero. This section is the short version, next to the formulas.
+
+
+The three metrics answer three different questions about the same ranked list.
+Picture asking a librarian a question and being handed a stack of five books,
+best guess on top.
+
+- **`recall@K` — "was a right answer in the stack at all?"** Yes or no, nothing
+  in between. Across a whole query set it reads as *"on 79% of questions, a
+  right answer was somewhere in the top 5."* It cannot tell first place from
+  fifth: a perfect hit and a barely-scraped-in hit both score `1.0`. That
+  bluntness is the point — this is the *did we fail outright* number.
+- **`MRR` — "how far down did I have to read?"** If the first right answer sits
+  at position *n*, the query scores `1/n`. The useful trick is reading it
+  backwards: **`1/MRR` is roughly the position a right answer typically sits
+  at.** `MRR` of `1.0` means "top of the stack, every time"; `0.5` means "second
+  on average"; `0.33`, third. It stops at the *first* right answer and ignores
+  everything after it, so it measures how quickly a reader gets to *an* answer,
+  not how many they get.
+- **`nDCG@K` — "how good was the whole ordering?"** It counts every right answer
+  in the top K, credits each one less the further down it sits (logarithmically
+  — sliding from 1st to 2nd costs far more than 8th to 9th), then divides by
+  what a *perfect* ordering of that same question would have scored. That
+  division is the "n", for normalised, and it is what makes `1.0` mean "as well
+  as this question could possibly have gone" whether the question had one right
+  answer or six. It is the only one of the three that notices when a question
+  with four right answers returns just one.
+
+Same five-result stack, one right answer, moved down a place at a time (these
+numbers are `score_query`'s actual output, not illustrations):
+
+| Where the right answer landed | `recall@5` | `MRR` | `nDCG@5` |
+|---|---|---|---|
+| 1st | 1.000 | 1.000 | 1.000 |
+| 2nd | 1.000 | 0.500 | 0.631 |
+| 5th | 1.000 | 0.200 | 0.387 |
+| 9th — off the end of the stack | 0.000 | 0.111 | 0.000 |
+
+Note row 4: `recall` and `nDCG` are cut off at K and go to zero, while `MRR`
+keeps looking down the full list and still reports `0.111`. That is deliberate
+— it is the one metric that can tell "just missed the cutoff" from "nowhere".
+
+And the case that justifies keeping `nDCG` around at all — two right answers,
+both stacks led by a correct one:
+
+| What came back (✓ = right answer) | `recall@5` | `MRR` | `nDCG@5` |
+|---|---|---|---|
+| ✓ ✗ ✓ ✗ ✗ — found both | 1.000 | 1.000 | 0.920 |
+| ✓ ✗ ✗ ✗ ✗ — found one, missed the other | 1.000 | 1.000 | 0.613 |
+
+`recall` and `MRR` are **identical** across those two rows and cannot see the
+difference. Only `nDCG` drops.
+
+**So when a run moves, read it like this:**
+
+| What moved | What it means |
+|---|---|
+| `recall` fell | Answers stopped being found at all. Something is broken, not merely ranked worse. |
+| `recall` flat, `MRR` fell | Still finding them, burying them deeper. A ranking or reranking regression. |
+| both flat, `nDCG` fell | The first answer is still landing well; the *other* right answers slid down or out. |
+| `recall` rose, `MRR` fell | More questions are now scraping in near the cutoff. Better coverage, thinner margin — and see the noise section below, because that margin is where run-to-run flapping lives. |
+
+One caveat that trips people up: because relevance is scored on `source_key`,
+"a right answer" here means "a chunk of the right *document*", not "the right
+passage". All three metrics are blind to which part of the document came back.
+
 Three metrics, computed by the pure functions in [`src/corpus/eval/metrics.py`](../src/corpus/eval/metrics.py):
 
 | Metric | Exact formula | One-liner |
@@ -222,7 +291,14 @@ Floors sit just under the measured baseline (recall@5 = 1.000, nDCG@5 = 0.898 �
 
 The CI gate above is safe from this, because `provider="hash"` is deterministic. **A gate against your own archive is not.**
 
-A hosted embedding provider does not return a bit-identical vector for a fixed query. Measured directly: four embeddings of one query differed, and the retrieved ranks 2 and 3 swapped. Result ORDER moves run to run; set membership usually does not — so `recall@k` sits still while MRR and nDCG wander. On a 31-query gold set over a real archive, MRR moved **0.027** between identical runs against an archive nothing had written to.
+A hosted embedding provider does not return a bit-identical vector for a fixed query. Measured directly: four embeddings of one query differed, and the retrieved ranks 2 and 3 swapped. Result ORDER moves run to run. On a 31-query gold set over a real archive, MRR moved **0.027** between identical runs against an archive nothing had written to.
+
+**Do not assume `recall@k` is the stable one.** It is tempting — order changes set membership only when a hit sits on the *k* boundary — and it is wrong. On a second archive `recall@5` moved **0.042** between identical runs while MRR moved 0.005: eight times more. Two things make it behave that way:
+
+- When a hit does sit on the boundary, an order change flips it *completely*: rank k+1 scores that query 0 where rank k scored it 1.
+- `recall@k` is **quantised** to 1/n, so one flip moves the whole metric by a full query. Quantisation does not make a metric stable; it makes its noise arrive in one lump — which is how an archive shows spread 0.000 across five runs and then moves 1/n on the sixth.
+
+Boundary-adjacency is a property of **the archive**, not of the metric. A lower-scoring archive has more marginal hits and therefore noisier recall, which is the opposite of the intuition.
 
 Measure it before setting a floor:
 
@@ -230,9 +306,25 @@ Measure it before setting a floor:
 corpus-eval --config your.toml --repeat 5 --check tests/eval_thresholds.json
 ```
 
+Record what the floors were measured against, in the thresholds file itself:
+
+```json
+{
+  "recall_at_k": 0.708,
+  "mrr": 0.6,
+  "measured": {"n_queries": 24, "date": "2026-09-17", "runs": 3,
+               "worst": {"recall_at_k": 0.792, "mrr": 0.618}}
+}
+```
+
+`measured` is not a metric and is never gated on. It exists because nothing else connects a floor to the gold set it came from, and the drift is always in one direction: the set grows, the measurement rises, the floor stays, and a gate quietly stops gating. `--check` compares `n_queries` against the set in front of it and says so when they differ. One archive's floors turned out never to have been measured at all, and without this there was no way to tell that from a floor that had simply gone stale.
+
 This prints each metric's min/max/spread and judges the gate on the worst run. It flags two distinct problems, separately, because conflating them makes the check cry wolf:
 
 - **FLAKY** — run-to-run noise can cross the floor. The same data gives different answers, so the result is not reproducible. Needs at least twice the observed spread as headroom.
 - **TIGHT** — the floor is closer than the smallest change the metric can express. `recall@k` over 8 queries can only take values k/8, so a floor 0.025 below a measured 0.875 has **no** effective margin: any one query regressing fails it. Often deliberate — the point is to make it a choice rather than a surprise.
+- **LOOSE** — the mirror image, and just as useless. A floor far below the measurement cannot fail. One archive's recall gate sat six queries under its measurement, not because anyone chose that but because the gold set grew from 8 queries to 24 underneath it. Reported in *queries*, because that is the unit you act in: "six could regress before this fires" is a decision; "headroom 0.250" is a number.
+
+If you supply a noise figure measured on a *different* archive, put it in **this** archive's units. `recall@k` moves in steps of 1/n, so "one query" is a different absolute number for every gold set — carrying 0.042 (one query at n=24) onto an n=41 set overstates it by nearly 2×, and the FLAKY and LOOSE rules then become mutually unsatisfiable with no clean floor existing. Pass `1/n` for the archive being judged.
 
 **Deferred to Phase 2:** the LLM-as-judge / generation-quality gate (an opt-in job gated on `ANTHROPIC_API_KEY`) doesn't exist yet — it's out of scope for retrieval eval and belongs to Phase 2's generation work, not this gate.

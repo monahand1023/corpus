@@ -147,12 +147,66 @@ Retrieval is easy to grade because a **known-good answer exists**: for a test
 question, you know which document *should* be found. So you use automated metrics
 (no AI, no API cost, fully deterministic):
 
-- **recall@k** — "for how many questions did the right document show up in the top
-  *k*?" `corpus` reports **recall@5**: is the target in the top 5?
-- **MRR (Mean Reciprocal Rank)** — rewards ranking the right answer *higher* (rank 1
-  → 1.0, rank 2 → 0.5, rank 5 → 0.2).
-- **nDCG@k** — a refined version that handles multiple relevant results and discounts
-  ones found lower in the list.
+All three grade the same thing — a ranked list of results — but they ask
+different questions about it, and the names are worse than the ideas.
+
+**The picture to hold onto.** You ask a librarian a question. They hand you a
+stack of five books, their best guess on top. Now: how well did they do? There
+are three sensible ways to ask that, and the three metrics are exactly those
+three ways.
+
+**recall@k — "was a right answer in the stack at all?"**
+
+Yes or no, per question. `corpus` reports **recall@5**: did the right document
+make the top 5? Across a set of questions it reads as *"on 79% of questions, a
+right answer was in there somewhere."* It deliberately cannot tell first place
+from fifth — both are just "yes". Think of it as the **did we fail outright**
+number. When recall drops, something is broken; when it holds, you still know
+nothing about the ordering, which is what the other two are for.
+
+**MRR — "how far down did I have to read?"**
+
+*Mean Reciprocal Rank*, which sounds worse than it is. "Reciprocal" just means
+one-divided-by: if the first right answer sits at position *n*, that question
+scores `1/n`. Top of the stack → `1/1` = 1.0. Second → `1/2` = 0.5. Fifth →
+`1/5` = 0.2. "Mean" is then just the average of that across all your questions.
+
+The genuinely useful trick is **reading it backwards: `1/MRR` is roughly the
+position a right answer typically lands at.** An MRR of 0.5 means "about second
+on average"; 0.25 means "about fourth". That is a sentence you can say out loud
+to someone, which `0.5` is not.
+
+Its blind spot: it stops at the *first* right answer and ignores the rest. It
+measures how fast a reader reaches *an* answer, not how many they get.
+
+**nDCG@k — "how good was the whole ordering?"**
+
+The intimidating one, and it is three simple ideas stacked up:
+
+1. **Count every right answer** in the top *k*, not just the first one — this is
+   where it goes beyond MRR.
+2. **Pay less for the ones further down.** A hit at rank 1 is worth full credit,
+   rank 2 rather less, rank 9 less again. The discount is logarithmic, which in
+   practice means *sliding from 1st to 2nd hurts much more than sliding from 8th
+   to 9th* — matching how people actually read a list of results. ("DCG" =
+   Discounted Cumulative Gain: gain you accumulate, discounted by depth.)
+3. **Divide by the best possible score** for that same question — what you would
+   have got if every right answer had been stacked perfectly at the top. That
+   division is the **n**, for *normalised*, and it is the part that makes the
+   number comparable: **1.0 means "as well as this question could possibly have
+   gone"**, whether it had one right answer or six. Without it, a question with
+   six right answers would always outscore one with a single answer, and
+   averaging them would be meaningless.
+
+So nDCG is the only one of the three that notices when a question with four
+right answers comes back with just one. Two result lists can tie on *both*
+recall and MRR and still differ on nDCG — [`eval.md`](eval.md#in-plain-words)
+works that exact case through with real numbers, along with a table of what it
+means when each metric moves on its own.
+
+**Which one to care about, in one line each:** recall says *did we find it*, MRR
+says *how far down*, nDCG says *how well was the whole list ordered*. You want
+all three because each is blind to something the next one sees.
 
 `corpus` ships a runnable example so you can see this with **no API key**: a
 **20-document sample corpus** scored against a **30-query set**, using the

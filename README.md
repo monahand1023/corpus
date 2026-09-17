@@ -441,6 +441,16 @@ already in the sidecar. On one archive a full re-transcribe was 61.7
 GPU-hours by its own recorded timings; the re-filter did a whole archive in
 seconds, stripping loop windows from the affected recordings.
 
+It re-judges **every** row, not only rows stamped with an older policy. The
+policy hash is derived from SETTINGS, so a fix to the filter *code* changes
+what survives while every threshold — and therefore the hash — stays
+identical. Scoping to "stale" rows made the one command whose job is applying
+a filter change blind to the most common reason to run it: after a decode-loop
+fix shipped and a 7-hour re-transcribe ran with the old code, it reported
+`0 re-filtered` while three recordings still held a window of 138 chars/s.
+Re-judging is text-only and idempotent, so examining everything costs a pass
+over strings.
+
 It is equivalent only while the DECODE is unchanged — `window_s`,
 `overlap_s`, the VAD threshold and the model decide which audio becomes which
 window, and none of that can be re-derived from text. A row from another
