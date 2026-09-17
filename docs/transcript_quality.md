@@ -229,14 +229,15 @@ rejected, at every band:
 
 | score | what it actually was |
 |---|---|
-| 0.607 | `"お誕生日おめでとう"` ×8 — Happy Birthday, sung |
-| 0.703 | `"don't hit it hard…"` ×3 — a parent talking to a child |
-| 0.803 | `"just one cup of rice…"` — real cooking instruction |
-| 0.805 | `"¿Aquello es tuyo? … Sean."` — real multilingual family speech |
-| 0.986 | `"そのため、"` ×40 — a genuine decode loop |
+| 0.607 | a birthday song, one line sung eight times — real |
+| 0.703 | an adult repeating an instruction to a child — real |
+| 0.803 | a cooking measurement, restated — real |
+| 0.805 | multilingual family speech containing a name — real |
+| 0.986 | one short phrase forty times — a genuine decode loop |
 
-The English birthday video survived at **0.5955** while the Japanese one was
-deleted at **0.607** — same family, same event, separated by 0.012.
+The same song in two languages, recorded at the same event, landed either side
+of the threshold: one survived at **0.5955** and the other was deleted at
+**0.607** — separated by 0.012.
 
 What the 74-transcript sample could not show is that **real family speech is
 genuinely repetitive**: songs, chants, a parent repeating an instruction. The
@@ -301,10 +302,10 @@ window rule would have emptied **176 recordings, 174 of them single-window**,
 including
 
 ```
-"a birthday line, then another.."        0.647
-"an exclamation, three times"
-"a greeting, then a chant"
-"an objection, three times"
+a birthday song addressed to the singer, then to someone else   0.647
+an excited exclamation, three times
+a greeting followed by a chant of kin-terms
+an objection repeated three times
 ```
 
 — the same recordings a 0.6 *whole-transcript* ceiling had deleted earlier

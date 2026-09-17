@@ -68,7 +68,9 @@ SUBTITLE_BOILERPLATE: frozenset[str] = frozenset({
     "dank je wel", "bedankt voor het kijken", "spasibo", "спасибо за просмотр",
     "subtitulos", "gracias por su atencion",
     # Spanish-language YouTube calls to action. Found glued to real family
-    # speech -- "Cierra la puerta por favor ¡Suscríbete al canal".
+    # speech -- "Cierra la puerta por favor ¡Suscríbete al canal". The sign-off is
+    # what the model appended; the clause before it was a real utterance and
+    # is replaced here with a neutral one of the same shape.
     "suscribete",
     "suscribete al canal",
     "suscribete y activa la campanita",

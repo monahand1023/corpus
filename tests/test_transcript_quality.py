@@ -392,9 +392,10 @@ def test_a_credit_line_is_cut_off_the_end_and_the_rest_stays() -> None:
 
 
 def test_real_speech_following_a_fabricated_credit_survives() -> None:
-    # This exact recording -- someone filming their family -- was DELETED by an
-    # earlier prefix rule that matched the credit and discarded the transcript.
-    # The credit is invented; everything after it is a person talking.
+    # A recording of this shape -- someone filming and narrating -- was DELETED
+    # by an earlier prefix rule that matched the credit and discarded the whole
+    # transcript. The credit is a real artefact the model emits; the speech
+    # after it stands in for the utterance that was lost.
     speech = "Субтитры создавал DimaTorzok 山が正面 見えてる?見えてる!今も撮ってる!"
     assert strip_caption_tail(speech) == speech
 

@@ -471,6 +471,9 @@ def test_a_tight_margin_shows_the_text_it_measured(tmp_path, capsys):
     loop = "こんばんは。ただいま準備しております。" * 13
     conn.execute(
         "INSERT INTO transcripts VALUES (?, ?, ?)",
+        # An opaque synthetic path. This was a REAL filename from the owner's
+        # archive -- a child's given name and the room he was filmed in -- and
+        # the assertion below lifted a word straight out of it.
         ("/media/clip-0042.MOV", loop, 60.0),
     )
     conn.execute(
@@ -484,7 +487,7 @@ def test_a_tight_margin_shows_the_text_it_measured(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert "real data" not in out, "the check still called its sample real"
-    assert "playroom" in out, "the nearest recording was not named"
+    assert "clip-0042" in out, "the nearest recording was not named"
 
 
 # --- "never fired" and "cannot fire" are different facts ----------------------
