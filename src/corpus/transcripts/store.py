@@ -404,7 +404,7 @@ def already_done(conn: sqlite3.Connection, *, policy: str) -> set[str]:
 
 
 def stale_transcripts(
-    conn: sqlite3.Connection, *, policy: str
+    conn: sqlite3.Connection, *, policy: str, include_current: bool = False
 ) -> list[tuple[str, str, float, list[str]]]:
     """Transcripts KEPT under rules other than these.
 
@@ -414,10 +414,15 @@ def stale_transcripts(
     looping transcripts that motivated `looping_share` would have survived the
     fix that was written to catch them.
     """
+    # `include_current` exists because THE POLICY HASH IS DERIVED FROM
+    # SETTINGS, NOT FROM CODE. A fix to the window filter changes what
+    # survives while every threshold -- and so the hash -- stays identical, so
+    # rows written by the old code look current and are invisible here. That
+    # is exactly the case `--refilter` exists for, and it could not see it.
     rows = conn.execute(
         "SELECT path, text, duration_s, languages FROM transcripts"
-        " WHERE policy IS NOT ? ",
-        (policy,),
+        + ("" if include_current else " WHERE policy IS NOT ?"),
+        () if include_current else (policy,),
     ).fetchall()
     out = []
     for path, text, duration_s, languages in rows:

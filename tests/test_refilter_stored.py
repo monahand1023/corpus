@@ -145,14 +145,31 @@ def test_a_transcript_with_no_stored_segments_is_skipped(tmp_path):
     assert row[0] == "old-policy"
 
 
-def test_rows_already_on_the_current_policy_are_not_touched(tmp_path):
+def test_rows_already_on_the_current_policy_ARE_re_filtered(tmp_path):
+    """This asserted the opposite, and the opposite was a bug.
+
+    Skipping rows stamped with the current policy is an optimisation that
+    assumes the stamp captures the filter's BEHAVIOUR. It does not: the stamp
+    is derived from settings, so a fix inside `filter_windows` changes what
+    survives while every threshold, and the hash, stay identical.
+
+    That is the exact case this command exists for -- apply a filter change
+    without re-decoding -- and the optimisation made it blind to it. Watched
+    on a live archive: a decode-loop fix shipped, a 7-hour re-transcribe ran
+    with the old code, and `--refilter` reported "0 re-filtered" while three
+    recordings still carried a window of 138 chars/s.
+
+    The old test carried no reasoning, unlike its neighbours here, which is
+    the tell: it was describing the implementation rather than a property
+    anyone wanted.
+    """
     conn = _sidecar(tmp_path, [("/g.mov", [(0, 30, LOOP)], 30.0)])
     conn.execute("UPDATE transcripts SET policy = 'new'")
     conn.commit()
     stats = refilter_stored(
         conn, policy="new", settings=Settings(), model_name="whisper-large-v3"
     )
-    assert stats.rejudged == 0
+    assert stats.rejudged == 1
 
 
 def test_overlapping_windows_are_rejoined_without_duplicating_the_seam(tmp_path):
@@ -273,3 +290,62 @@ def test_rejudge_still_restamps_a_row_it_can_fully_judge(tmp_path):
     assert rejudged == 1
     row = conn.execute("SELECT policy FROM transcripts WHERE path='/ok.mov'").fetchone()
     assert row[0] == "new"
+
+
+def test_a_row_already_at_the_current_policy_is_still_re_filtered(tmp_path):
+    """The policy hash is derived from SETTINGS, not from code.
+
+    `refilter_stored` scoped itself to `stale_transcripts(policy=...)` --
+    rows whose stamp differs from the current policy. That assumes the stamp
+    captures the filter's behaviour. It does not: a fix to `filter_windows`
+    changes what survives while every threshold, and therefore the hash,
+    stays identical.
+
+    Watched on a live archive. A decode-loop fix shipped, a 7-hour
+    re-transcribe ran with the OLD code, and `--refilter` -- the command that
+    exists to apply a filter change without re-decoding -- reported
+
+        0 re-filtered, 0 shortened, 0 windows dropped, 0 demoted
+
+    while three recordings still carried a window of 138 chars/s. The rows
+    were stamped current, so the one tool for the job could not see them.
+
+    Re-judging is text-only and idempotent: a row that does not change is not
+    rewritten, so examining everything costs a pass over strings.
+    """
+    loop = "ta lom, e o lomi, a stl, e4,8,1" + ",0" * 101
+    conn = _sidecar(tmp_path, [("/w/a.m4a", [(23.8, 25.5, loop)], 64.0)])
+    # Stamp it with the CURRENT policy, exactly as a fresh re-transcribe does.
+    conn.execute("UPDATE transcripts SET policy = 'current'")
+    conn.commit()
+
+    stats = refilter_stored(
+        conn, policy="current", settings=Settings(), model_name="whisper-large-v3"
+    )
+
+    assert stats.rejudged == 1, (
+        f"a row at the current policy was never examined: {stats}"
+    )
+    assert _text(conn, "/w/a.m4a") in (None, ""), (
+        "the impossible-rate window survived a re-filter"
+    )
+
+
+def test_re_filtering_twice_changes_nothing_the_second_time(tmp_path):
+    """Examining every row is only acceptable because it is idempotent."""
+    conn = _sidecar(
+        tmp_path, [("/w/b.m4a", [(0.0, 30.0, "A perfectly ordinary sentence.")], 30.0)]
+    )
+    conn.execute("UPDATE transcripts SET policy = 'current'")
+    conn.commit()
+
+    first = refilter_stored(
+        conn, policy="current", settings=Settings(), model_name="whisper-large-v3"
+    )
+    before = _text(conn, "/w/b.m4a")
+    second = refilter_stored(
+        conn, policy="current", settings=Settings(), model_name="whisper-large-v3"
+    )
+
+    assert _text(conn, "/w/b.m4a") == before
+    assert second.windows_dropped == first.windows_dropped == 0

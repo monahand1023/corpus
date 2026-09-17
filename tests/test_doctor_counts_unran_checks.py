@@ -118,8 +118,6 @@ def test_it_fails_when_the_eval_stops_deriving_k_from_the_config(
     import corpus.cli.eval as eval_cli
     from corpus.cli.doctor import _check_served_vs_evaluated
 
-    original = eval_cli.build_parser if hasattr(eval_cli, "build_parser") else None
-
     cfg = tmp_path / "corpus.toml"
     cfg.write_text(
         'db_path = "./x.db"\n[retriever]\ntop_k = 9\n[embedder]\nprovider = "hash"\ndim = 8\n'
@@ -138,4 +136,3 @@ def test_it_fails_when_the_eval_stops_deriving_k_from_the_config(
 
     assert ok is False, f"a hardcoded eval default was reported as fine:\n{out}"
     assert "5" in out and "9" in out, out
-    assert original is None or eval_cli.build_parser is not original or True

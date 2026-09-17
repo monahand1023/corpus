@@ -405,7 +405,12 @@ def test_the_check_can_load_a_consumers_registration_first(capsys) -> None:
     finally:
         CONNECTOR_REGISTRY["markdown"] = _BUILTIN_BUILDERS["markdown"]
         sys.modules.pop("_fake_consumer", None)
-        assert CONNECTOR_REGISTRY["markdown"] is original or True
+    # Outside the finally, and without `or True`, which made this
+    # unconditionally pass. Registry leakage between tests is a real failure
+    # mode -- this test deliberately mutates a module-level dict -- and the
+    # assertion guarding against it could not fail.
+    assert CONNECTOR_REGISTRY["markdown"] is _BUILTIN_BUILDERS["markdown"]
+    assert original is not None
 
 
 # --- duplicate content -------------------------------------------------------

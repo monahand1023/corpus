@@ -287,7 +287,18 @@ def refilter_stored(
     that was never applied. "I could not do this" and "I did this and nothing
     changed" must not look alike — the one rule this codebase keeps relearning.
     """
-    stale = store.stale_transcripts(conn, policy=policy)
+    # EVERY row, not only ones stamped with another policy. The stamp is
+    # computed from SETTINGS, so a behavioural fix in `filter_windows`
+    # leaves it unchanged and rows written by the old code read as
+    # current. Watched live: a decode-loop fix shipped, a 7-hour
+    # re-transcribe ran with the old code, and this reported
+    # "0 re-filtered" while three recordings still held a window of 138
+    # chars/s -- from the one command whose whole purpose is applying a
+    # filter change without re-decoding.
+    #
+    # Safe to widen because re-judging is text-only and idempotent: a row
+    # that does not change is not rewritten.
+    stale = store.stale_transcripts(conn, policy=policy, include_current=True)
     stats = RefilterStats()
     for path, text, duration_s, languages in stale:
         if paths is not None and path not in paths:
