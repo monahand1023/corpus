@@ -39,6 +39,7 @@ from corpus.survey.overlap import (
     SampledDocument,
     run_overlap_survey,
 )
+from corpus.util.priority import DEFAULT_NICE, be_nice
 from corpus.util.text_yield import estimate_tokens_from_bytes
 
 _DESCRIPTION_BY_CATEGORY = {
@@ -624,6 +625,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_dupes.set_defaults(func=_run_duplicates)
 
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
+
     return parser
 
 
@@ -671,6 +685,7 @@ def _run_duplicates(args: argparse.Namespace) -> int:
 def main_argv(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    be_nice(args.nice)
     func: Any = args.func
     result: int = func(args)
     return result

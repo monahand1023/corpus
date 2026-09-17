@@ -128,3 +128,33 @@ def test_numeric_flags_are_parsed_not_swallowed(tmp_path, flag) -> None:
     # archive when a 20-file sample was asked for.
     code = main_argv([str(root), "--db", str(tmp_path / "t.db"), "--dry-run", flag, "5"])
     assert code in (0, 2)
+
+
+def test_dry_run_reports_what_is_done_before_it_prices_the_run(tmp_path, capsys) -> None:
+    """Order is part of the warning, not presentation.
+
+    The estimate used to print ABOVE the skip count and to cover every file
+    that cleared the duration floor, already-done ones included. On a real
+    archive that read:
+
+        estimated runtime : ~14.4 h at 15x realtime
+        already done      : 5,407 of these (skipped; ...)
+
+    -- where 363 files actually needed transcribing. Someone reads the first
+    line and abandons a twenty-minute job. The skip set has to be resolved
+    first so the price can be about the work that is left.
+    """
+    root = _media(tmp_path, "talk.m4a", "silence.mov", "fresh.m4a")
+    db = tmp_path / "transcripts.db"
+    _seed(db, root, transcribed="talk.m4a", silent="silence.mov")
+
+    main_argv([str(root), "--db", str(db), "--dry-run"])
+    out = capsys.readouterr().out
+
+    done_at = out.find("already done")
+    assert done_at != -1, out
+    priced = [i for i in (out.find("estimated runtime"), out.find("duration ")) if i != -1]
+    assert priced, f"nothing priced the run at all:\n{out}"
+    assert done_at < min(priced), (
+        "the run was priced before the skip set was known:\n" + out
+    )

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from pathlib import Path
 
 from corpus.cli._common import configure_logging
@@ -87,6 +87,52 @@ def _report_withheld(stats: WalkStats) -> None:
         print(f"      ... and {n - 3} more")
 
 
+def _format_duration(hours: float) -> str:
+    """Render a duration in a unit that still carries information.
+
+    Hours are right for the number this command usually prints and wrong once
+    the work shrinks -- and it shrinks precisely when the skip set is large,
+    which is the common case on a second run. "~0.0 h" is true for 75 files
+    and reads as "nothing to do" rather than "two minutes".
+    """
+    if hours >= 1.0:
+        return f"~{hours:.1f} h"
+    minutes = hours * 60.0
+    if minutes >= 1.0:
+        return f"~{minutes:.0f} min"
+    return f"~{hours * 3600.0:.0f} s"
+
+
+def _runtime_hours(
+    files: Sequence[Path],
+    durations: Mapping[Path, float | None],
+    done: Container[str],
+    *,
+    done_is_exact: bool,
+) -> tuple[float | None, int]:
+    """Hours this run will actually decode, and how many files that is.
+
+    Returns `(None, n)` when any surviving file's duration could not be read:
+    a partial sum reads exactly like a total, and this number is the only
+    warning before hours of compute.
+
+    The already-done set is subtracted ONLY when it is exact. Without a model
+    there is no policy to scope it by, so it is an upper bound -- and
+    subtracting an upper bound understates the run, which is the direction
+    that costs someone an unexpected night. Overstating is not free either:
+    it talks people out of a job that would have taken twenty minutes.
+    """
+    if not files:
+        return (None, 0)
+    todo = (
+        [f for f in files if str(f) not in done] if done_is_exact else list(files)
+    )
+    known = [d for f in todo if (d := durations.get(f)) is not None]
+    if len(known) != len(todo):
+        return (None, len(todo))
+    return (sum(known) / 3600.0, len(todo))
+
+
 def _dry_run(
     root: Path,
     db: Path,
@@ -105,7 +151,7 @@ def _dry_run(
     policy names the model -- and a missing extra is cheapest to discover
     here, before anyone commits to the run.
     """
-    from corpus.survey.media import run_media_survey
+    from corpus.survey.media import probe_all, run_media_survey
     from corpus.transcripts.backends import BackendUnavailableError, default_backend
 
     model_name: str | None = None
@@ -125,10 +171,9 @@ def _dry_run(
     # below, and it must not contradict the line above it. Printing "204
     # skipped" and then quoting hours for all 857 is worse than printing no
     # number at all: the dry run is the one warning before hours of compute.
-    measured_hours: float | None = None
+    durations: dict[Path, float | None] = {}
     if min_seconds > 0 and files:
-        probe = _duration_probe()
-        durations = {f: probe(f) for f in files}
+        durations = probe_all(files, _duration_probe())
         files, too_short = partition_by_duration(
             files, min_seconds=min_seconds, probe=lambda f: durations.get(f)
         )
@@ -136,34 +181,16 @@ def _dry_run(
             f"  under {min_seconds:g}s          : {human_count(len(too_short))} "
             "skipped (a duration that cannot be read counts as long enough)"
         )
-        known = [d for f in files if (d := durations.get(f)) is not None]
-        # Only when EVERY surviving file has a known duration. A partial sum
-        # would understate the run, and understating it is the direction that
-        # costs someone an unexpected night of compute.
-        if known and len(known) == len(files):
-            measured_hours = sum(known) / 3600.0
     if not files:
         print("\n  Nothing to transcribe. `corpus-survey census` shows what IS here.")
         return 1
 
-    if measured_hours is not None:
-        # Exact, not sampled: the floor already required probing every file.
-        hours: float | None = measured_hours
-    else:
-        survey = run_media_survey(root, excludes=tuple(excludes), rate=rate)
-        hours = survey.estimated_total_hours
-    if hours is None:
-        print(
-            "  duration          : unknown (ffprobe unavailable, so length "
-            "could not be sampled)"
-        )
-    else:
-        print(f"  audio to process  : ~{hours:.1f} h")
-        print(
-            f"  estimated runtime : ~{hours / rate:.1f} h at {rate:g}x realtime "
-            "(local compute; no API spend)"
-        )
-
+    # The skip set is resolved BEFORE the estimate, because the estimate is
+    # about the files that will actually be decoded. Reporting it afterwards
+    # put "estimated runtime ~14.4 h" directly above "already done: 5,407 of
+    # these (skipped)" on a real archive where 363 files needed transcribing.
+    done: set[str] = set()
+    exact = False
     if db.exists():
         from corpus.transcripts import store
 
@@ -174,7 +201,7 @@ def _dry_run(
         with store.open_store(db, read_only=True) as conn:
             if model_name is not None:
                 policy = store.policy_fingerprint(settings.as_policy(model_name))
-                done = store.already_done(conn, policy=policy)
+                done = set(store.already_done(conn, policy=policy))
                 exact = True
             else:
                 # Without a model there is no policy, so the best available
@@ -192,6 +219,33 @@ def _dry_run(
                 f"  already done      :{qualifier} {human_count(already)} of these "
                 f"(skipped; includes files found to hold no speech)"
             )
+
+    # Exact when the floor already required probing every file. When it did
+    # not, or when any one duration could not be read, this DEGRADES to the
+    # sampled estimate rather than replacing it -- an exact number that
+    # sometimes prints nothing is worse than an approximate one that always
+    # prints something, and "nothing" here reads as "no work to do".
+    hours, todo = _runtime_hours(files, durations, done, done_is_exact=exact)
+    priced_remaining = hours is not None
+    if hours is None:
+        survey = run_media_survey(root, excludes=tuple(excludes), rate=rate)
+        hours = survey.estimated_total_hours
+        todo = len(files)
+    if hours is None:
+        print(
+            "  duration          : unknown (ffprobe unavailable, so length "
+            "could not be sampled)"
+        )
+    else:
+        scope = "left to do" if priced_remaining and exact and done else "to process"
+        print(
+            f"  audio {scope:11s} : {_format_duration(hours)} across "
+            f"{human_count(todo)} file(s)"
+        )
+        print(
+            f"  estimated runtime : {_format_duration(hours / rate)} at "
+            f"{rate:g}x realtime (local compute; no API spend)"
+        )
 
     print(
         "\n  Estimates come from sampling file durations, not from decoding "
@@ -344,6 +398,7 @@ def main_argv(argv: list[str]) -> int:
     if args.refilter:
         return _refilter(db, settings)
 
+    from corpus.survey.media import probe_all
     from corpus.transcripts.audio import ffmpeg_available
     from corpus.transcripts.backends import BackendUnavailableError, default_backend
 
@@ -390,8 +445,9 @@ def main_argv(argv: list[str]) -> int:
         print(f"corpus-transcribe: {root} -> {db}")
         _report_withheld(walked)
         if args.min_seconds > 0:
+            durations = probe_all(found, _duration_probe())
             found, too_short = partition_by_duration(
-                found, min_seconds=args.min_seconds, probe=_duration_probe()
+                found, min_seconds=args.min_seconds, probe=lambda f: durations.get(f)
             )
             # Pass the survivors as the explicit work list, so the floor is
             # applied BEFORE decoding -- which is the cost it exists to avoid.

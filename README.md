@@ -493,10 +493,22 @@ hours start:
 ```
 corpus-transcribe: ~/Videos
   media files found : 22
-  audio to process  : ~9.4 h
-  estimated runtime : ~0.6 h at 15x realtime (local compute; no API spend)
   already done      : 6 of these (skipped; includes files found to hold no speech)
+  audio left to do  : ~6.8 h across 16 file(s)
+  estimated runtime : ~27 min at 15x realtime (local compute; no API spend)
 ```
+
+The skip count comes FIRST on purpose, and the runtime prices only what is
+left. Printing the estimate above it meant quoting the hours for every file
+that cleared the duration floor, already-transcribed ones included — on one
+archive, `estimated runtime : ~14.4 h` sat directly above `already done:
+5,407 of these`, when 363 files actually needed transcribing. Overstating a
+run is not the safe direction it looks like: it talks you out of a job that
+would have taken twenty minutes.
+
+Durations are shown in a unit that still carries information: once the skip
+set is subtracted the remaining work is often minutes, and `~0.0 h` reads as
+"nothing to do" rather than "two minutes".
 
 Then wire the sidecar in and ingest — the command prints this block for you:
 

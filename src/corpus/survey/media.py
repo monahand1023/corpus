@@ -16,10 +16,13 @@ still reported; duration is reported as unavailable, not guessed at.
 
 from __future__ import annotations
 
+import os
 import random
 import shutil
 import statistics
 import subprocess
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +39,43 @@ MEDIA_EXTENSIONS: frozenset[str] = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 DEFAULT_SAMPLE_SIZE_PER_TYPE = 20
 DEFAULT_FFPROBE_TIMEOUT_SECONDS = 10.0
+
+#: Concurrency for probing a known file list. Each probe is a subprocess that
+#: spends nearly all its time waiting, so overlapping them is close to free;
+#: the cap exists because the spawns themselves are not, and a few hundred at
+#: once buys nothing. Bounded by the file count at the call.
+DEFAULT_PROBE_WORKERS = min(16, max(4, (os.cpu_count() or 4)))
+
+
+def probe_all(
+    paths: Sequence[Path],
+    probe: Callable[[Path], float | None],
+    workers: int | None = None,
+) -> dict[Path, float | None]:
+    """Read every path's duration, overlapping the probes.
+
+    This is for the case where the full file list is already in hand and each
+    one must be priced -- `--dry-run` with a duration floor, and the floor on
+    a real run. `run_media_survey` above SAMPLES instead, because it walks
+    trees too large to probe at all; this does not get to sample, because the
+    caller needs a per-file answer.
+
+    Serial probing here cost real time: pricing one library was still running
+    after nine minutes while a plain walk of the same tree listed 50,000
+    files in 0.035 seconds. The work was never the disk.
+
+    A `None` is kept, not dropped. Callers read "duration unknown" as "long
+    enough to keep", so losing the key would silently change a verdict.
+    """
+    ordered = list(paths)
+    if not ordered:
+        return {}
+    limit = DEFAULT_PROBE_WORKERS if workers is None else workers
+    limit = max(1, min(limit, len(ordered)))
+    if limit == 1:
+        return {path: probe(path) for path in ordered}
+    with ThreadPoolExecutor(max_workers=limit) as pool:
+        return dict(zip(ordered, pool.map(probe, ordered), strict=True))
 
 
 @dataclass

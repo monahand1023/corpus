@@ -32,6 +32,7 @@ from corpus.eval.goldset import (
 from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_query
 from corpus.eval.noise import METRICS, MetricSpread, gate_verdict, spread_report
 from corpus.retriever import Retriever
+from corpus.util.priority import DEFAULT_NICE, be_nice
 
 
 @dataclass(frozen=True)
@@ -481,12 +482,26 @@ def build_parser() -> argparse.ArgumentParser:
             "gate the exit code on the aggregate meeting each floor (single-config only)"
         ),
     )
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=DEFAULT_NICE,
+        metavar="N",
+        help=(
+            f"Lower this job's scheduling priority by N (default {DEFAULT_NICE}). "
+            "It is long background work and something interactive is probably "
+            "sharing the machine. Children inherit it. Use 0 to leave priority "
+            "alone; it cannot be raised again afterwards."
+        ),
+    )
+
     return parser
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    be_nice(args.nice)
 
     # Resolve credentials now that --config is known (env var > .env beside
     # --config > .env in cwd). See corpus.credentials for the precedence.
