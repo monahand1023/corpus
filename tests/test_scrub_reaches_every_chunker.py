@@ -19,6 +19,7 @@ embedding request, which leaves the machine entirely.
 
 from __future__ import annotations
 
+
 def _doc(text: str):
     from corpus.types import SourceDocument
 
