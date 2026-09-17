@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 
 from corpus.cli._common import configure_logging, load_config_or_exit
 from corpus.connectors.registry import DEFAULT_GLOBS
@@ -17,6 +18,7 @@ from corpus.credentials import resolve_dotenv
 from corpus.ingester import Ingester
 from corpus.util.autodetect import detect_sources
 from corpus.util.priority import DEFAULT_NICE, be_nice
+from corpus.util.scrub import count_redactions
 
 # Completed, but a guard reported something a human should look at: a yield
 # collapse, a source name reused for a different path, or files newly
@@ -37,6 +39,32 @@ def _print_tokens(*, tokens_used: int, counted: bool) -> None:
         print(f"  tokens billed:    {tokens_used:,}")
     else:
         print("  tokens billed:    not reported by this embedding provider")
+
+
+def report_redactions(found: Counter[str]) -> None:
+    """Say which credentials were scrubbed out of this run's content.
+
+    `scrub()` removing a secret protects the INDEX. It does nothing about
+    the secret, which is still live wherever the archive was built from --
+    a note, a recording, an exported mailbox -- and rotation is the only
+    remedy once text has sat in a personal archive for years.
+
+    Named per PATTERN because the action differs: an AWS key and a Slack
+    token send someone to two different consoles.
+
+    SILENT when nothing was found. Most ingests redact nothing, and a line
+    printed on every run is one nobody reads on the run that matters.
+    """
+    total = sum(found.values())
+    if not total:
+        return
+    print(f"\n  REDACTED {total:,} credential(s) from this run's content:")
+    for name, count in sorted(found.items(), key=lambda kv: -kv[1]):
+        print(f"    {count:>4}  {name}")
+    print(
+        "  They are gone from the index. They are NOT gone from wherever the\n"
+        "  archive was built from, so rotate them."
+    )
 
 
 def main() -> int:
@@ -142,6 +170,9 @@ def main() -> int:
         return 1
 
     ingester = Ingester(config)
+    # Counted across the whole run, so one report covers every source.
+    redaction_ctx = count_redactions()
+    redacted = redaction_ctx.__enter__()
     # 0 clean, 1 a source failed outright, EXIT_ANOMALY completed but
     # something needs a human. A warning nobody reads is theatre for an
     # unattended run: cron and CI see an exit code, not stderr. Kept distinct
@@ -228,6 +259,8 @@ def main() -> int:
             )
         return exit_code
     finally:
+        redaction_ctx.__exit__(None, None, None)
+        report_redactions(redacted)
         ingester.close()
 
 

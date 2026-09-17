@@ -12,7 +12,11 @@ data), add patterns here before ingesting.
 
 from __future__ import annotations
 
+import contextvars
 import re
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 _PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED:aws-access-key]"),
@@ -29,9 +33,45 @@ _PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 
+# What the current ingest has redacted, when someone is counting.
+#
+# `scrub` removing a credential protects the INDEX. It does nothing about the
+# credential, which is still live in whatever the archive was built from, and
+# rotation is the only remedy once text has sat in a personal archive for
+# years. `find_secrets` -- the function that reports rather than replaces --
+# had zero production callers, so the one fact the owner needs was the one
+# nothing produced.
+_redactions: contextvars.ContextVar[Counter[str] | None] = contextvars.ContextVar(
+    "corpus_redactions", default=None
+)
+
+
+@contextmanager
+def count_redactions() -> Iterator[Counter[str]]:
+    """Count what `scrub` redacts inside this block, per pattern.
+
+    Per PATTERN rather than as a total: an AWS key and a Slack token send
+    someone to two different consoles.
+    """
+    counter: Counter[str] = Counter()
+    token = _redactions.set(counter)
+    try:
+        yield counter
+    finally:
+        _redactions.reset(token)
+
+
 def scrub(text: str) -> str:
-    for _name, pattern, replacement in _PATTERNS:
-        text = pattern.sub(replacement, text)
+    # Counting is OBSERVATION and is never required for redaction: with no
+    # counter active this is the same function it always was.
+    counter = _redactions.get()
+    for name, pattern, replacement in _PATTERNS:
+        if counter is None:
+            text = pattern.sub(replacement, text)
+            continue
+        text, hits = pattern.subn(replacement, text)
+        if hits:
+            counter[name] += hits
     return text
 
 
