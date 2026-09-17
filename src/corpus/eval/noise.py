@@ -226,7 +226,22 @@ def gate_verdict(
     well as its noise: recall over 8 queries cannot move by less than 0.125,
     so a floor 0.025 below it has no margin at all. See `_BINARY_METRICS`.
     """
-    noise = spread.spread if spread.measured else (reference_spread or 0.0)
+    # WHICHEVER IS LARGER. This read the reference only when the local spread
+    # was UNMEASURED, so two or more runs took the local figure even when that
+    # was 0.000 and the reference was bigger -- the optimistic direction for a
+    # safety margin, and the wrong one.
+    #
+    # Three identical runs are three samples, not a proof of stability.
+    # Observed on one archive in a single day: recall@5 moved a full 1/n
+    # between two identical runs in the morning and 0.000 across three that
+    # evening, with nothing about the metric changed. Boundary-adjacency is a
+    # property of the archive's STATE, and the state had been re-ingested in
+    # between. A floor set from the quiet measurement fails the next time a
+    # hit lands on the k boundary.
+    #
+    # The local run can only widen the margin, never narrow what someone
+    # already measured.
+    noise = max(spread.spread if spread.measured else 0.0, reference_spread or 0.0)
     noise_measured = spread.measured or reference_spread is not None
     resolution = (
         1.0 / n_queries

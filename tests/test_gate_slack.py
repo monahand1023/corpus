@@ -22,6 +22,8 @@ reader has to act in: "six queries could regress" is a decision, "headroom
 
 from __future__ import annotations
 
+import pytest
+
 from corpus.eval.noise import MetricSpread, gate_verdict
 
 
@@ -78,3 +80,56 @@ def test_without_a_query_count_slack_is_unknown_not_zero():
     )
     assert v.slack_queries is None
     assert not v.slack
+
+
+def test_noise_measured_elsewhere_is_not_discarded_by_a_quiet_run():
+    """Three identical runs are three samples, not a proof of stability.
+
+    `gate_verdict` read `reference_spread` only when the local spread was
+    UNMEASURED -- a single run. With two or more runs it took the local
+    figure even when that was 0.000 and the reference was larger, which is
+    the OPTIMISTIC direction for a safety margin and the wrong one.
+
+    Watched on one archive in a single day: recall@5 moved 0.042 between two
+    identical runs in the morning, and three runs that evening moved 0.000.
+    Nothing about the metric changed -- boundary-adjacency is a property of
+    the archive's state, and the state had been re-ingested in between. A
+    floor set from the quiet measurement is a floor that fails the next time
+    a hit lands on the k boundary.
+
+    So the margin uses whichever noise figure is LARGER. The local run can
+    only ever widen it, never narrow what someone measured before.
+    """
+    from corpus.eval.noise import MetricSpread, gate_verdict
+
+    quiet = MetricSpread("recall_at_k", [0.792, 0.792, 0.792])
+    v = gate_verdict(
+        floor=0.750, spread=quiet, reference_spread=0.042, n_queries=24
+    )
+
+    assert v.noise == 0.042, (
+        "a quiet local run discarded a larger noise figure measured elsewhere"
+    )
+    assert v.flaky, (
+        "a floor one query below the measurement is not safe against noise "
+        "of a full query"
+    )
+
+
+def test_a_larger_local_spread_still_wins():
+    """The reference must not narrow a margin either -- it is a floor on the
+    estimate, not a replacement for it."""
+    from corpus.eval.noise import MetricSpread, gate_verdict
+
+    noisy = MetricSpread("mrr", [0.50, 0.58, 0.52])
+    v = gate_verdict(floor=0.40, spread=noisy, reference_spread=0.005)
+
+    assert v.noise == pytest.approx(0.08)
+
+
+def test_no_reference_behaves_exactly_as_before():
+    from corpus.eval.noise import MetricSpread, gate_verdict
+
+    v = gate_verdict(floor=0.70, spread=MetricSpread("mrr", [0.75, 0.78]))
+    assert v.noise == pytest.approx(0.03)
+    assert v.noise_measured is True
