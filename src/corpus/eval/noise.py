@@ -222,6 +222,14 @@ def gate_verdict(
     single-run eval can still be told that its headroom is smaller than noise
     someone has already measured on comparable material.
 
+    A BORROWED FIGURE MUST BE IN THIS ARCHIVE'S UNITS. recall@k moves in steps
+    of 1/n, so "one query" is a different absolute number for every gold set.
+    Carrying 0.042 (one query at n=24) onto an n=41 set overstates the noise
+    by nearly 2x -- and not harmlessly: the flaky rule then demands 3.4 queries
+    of headroom while the slack rule calls anything over 3 queries LOOSE, so
+    the two become mutually unsatisfiable and no floor is clean. Pass 1/n for
+    the archive being judged, not the absolute figure observed on another.
+
     `n_queries` lets a binary metric be judged against its own RESOLUTION as
     well as its noise: recall over 8 queries cannot move by less than 0.125,
     so a floor 0.025 below it has no margin at all. See `_BINARY_METRICS`.

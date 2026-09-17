@@ -133,3 +133,39 @@ def test_no_reference_behaves_exactly_as_before():
     v = gate_verdict(floor=0.70, spread=MetricSpread("mrr", [0.75, 0.78]))
     assert v.noise == pytest.approx(0.03)
     assert v.noise_measured is True
+
+
+def test_a_cross_archive_noise_figure_must_be_in_the_right_units():
+    """recall@k moves in units of 1/n, so an absolute figure does not travel.
+
+    A boundary flip moves recall by exactly one query. In absolute recall
+    that is 1/n, which differs per archive -- so carrying 0.042 (one query
+    at n=24) onto an n=41 gold set overstates the noise by nearly 2x.
+
+    It is not a rounding error. At n=41 the flaky rule then demands
+    2 x 0.042 = 0.084 of headroom, which is 3.4 queries, while the slack
+    rule flags anything over 3 queries as LOOSE. The two guards become
+    mutually unsatisfiable and NO floor is clean -- which is what happened
+    when a real archive's floors were being set.
+
+    Expressed per-archive as 1/n, both rules are satisfiable together.
+    """
+    from corpus.eval.noise import MetricSpread, gate_verdict
+
+    quiet = MetricSpread("recall_at_k", [0.897, 0.897, 0.897])
+
+    # Borrowed absolute figure: nothing works.
+    borrowed = [
+        gate_verdict(floor=f, spread=quiet, reference_spread=0.042, n_queries=41)
+        for f in (0.87, 0.85, 0.84, 0.82, 0.80)
+    ]
+    assert all(v.flaky or v.slack for v in borrowed), (
+        "expected the borrowed figure to leave no clean floor"
+    )
+
+    # One query at THIS archive's size: a clean floor exists.
+    per_archive = gate_verdict(
+        floor=0.84, spread=quiet, reference_spread=1 / 41, n_queries=41
+    )
+    assert per_archive.passed
+    assert not per_archive.flaky and not per_archive.slack and not per_archive.tight
