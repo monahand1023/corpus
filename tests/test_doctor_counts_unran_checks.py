@@ -136,3 +136,55 @@ def test_it_fails_when_the_eval_stops_deriving_k_from_the_config(
 
     assert ok is False, f"a hardcoded eval default was reported as fine:\n{out}"
     assert "5" in out and "9" in out, out
+
+
+# --- a margin that reads backwards -------------------------------------------
+
+
+def test_a_margin_says_when_the_nearest_row_only_survived_the_fallback(
+    tmp_path, capsys
+):
+    """"0.0% headroom" reads as "this threshold is too tight". It can mean
+    the exact opposite, and on a live archive it did.
+
+    The two rows nearest the looping ceiling were both decode loops -- a
+    repeated Japanese sentence and one word twelve times. Neither is material
+    at risk; both are junk the ceiling FAILED to catch. Acting on the obvious
+    reading, raising the ceiling, would have kept more of them.
+
+    The check already warns about this in prose and prints the offending
+    text, which asks the reader to notice. The distinguishing fact is
+    computable instead: a single-window transcript whose window scores ABOVE
+    the strict per-window ceiling was dropped and then REINSTATED by the
+    fallback, and is only in the sample at all because of it. Real material
+    near the ceiling does not have that property.
+    """
+    import sqlite3
+
+    from corpus.cli.doctor import _check_threshold_margins
+
+    db = tmp_path / "t.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE transcripts (path TEXT, text TEXT, duration_s REAL,"
+        " segments TEXT, policy TEXT DEFAULT '', model TEXT DEFAULT '')"
+    )
+    # One window, looping 0.83 -- above the 0.6 window ceiling, below the
+    # 0.85 transcript one. Exactly the shape that only survives reinstatement.
+    loop = "私たちの家に来てくれた。" * 12
+    conn.execute(
+        "INSERT INTO transcripts (path, text, duration_s, segments) VALUES (?,?,?,?)",
+        ("/w/loop.mov", loop, 30.0,
+         '[{"start": 0.0, "end": 30.0, "text": ' + repr(loop).replace("'", '"') + "}]"),
+    )
+    conn.commit()
+    conn.close()
+
+    _check_threshold_margins(str(db))
+    out = capsys.readouterr().out
+
+    assert "looping share" in out
+    assert "fallback" in out.lower(), (
+        "the margin did not say the nearest row only survived reinstatement, "
+        f"so it still reads as a threshold that is too tight:\n{out}"
+    )

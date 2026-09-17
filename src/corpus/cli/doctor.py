@@ -34,6 +34,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from corpus.eval.query_log_audit import (
     LogReport,
@@ -810,6 +811,39 @@ def _check_duplicate_content(db_path: str | None) -> bool | None:
     return True
 
 
+def _only_survived_the_fallback(sidecar_row: tuple[Any, ...]) -> bool:
+    """Did this transcript reach the index ONLY because of reinstatement?
+
+    `filter_windows` drops a window over the STRICT per-window ceiling, then
+    puts it back when dropping would empty the recording -- so a short,
+    single-window loop is handed to the permissive whole-transcript rule and
+    can sit just under it. Such a row is junk the ceiling failed to catch,
+    not material the ceiling is about to destroy.
+
+    That distinction is what makes "0.0% headroom" readable. Without it the
+    number says "too tight" when it may mean exactly the opposite, and the
+    obvious action -- raise the ceiling -- keeps more of them.
+    """
+    import json
+
+    from corpus.transcripts import quality
+    from corpus.transcripts.pipeline import Settings
+
+    _text, _duration, _path, segments = sidecar_row
+    try:
+        parsed = json.loads(segments) if segments else []
+    except (TypeError, ValueError):
+        return False
+    if len(parsed) != 1:
+        # Only the single-window case is unambiguous: with several windows a
+        # survivor may simply be one the filter kept on its own merits.
+        return False
+    window_text = (parsed[0].get("text") or "").strip()
+    if not window_text:
+        return False
+    return quality.looping_share(window_text) >= Settings().max_window_looping_share
+
+
 def _check_threshold_margins(sidecar: str | None) -> bool | None:
     """How close is each threshold to the real data it must not reject?
 
@@ -829,7 +863,7 @@ def _check_threshold_margins(sidecar: str | None) -> bool | None:
     try:
         with store.open_store(sidecar, read_only=True) as conn:
             rows = conn.execute(
-                "SELECT text, duration_s, path FROM transcripts "
+                "SELECT text, duration_s, path, segments FROM transcripts "
                 "WHERE duration_s > 1.0"
             ).fetchall()
     except Exception as exc:
@@ -856,7 +890,7 @@ def _check_threshold_margins(sidecar: str | None) -> bool | None:
         opposite of right. So the nearest row's name and text come too.
         """
         best = (0.0, "", "")
-        for text, duration, path in rows:
+        for text, duration, path, _segments in rows:
             if not eligible(text or "", duration):
                 continue
             # `score=None` means chars-per-second, which needs the duration
@@ -889,6 +923,16 @@ def _check_threshold_margins(sidecar: str | None) -> bool | None:
             name = Path(path).name
             print(f"           nearest: {name}")
             print(f"           {excerpt!r}")
+            row = next((r for r in rows if (r[2] or "") == path), None)
+            if row is not None and _only_survived_the_fallback(row):
+                print(
+                    "           That row is a single window scoring above the "
+                    "STRICT\n           per-window ceiling: it was dropped and "
+                    "reinstated by the\n           fallback. It is junk this "
+                    "threshold failed to catch, not\n           material it is "
+                    "about to destroy. Raising the ceiling keeps\n           "
+                    "MORE of it."
+                )
         tight += m.tight
     if tight:
         print("           Look at the text above before moving anything. A")

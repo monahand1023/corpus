@@ -471,18 +471,22 @@ def test_a_tight_margin_shows_the_text_it_measured(tmp_path, capsys):
     db = tmp_path / "t.db"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE transcripts (path TEXT, text TEXT, duration_s REAL)"
+        # `segments` included because a real sidecar always has it, and the
+        # margin check reads it to say WHY the nearest row is near the
+        # threshold -- whether it is real material or a reinstated loop.
+        "CREATE TABLE transcripts (path TEXT, text TEXT, duration_s REAL,"
+        " segments TEXT)"
     )
     loop = "こんばんは。ただいま準備しております。" * 13
     conn.execute(
-        "INSERT INTO transcripts VALUES (?, ?, ?)",
+        "INSERT INTO transcripts (path, text, duration_s) VALUES (?, ?, ?)",
         # An opaque synthetic path. This was a REAL filename from the owner's
         # archive -- a child's given name and the room he was filmed in -- and
         # the assertion below lifted a word straight out of it.
         ("/media/clip-0042.MOV", loop, 60.0),
     )
     conn.execute(
-        "INSERT INTO transcripts VALUES (?, ?, ?)",
+        "INSERT INTO transcripts (path, text, duration_s) VALUES (?, ?, ?)",
         ("/media/ordinary.mov", "A normal sentence about a birthday party.", 12.0),
     )
     conn.commit()
