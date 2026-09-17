@@ -90,7 +90,18 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     fi
 
     for sha in $(git rev-list "$RANGE" 2>/dev/null); do
-        git log -1 --format='%B' "$sha" | grep -qiEf "$ACTIVE"
+        # MESSAGE AND CONTENT. This read only `%B` until two real filenames
+        # from a personal work archive were pushed inside a test fixture,
+        # under the clean subject "use invented paths, not real archive
+        # filenames" -- the commit that DELETED them. Nothing had anything to
+        # match: the message was clean, and the working-tree test went green
+        # the moment the file changed. The strings are still in the public
+        # history, because a force-push makes an object unreachable, not
+        # absent.
+        #
+        # A private name in a diff discloses exactly what one in a subject
+        # line does. `-p` for the patch, `%B` for the message, one pass.
+        git log -1 --format='%B' -p "$sha" | grep -qiEf "$ACTIVE"
         RC=$?
         if [ "$RC" -ge 2 ]; then
             echo "" >&2
@@ -103,7 +114,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
             if [ "$FOUND" -eq 0 ]; then
                 echo "" >&2
                 echo "  ################################################################" >&2
-                echo "  #             PUSH BLOCKED: private name in a message          #" >&2
+                echo "  #        PUSH BLOCKED: private name in a commit or a file      #" >&2
                 echo "  ################################################################" >&2
                 echo "" >&2
             fi
@@ -122,7 +133,14 @@ done
 
 if [ "$FOUND" -ne 0 ]; then
     echo "" >&2
-    echo "  Reword those messages before pushing (git rebase -i, or amend)." >&2
+    echo "  The name is in the commit MESSAGE, in the DIFF, or both -- this" >&2
+    echo "  scans all of it. Check locally with:" >&2
+    echo "" >&2
+    echo "    git log -1 -p <sha>" >&2
+    echo "" >&2
+    echo "  A message is fixed by rewording (git rebase -i, or amend). A" >&2
+    echo "  name in a file is NOT: deleting it in a later commit leaves it" >&2
+    echo "  in the history you are pushing. The diff has to go too." >&2
     echo "" >&2
     echo "  Do NOT push and fix afterwards. A force-push makes a commit" >&2
     echo "  UNREACHABLE, not absent: GitHub keeps serving it by SHA and only" >&2

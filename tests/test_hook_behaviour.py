@@ -233,3 +233,66 @@ def test_commit_msg_refuses_when_its_matcher_cannot_match(tmp_path):
     )
     assert result.returncode == 1, "a blind matcher approved a leaking message"
     assert "cannot be trusted" in result.stderr
+
+
+# --- content, not just messages -----------------------------------------------
+
+
+def _push_attempt_with_content(
+    repo: Path, filename: str, body: str
+) -> subprocess.CompletedProcess[str]:
+    """Commit a file whose CONTENT carries the private name, message clean."""
+    (repo / filename).write_text(body)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "test: add a fixture", "--no-verify"],
+        cwd=repo,
+        check=True,
+    )
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    zeros = "0" * 40
+    return subprocess.run(
+        [str(HOOKS / "pre-push"), "origin", "https://example.invalid/x.git"],
+        cwd=repo, capture_output=True, text=True,
+        input=f"refs/heads/main {sha} refs/heads/main {zeros}\n",
+    )
+
+
+def test_pre_push_blocks_a_private_name_in_the_CONTENT_of_a_commit(tmp_path):
+    """The hook read commit MESSAGES only, and the leak was in a file.
+
+    This repo pushed two real filenames from a personal work archive inside a
+    test fixture, under the clean message "test(contextual): use invented
+    paths, not real archive filenames" -- the commit that REMOVED them. The
+    message check had nothing to match, the working-tree check went green the
+    moment they were deleted, and the strings are still in the public
+    history, because a force-push makes an object unreachable, not absent.
+
+    A private name in a diff is the same disclosure as one in a subject line.
+    """
+    repo = _repo(tmp_path, f"{SECRET}\n")
+    result = _push_attempt_with_content(
+        repo, "fixture.py", f'SOURCE = "Work Files/{SECRET}/deck.pptx"\n'
+    )
+
+    assert result.returncode == 1, (
+        "a private name in file content was pushed with no complaint"
+    )
+    assert "BLOCKED" in result.stderr
+    assert SECRET not in result.stderr, (
+        "the hook printed the very string it exists to suppress"
+    )
+
+
+def test_pre_push_allows_content_with_no_private_name(tmp_path):
+    """The other half: it must not block ordinary commits, or it gets
+    bypassed with --no-verify and protects nothing."""
+    repo = _repo(tmp_path, f"{SECRET}\n")
+    result = _push_attempt_with_content(
+        repo, "fixture.py", 'SOURCE = "Work Files/Acme Corp/deck.pptx"\n'
+    )
+
+    assert result.returncode == 0, result.stderr
