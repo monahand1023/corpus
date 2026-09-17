@@ -165,11 +165,36 @@ def _check_served_vs_evaluated(config_path: str | None) -> bool:
     from corpus.cli._common import load_config_or_exit
 
     config = load_config_or_exit(config_path)
+    served = config.retriever.top_k
     print("\nserved vs evaluated")
+
+    # COMPARE, do not restate. This printed a hardcoded `[ ok ]` describing
+    # what the defaults ARE -- a restatement of a config value with no False
+    # anywhere in the function -- so "does the eval measure the k the server
+    # serves?" answered yes unconditionally, including when it was no.
+    #
+    # What is actually verifiable: corpus-eval's `--top-k` defaults to None
+    # and falls back to `[retriever] top_k`. A refactor that gives it a
+    # literal default silently breaks that, and the eval starts reporting a
+    # number no user experiences.
+    from corpus.cli.eval import build_parser
+
+    declared = {a.dest: a.default for a in build_parser()._actions}.get("top_k", 0)
+    if declared is not None:
+        print(
+            f"  [ FAIL ] corpus-eval's --top-k defaults to {declared!r}, not to "
+            f"the config. The server serves {served}, so the eval would "
+            f"measure a k nobody is served."
+        )
+        print(
+            "           Restore the fallback: default=None, then "
+            "`args.top_k = config.retriever.top_k`."
+        )
+        return False
+
     print(
-        f"  [  ok  ] corpus-eval defaults --top-k to [retriever] top_k "
-        f"= {config.retriever.top_k}, and --no-hybrid warns when it diverges "
-        f"from hybrid = {config.retriever.hybrid}"
+        f"  [  ok  ] corpus-eval's --top-k resolves from [retriever] top_k "
+        f"= {served}, which is what the MCP server hands back"
     )
     print(
         "  NOTE: a consumer with its OWN eval CLI does not inherit that. "
@@ -477,6 +502,10 @@ def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool |
     current?" costs more than the answer is worth. A sample cannot prove a
     source is clean; it can show that it is not, which is the useful
     direction.
+
+    REPORTS, NEVER FAILS -- like the filter-activity, duplicate-content and
+    threshold-margin checks, and stated explicitly because the absence of
+    that sentence made this one look like an oversight rather than a policy.
     """
     print("\nchunker drift")
     if not config_path or not db_path:
@@ -534,6 +563,20 @@ def _check_chunker_drift(config_path: str | None, db_path: str | None) -> bool |
         return True
     for report in sorted(drifted_sources, key=lambda r: -r.percent):
         print(f"  [ warn ] {report.describe()}")
+    # REPORTED, NOT FAILED -- stated here because the exit code does not move
+    # and the reader cannot tell that from a warning. Drift is a normal,
+    # temporary state: the chunker changes, and the re-ingest that resolves it
+    # is a deliberate, expensive act someone schedules. A doctor that went red
+    # between those two moments would be red on every healthy repo mid-change,
+    # and would be switched off before it ever caught the case it exists for.
+    print(
+        "           Reported, not failed: drift is expected between a "
+        "chunker change"
+    )
+    print(
+        "           and the re-ingest that resolves it. Nothing here "
+        "moves the exit code."
+    )
     return True
 
 

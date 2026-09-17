@@ -393,7 +393,15 @@ def _print_compare(
         print(f"  {name:<16} {s.recall_at_k:>8.3f} {s.mrr:>8.3f} {s.ndcg_at_k:>8.3f}")
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface, separately constructible.
+
+    Extracted so `corpus-doctor` can INSPECT it. Its "served vs
+    evaluated" check used to print a hardcoded `[ ok ]` restating a
+    config value; with a parser in hand it can read what `--top-k`
+    actually defaults to and fail when that stops being derived from
+    the config.
+    """
     parser = argparse.ArgumentParser(description="Run eval queries and report retrieval metrics")
     parser.add_argument(
         "--queries",
@@ -460,6 +468,11 @@ def main() -> int:
             "gate the exit code on the aggregate meeting each floor (single-config only)"
         ),
     )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     # Resolve credentials now that --config is known (env var > .env beside
