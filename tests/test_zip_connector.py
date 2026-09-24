@@ -17,6 +17,7 @@ import tempfile
 import zipfile
 import zlib
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -1143,3 +1144,68 @@ def test_end_to_end_chunking_produces_traceable_source_keys(tmp_path: Path) -> N
     assert len(chunks) >= 1
     assert chunks[0].metadata.source_key == "reports.zip::q3/summary.txt"
     assert chunks[0].metadata.source_type == "archives"
+
+
+# ---------------------------------------------------------------------------
+# Music: a type with several native extensions, not one plus aliases
+# ---------------------------------------------------------------------------
+
+
+class _RecordingMusic:
+    """Stands in for the music connector: yields one document per audio file
+    it would find, with the extension it found it under."""
+
+    seen: ClassVar[list[str]] = []
+
+    def __init__(self, cfg) -> None:
+        self._root = Path(cfg.path)
+
+    def load(self):
+        from corpus.connectors.music import MUSIC_EXTENSIONS
+        from corpus.types import SourceDocument
+
+        for path in sorted(self._root.rglob("*")):
+            if path.is_file() and path.suffix in MUSIC_EXTENSIONS:
+                _RecordingMusic.seen.append(path.name)
+                yield SourceDocument(
+                    source_type="music", source_key=path.name, title=path.name,
+                    url=None, created_at=None, updated_at=None, raw={"body": path.name},
+                )
+
+
+@pytest.fixture
+def recording_music(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingMusic]:
+    _RecordingMusic.seen = []
+    monkeypatch.setitem(
+        CONNECTOR_REGISTRY, "music", lambda cfg: (_RecordingMusic(cfg), None)
+    )
+    return _RecordingMusic
+
+
+def test_every_music_format_is_handed_to_the_music_connector(
+    tmp_path: Path, recording_music: type[_RecordingMusic]
+) -> None:
+    """The extension map knew music only as `.mp3` (its one DEFAULT_GLOBS
+    entry). A `.flac` beside an `.mp3` was indexed by the music connector's
+    own sweep AND counted as an unsupported-extension skip."""
+    _make_zip(tmp_path / "album.zip", {"01.mp3": "x", "02.flac": "x", "03.M4A": "x"})
+    connector = ZipConnector(source_type="archives", path=tmp_path)
+    docs = list(connector.load())
+
+    assert len(docs) == 3
+    assert connector.skipped_files == 0
+    # Each keeps its own format's extension: renaming a FLAC to .mp3 would
+    # hand a tag reader a file whose name lies about its container.
+    assert sorted(recording_music.seen) == ["01.mp3", "02.flac", "03.m4a"]
+
+
+def test_an_archive_with_no_mp3_still_reaches_the_music_connector(
+    tmp_path: Path, recording_music: type[_RecordingMusic]
+) -> None:
+    """With only `.mp3` mapped, an all-`.m4a` archive never ran the music
+    connector at all: every track was skipped as unsupported."""
+    _make_zip(tmp_path / "album.zip", {"01.m4a": "x", "02.m4a": "x"})
+    connector = ZipConnector(source_type="archives", path=tmp_path)
+
+    assert len(list(connector.load())) == 2
+    assert connector.skipped_files == 0

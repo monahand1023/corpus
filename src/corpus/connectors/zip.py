@@ -178,6 +178,7 @@ from pathlib import Path
 
 from corpus.config import SourceConfig
 from corpus.connectors.discovery import default_excludes_suppressed, discover_files
+from corpus.connectors.music import MUSIC_EXTENSIONS
 from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
 from corpus.types import SourceDocument
 
@@ -274,6 +275,12 @@ _EXTENSION_ALIASES: dict[str, str] = {
     ".markdown": "markdown",
 }
 
+# Types whose connector reads several formats natively, not one format under
+# several spellings. Each keeps its own extension (lowercased) instead of
+# being renamed to the canonical one: a FLAC renamed to `.mp3` is a file
+# whose name lies about its container.
+_NATIVE_EXTENSIONS: dict[str, tuple[str, ...]] = {"music": MUSIC_EXTENSIONS}
+
 
 def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
     """Extension (lowercase, with leading dot) -> connector type name,
@@ -284,6 +291,9 @@ def _extension_type_map(default_globs: dict[str, str]) -> dict[str, str]:
         Path(default_globs[type_name]).suffix: type_name for type_name in _MEMBER_CONNECTOR_TYPES
     }
     mapping.update(_EXTENSION_ALIASES)
+    for type_name, extensions in _NATIVE_EXTENSIONS.items():
+        if type_name in _MEMBER_CONNECTOR_TYPES:
+            mapping.update(dict.fromkeys(extensions, type_name))
     return mapping
 
 
@@ -542,7 +552,9 @@ def _disambiguate(target: Path, *, moving: Path | None = None) -> Path:
     return candidate
 
 
-def _normalize_to_canonical_extension(paths: list[Path], canonical_ext: str) -> None:
+def _normalize_to_canonical_extension(
+    paths: list[Path], canonical_ext: str, native: tuple[str, ...] = ()
+) -> None:
     """Rename any path (in place, within the disposable extraction
     directory) whose suffix isn't exactly `canonical_ext` -- an alias
     (`.htm`), a non-canonical casing (`.PDF`, `.Markdown`), or both -- so the
@@ -558,9 +570,10 @@ def _normalize_to_canonical_extension(paths: list[Path], canonical_ext: str) -> 
     discovery unmodified.
     """
     for path in paths:
-        if path.suffix == canonical_ext:
+        target_ext = path.suffix.lower() if path.suffix.lower() in native else canonical_ext
+        if path.suffix == target_ext:
             continue
-        target = _disambiguate(path.with_suffix(canonical_ext), moving=path)
+        target = _disambiguate(path.with_suffix(target_ext), moving=path)
         path.rename(target)
 
 
@@ -920,7 +933,11 @@ class ZipConnector:
                 matches = by_type.get(type_name)
                 if not matches:
                     continue
-                _normalize_to_canonical_extension(matches, Path(DEFAULT_GLOBS[type_name]).suffix)
+                _normalize_to_canonical_extension(
+                    matches,
+                    Path(DEFAULT_GLOBS[type_name]).suffix,
+                    _NATIVE_EXTENSIONS.get(type_name, ()),
+                )
 
                 sub_cfg = SourceConfig(
                     name=self.source_type, type=type_name, path=str(extract_dir)
