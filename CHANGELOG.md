@@ -76,6 +76,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is ~260 tokens in the units `token_count` records.
 
 ### Fixed
+- **`corpus-transcribe`: a new file's deadline ignored its length.** A file with no
+  stored duration got the flat 120s base, so long recordings timed out and were
+  eventually settled as `repeatedly_timed_out`. The CLI now passes its ffprobe probe.
+- **`corpus-contextualize`: the measured 260-token floor never applied.** The config
+  kept its own default of 50; it now uses the contextualizer's constant. A per-source
+  `context_min_tokens = 0` is honoured instead of falling through to the global floor.
+- **`olm` found archives with a raw glob**, bypassing the symlink/containment checks
+  and the source's `exclude`. It now uses the shared walk.
+- **`exclude` globs (`*.mov`, `**/Backup/*`) matched nothing on a transcripts source**;
+  only substrings did. Both forms now apply.
+- **Music inside a zip was known only as `.mp3`**: `.flac` beside `.mp3` was indexed
+  and counted as skipped, and an `.m4a`-only archive never reached the music connector.
+- **`corpus-rename` left the source's ingest baseline (`source_yield`) behind.**
+- **`--path` detection gave a transcript sidecar the folder, not the database file.**
+- **The MCP server refused to start with the keyless `hash` embedder.**
+- **`recent_activity` returned chunks without their contextual blurb**, unlike search.
+- **A read-only open of a path containing `#`, `?` or `%` opened the wrong file.**
+- **Anthropic calls retried errors that cannot succeed** (bad key, malformed request)
+  through the full backoff; a 4xx other than 408/409/429 now fails at once.
 - **An encrypted PDF switched orphan pruning off permanently.** `failed_files`
   means "might succeed next time" and suppresses pruning for the whole source,
   which is right for a locked file or a transient I/O error. A
