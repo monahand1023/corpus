@@ -31,7 +31,10 @@ from corpus.transcripts.worker import TranscribeWorker, WorkerTimeout
 
 
 def _hang(conn):  # pragma: no cover - runs in a child process
-    conn.recv()
+    # Hangs on work, but honours the shutdown sentinel like the real worker;
+    # ignoring it made every close() wait out its full 10-second join.
+    if conn.recv() is None:
+        return
     time.sleep(3600)
 
 
