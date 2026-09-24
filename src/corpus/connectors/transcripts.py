@@ -44,9 +44,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from corpus.connectors.discovery import _excluded
 from corpus.transcripts import (
     DEFAULT_MAX_LOOPING_SHARE,
     looping_share,
@@ -154,6 +155,16 @@ class TranscriptConnector:
         self.skipped_files = 0
         self.excluded_files = 0
 
+    def _is_excluded(self, media_path: str) -> bool:
+        """A substring of the media path (this connector's original meaning),
+        or the fnmatch / folder-name forms every file connector accepts."""
+        if not self._exclude:
+            return False
+        if any(pattern in media_path for pattern in self._exclude):
+            return True
+        path = PurePosixPath(media_path)
+        return _excluded(path, path.name, self._exclude)
+
     def load(self) -> Iterable[SourceDocument]:
         conn = sqlite3.connect(f"file:{self._db}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
@@ -166,7 +177,7 @@ class TranscriptConnector:
             conn.close()
 
         for row in rows:
-            if any(pattern in row["path"] for pattern in self._exclude) or (
+            if self._is_excluded(row["path"]) or (
                 self._exclude_fn is not None and self._exclude_fn(row["path"])
             ):
                 self.excluded_files += 1

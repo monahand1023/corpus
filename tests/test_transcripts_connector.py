@@ -173,6 +173,20 @@ def test_exclusions_are_re_applied_at_ingest(tmp_path: Path) -> None:
     assert connector.excluded_files == 1
 
 
+@pytest.mark.parametrize("pattern", ["*.mov", "Backup", "**/Backup/*"])
+def test_exclude_globs_mean_what_they_mean_for_files(tmp_path: Path, pattern: str) -> None:
+    """Every file connector reads `exclude` as fnmatch or folder-name
+    patterns; this one read it only as substrings, so `*.mov` -- the same
+    line that works on a file source -- silently matched nothing here."""
+    db = _db(tmp_path, [
+        {"path": "/videos/Backup/old.mov", "segments": [_seg(0, 30, LONG_EN)]},
+        {"path": "/music/song.mp3", "segments": [_seg(0, 30, LONG_EN)]},
+    ])
+    connector = TranscriptConnector("transcripts", db, exclude=[pattern])
+    assert [d.source_key for d in connector.load()] == ["/music/song.mp3"]
+    assert connector.excluded_files == 1
+
+
 def test_a_row_with_empty_text_is_skipped_not_failed(tmp_path: Path) -> None:
     db = _db(tmp_path, [{"path": "/a.mov", "text": "  ", "segments": []}])
     connector = TranscriptConnector("transcripts", db)

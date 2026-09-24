@@ -44,7 +44,7 @@ import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from corpus.util.exclude import has_corroborating_manifest, is_unconditionally_excluded_dir_name
 
@@ -142,7 +142,7 @@ def source_excludes(patterns: Sequence[str]) -> Iterator[None]:
         _source_excludes.reset(token)
 
 
-def _excluded(rel: Path, name: str, patterns: Sequence[str]) -> bool:
+def _excluded(rel: PurePath, name: str, patterns: Sequence[str]) -> bool:
     """fnmatch against the root-relative path AND the basename.
 
     Both, for the same reason `walk_files` does it: `exclude = ["Backup"]`
