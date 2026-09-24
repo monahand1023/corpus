@@ -1122,3 +1122,27 @@ def test_busy_timeout_is_five_seconds_on_every_connection(tmp_path: Path) -> Non
     ro = ChunkStore(tmp_path / "busy.db", embedding_dim=DIM, read_only=True)
     assert ro._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     ro.close()
+
+
+def test_every_read_path_returns_the_chunks_context(tmp_path: Path) -> None:
+    """Seven read paths each built StoredChunk by hand, and `find_recent`'s
+    copy selected `context` but never set it -- so the same chunk came back
+    with its blurb from search and without it from recent activity."""
+    store = ChunkStore(tmp_path / "ctx.db", embedding_dim=DIM)
+    chunk = make_chunk("doc", 0, ChunkKind.BODY, "approved, option B")
+    store.upsert_batch([(chunk, fake_embedding(1))])
+    store._conn.execute("UPDATE chunks SET updated_at = '2026-01-01'")  # so it is "recent"
+    blurb = "From the Zanzibar rollout thread."
+    store.set_context(chunk.id, blurb, fake_embedding(2))
+
+    reads = {
+        "get_by_id": [store.get_by_id(chunk.id)],
+        "get_by_source_key": store.get_by_source_key("notes", "doc"),
+        "find_recent": store.find_recent("1970-01-01"),
+        "fts_search": store.fts_search("Zanzibar", top_k=5),
+        "vector_search": store.vector_search(fake_embedding(2), top_k=5),
+    }
+    for name, got in reads.items():
+        assert got and got[0] is not None, f"{name} returned nothing"
+        assert got[0].context == blurb, name
+    store.close()

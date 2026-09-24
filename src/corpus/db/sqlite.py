@@ -213,6 +213,23 @@ class StoredChunk:
     context: str | None = None
 
 
+def _row_to_chunk(row: sqlite3.Row, distance: float | None = None) -> StoredChunk:
+    """A `chunks` row (id, source_type, source_key, content, metadata, title,
+    url, context) as a StoredChunk. Every read path goes through here, so
+    none can drop a column the others return."""
+    return StoredChunk(
+        id=row["id"],
+        source_type=row["source_type"],
+        source_key=row["source_key"],
+        content=row["content"],
+        metadata=json.loads(row["metadata"]),
+        title=row["title"],
+        url=row["url"],
+        context=row["context"],
+        distance=distance,
+    )
+
+
 @dataclass(frozen=True)
 class OrphanSweep:
     """What an orphan sweep deleted, and which documents stopped being found.
@@ -1063,17 +1080,7 @@ class ChunkStore:
             logger.warning("FTS pre-filtered query failed for %r: %s", match_expr, e)
             return []
         return [
-            StoredChunk(
-                id=row["id"],
-                source_type=row["source_type"],
-                source_key=row["source_key"],
-                content=row["content"],
-                metadata=json.loads(row["metadata"]),
-                title=row["title"],
-                url=row["url"],
-                context=row["context"],
-                distance=row["rank"],
-            )
+            _row_to_chunk(row, distance=row["rank"])
             for row in rows
         ]
 
@@ -1106,17 +1113,7 @@ class ChunkStore:
             if filter_set and row["source_type"] not in filter_set:
                 continue
             results.append(
-                StoredChunk(
-                    id=row["id"],
-                    source_type=row["source_type"],
-                    source_key=row["source_key"],
-                    content=row["content"],
-                    metadata=json.loads(row["metadata"]),
-                    title=row["title"],
-                    url=row["url"],
-                    context=row["context"],
-                    distance=row["rank"],
-                )
+                _row_to_chunk(row, distance=row["rank"])
             )
             if len(results) >= top_k:
                 break
@@ -1170,17 +1167,7 @@ class ChunkStore:
             if filter_set and row["source_type"] not in filter_set:
                 continue
             results.append(
-                StoredChunk(
-                    id=row["id"],
-                    source_type=row["source_type"],
-                    source_key=row["source_key"],
-                    content=row["content"],
-                    metadata=json.loads(row["metadata"]),
-                    title=row["title"],
-                    url=row["url"],
-                    context=row["context"],
-                    distance=row["distance"],
-                )
+                _row_to_chunk(row, distance=row["distance"])
             )
             if len(results) >= top_k:
                 break
@@ -1194,16 +1181,7 @@ class ChunkStore:
         ).fetchone()
         if not row:
             return None
-        return StoredChunk(
-            id=row["id"],
-            source_type=row["source_type"],
-            source_key=row["source_key"],
-            content=row["content"],
-            metadata=json.loads(row["metadata"]),
-            title=row["title"],
-            url=row["url"],
-            context=row["context"],
-        )
+        return _row_to_chunk(row)
 
     def set_context(
         self, chunk_id: str, context: str, embedding: Sequence[float]
@@ -1296,16 +1274,7 @@ class ChunkStore:
             params.append(limit)
         rows = self._conn.execute(sql, tuple(params)).fetchall()
         return [
-            StoredChunk(
-                id=r["id"],
-                source_type=r["source_type"],
-                source_key=r["source_key"],
-                content=r["content"],
-                metadata=json.loads(r["metadata"]),
-                title=r["title"],
-                url=r["url"],
-                context=r["context"],
-            )
+            _row_to_chunk(r)
             for r in rows
         ]
 
@@ -1408,16 +1377,7 @@ class ChunkStore:
             (source_type, source_key),
         ).fetchall()
         return [
-            StoredChunk(
-                id=row["id"],
-                source_type=row["source_type"],
-                source_key=row["source_key"],
-                content=row["content"],
-                metadata=json.loads(row["metadata"]),
-                title=row["title"],
-                url=row["url"],
-                context=row["context"],
-            )
+            _row_to_chunk(row)
             for row in rows
         ]
 
@@ -1444,15 +1404,7 @@ class ChunkStore:
         params.append(limit)
         rows = self._conn.execute(sql, tuple(params)).fetchall()
         return [
-            StoredChunk(
-                id=r["id"],
-                source_type=r["source_type"],
-                source_key=r["source_key"],
-                content=r["content"],
-                metadata=json.loads(r["metadata"]),
-                title=r["title"],
-                url=r["url"],
-            )
+            _row_to_chunk(r)
             for r in rows
         ]
 
