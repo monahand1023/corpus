@@ -250,3 +250,76 @@ def test_the_cli_supplies_the_SUBPROCESS_runner_not_the_thread_one(monkeypatch, 
         "the CLI did not supply a subprocess runner, so the deadline cannot "
         "be enforced against a real backend"
     )
+
+
+# --- a file seen for the first time ---------------------------------------------
+
+
+def _deadlines_for(tmp_path, **kwargs) -> dict[str, float]:
+    """Run the loop over one never-seen file and report the deadline it got."""
+    from corpus.transcripts.pipeline import Settings
+    from corpus.transcripts.run import transcribe_directory
+
+    (tmp_path / "long.mov").write_bytes(b"x")
+    given: dict[str, float] = {}
+
+    def run_one(path, timeout):
+        given[Path(path).name] = timeout
+        return ("error", "stop here")
+
+    class _Backend:
+        model_name = "test-model"
+
+    transcribe_directory(
+        tmp_path, tmp_path / "t.db", _Backend(), settings=Settings(),
+        run_one=run_one, **kwargs,
+    )
+    return given
+
+
+def test_a_new_file_gets_a_deadline_scaled_to_its_length(tmp_path):
+    """The deadline came only from durations already in the sidecar, and a
+    file seen for the first time has none -- so every new recording got the
+    flat 120s base. A two-hour recording cannot finish in that; it timed out,
+    was retried with the same 120s, and after three passes was settled as
+    `repeatedly_timed_out`. The longest recordings were written off first.
+    """
+    from corpus.transcripts.segment import file_timeout
+
+    given = _deadlines_for(tmp_path, duration_of=lambda _path: 7200.0)
+    assert given["long.mov"] == file_timeout(7200.0)
+
+
+def test_an_unreadable_duration_falls_back_to_the_base_deadline(tmp_path):
+    from corpus.transcripts.segment import file_timeout
+
+    given = _deadlines_for(tmp_path, duration_of=lambda _path: None)
+    assert given["long.mov"] == file_timeout(0.0)
+
+
+def test_the_cli_supplies_a_duration_lookup(monkeypatch, tmp_path):
+    """Without one, the run loop has nothing to scale a new file's deadline
+    by -- the defect above, reintroduced by a caller that forgets it."""
+    import corpus.cli.transcribe as mod
+
+    captured = {}
+
+    def fake_directory(*args, **kwargs):
+        captured.update(kwargs)
+        from corpus.transcripts.run import RunStats
+
+        return RunStats()
+
+    (tmp_path / "a.mov").write_bytes(b"x")
+    monkeypatch.setattr(mod, "transcribe_directory", fake_directory)
+
+    class _Backend:
+        model_name = "m"
+
+    monkeypatch.setattr(
+        "corpus.transcripts.backends.default_backend", lambda: _Backend()
+    )
+    monkeypatch.setattr(mod, "find_media", lambda *a, **k: [tmp_path / "a.mov"])
+    mod.main_argv([str(tmp_path), "--db", str(tmp_path / "t.db")])
+
+    assert callable(captured.get("duration_of"))

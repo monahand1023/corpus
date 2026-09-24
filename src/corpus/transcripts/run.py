@@ -546,6 +546,7 @@ def transcribe_directory(
     only: Sequence[Path] | None = None,
     file_timeout_s: float | None = None,
     run_one: Callable[[Path, float], tuple[str, Any]] | None = None,
+    duration_of: Callable[[Path], float | None] | None = None,
 ) -> RunStats:
     """Transcribe everything under `root` into the sidecar at `db_path`.
 
@@ -556,6 +557,10 @@ def transcribe_directory(
     `only` replaces the directory walk with an explicit file list -- see
     `stale_paths`, which reads the work list from the store so an archive's
     own exclusion rules are not rediscovered and overturned.
+
+    `duration_of` reads a file's length when the sidecar has none, which is
+    every file seen for the first time. Without it such a file gets the flat
+    base deadline, too short for any long recording.
     """
     settings = settings or Settings()
     model_name = getattr(backend, "model_name", "unknown")
@@ -599,7 +604,10 @@ def transcribe_directory(
                     " UNION SELECT duration_s FROM no_text WHERE path = ?",
                     (str(path), str(path)),
                 ).fetchone()
-                deadline = file_timeout(float(recorded[0] or 0.0) if recorded else 0.0)
+                duration = recorded[0] if recorded else None
+                if not duration and duration_of is not None:
+                    duration = duration_of(path)
+                deadline = file_timeout(float(duration or 0.0))
             try:
                 outcome = _call_bounded(
                     transcribe, path, backend, settings, deadline, run_one

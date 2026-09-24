@@ -490,6 +490,7 @@ def main_argv(argv: list[str]) -> int:
             settings=settings, excludes=args.excludes, limit=args.limit,
             on_progress=progress, only=only,
             run_one=lambda path, timeout: worker.run(path, timeout, settings),
+            duration_of=_duration_probe(),
         )
     finally:
         worker.close()
