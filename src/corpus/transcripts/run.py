@@ -34,7 +34,7 @@ from typing import Any
 
 from corpus.survey.media import MEDIA_EXTENSIONS
 from corpus.survey.walk import WalkStats, walk_files
-from corpus.transcripts import quality, store
+from corpus.transcripts import store
 from corpus.transcripts.audio import NoAudioStreamError
 from corpus.transcripts.pipeline import (
     Outcome,
@@ -177,16 +177,7 @@ def rejudge_stored(
             if windows and max(d for _t, d, _c in windows) > settings.window_s + 1e-6:
                 continue
         rejudged += 1
-        verdict = quality.judge_transcript(
-            text,
-            duration_s=duration_s,
-            languages=languages,
-            expected_languages=settings.expected_languages or None,
-            max_repeat_share=settings.max_repeat_share,
-            max_looping_share=settings.max_looping_share,
-            max_chars_per_second=settings.max_chars_per_second,
-            unspoken_max_chars=settings.unspoken_max_chars,
-        )
+        verdict = settings.judge(text, duration_s=duration_s, languages=languages)
         if verdict.keep:
             store.restamp_transcript(conn, path, policy=policy)
         else:
@@ -343,16 +334,7 @@ def refilter_stored(
         kept, dropped = filter_windows(windows, settings)
         stats.windows_dropped += len(dropped)
         new_text = join_windows(kept)
-        verdict = quality.judge_transcript(
-            new_text,
-            duration_s=duration_s,
-            languages=languages,
-            expected_languages=settings.expected_languages or None,
-            max_repeat_share=settings.max_repeat_share,
-            max_looping_share=settings.max_looping_share,
-            max_chars_per_second=settings.max_chars_per_second,
-            unspoken_max_chars=settings.unspoken_max_chars,
-        )
+        verdict = settings.judge(new_text, duration_s=duration_s, languages=languages)
         if not new_text or not verdict.keep:
             store.demote_transcript(
                 conn, path, duration_s=duration_s, policy=policy,

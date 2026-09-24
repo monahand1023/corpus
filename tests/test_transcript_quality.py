@@ -877,3 +877,15 @@ def test_short_real_repeats_are_still_protected() -> None:
     # word is not a decode loop.
     for text in ("Papa! Papa! Papa! Papa!", "Mama, mama, mama!", "No no no no!"):
         assert looping_share(text) == 0.0, text
+
+
+def test_settings_judge_applies_the_runs_own_thresholds() -> None:
+    """The run loop, the rejudge pass and the refilter pass each spelled out
+    the same eight-argument call; `Settings.judge` is now the one place the
+    run's thresholds reach the verdict."""
+    from corpus.transcripts.pipeline import Settings
+
+    text = "a perfectly ordinary sentence spoken at a normal pace " * 3
+    assert Settings().judge(text, duration_s=30.0, languages=["en"]).keep
+    strict = Settings(max_chars_per_second=1.0)
+    assert not strict.judge(text, duration_s=30.0, languages=["en"]).keep

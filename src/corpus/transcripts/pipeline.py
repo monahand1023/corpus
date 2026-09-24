@@ -73,6 +73,21 @@ class Settings:
     max_chars_per_second: float = quality.DEFAULT_MAX_CHARS_PER_SECOND
     unspoken_max_chars: int = quality.DEFAULT_UNSPOKEN_MAX_CHARS
 
+    def judge(
+        self, text: str, *, duration_s: float, languages: list[str] | None
+    ) -> quality.TranscriptVerdict:
+        """`quality.judge_transcript` under this run's thresholds."""
+        return quality.judge_transcript(
+            text,
+            duration_s=duration_s,
+            languages=languages,
+            expected_languages=self.expected_languages or None,
+            max_repeat_share=self.max_repeat_share,
+            max_looping_share=self.max_looping_share,
+            max_chars_per_second=self.max_chars_per_second,
+            unspoken_max_chars=self.unspoken_max_chars,
+        )
+
     def as_policy(self, model_name: str) -> dict[str, Any]:
         return {
             "model": model_name,
@@ -345,16 +360,7 @@ def transcribe_file(
     text = join_windows(kept)
     outcome.elapsed_s = time.monotonic() - started
 
-    verdict = quality.judge_transcript(
-        text,
-        duration_s=duration,
-        languages=languages,
-        expected_languages=settings.expected_languages or None,
-        max_repeat_share=settings.max_repeat_share,
-        max_looping_share=settings.max_looping_share,
-        max_chars_per_second=settings.max_chars_per_second,
-        unspoken_max_chars=settings.unspoken_max_chars,
-    )
+    verdict = settings.judge(text, duration_s=duration, languages=languages)
     if not text or not verdict.keep:
         outcome.empty_reason = verdict.reason or "no_text"
         outcome.rejected_text = text
