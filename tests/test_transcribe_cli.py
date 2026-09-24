@@ -18,6 +18,21 @@ from corpus.transcripts.pipeline import Settings
 from corpus.transcripts.store import Transcript, Window
 
 
+@pytest.fixture(autouse=True)
+def _fake_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dry run scopes "already done" to a policy that names the backend's
+    model, and the rows below are seeded under `fake-v1`. Without pinning it,
+    these tests passed only where the real backend failed to load, and failed
+    on an Apple-Silicon machine with every extra installed."""
+
+    class _Backend:
+        model_name = "fake-v1"
+
+    monkeypatch.setattr(
+        "corpus.transcripts.backends.default_backend", lambda: _Backend()
+    )
+
+
 def _media(tmp_path: Path, *names: str) -> Path:
     root = tmp_path / "media"
     root.mkdir(exist_ok=True)
