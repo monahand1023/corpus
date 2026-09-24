@@ -50,6 +50,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
+from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
 
 logger = logging.getLogger(__name__)
@@ -277,7 +278,9 @@ class OlmConnector:
         self.failed_files = 0
         self.skipped_files = 0
 
-        archives = sorted(self._root.glob(self._glob))
+        # The shared walk, not a raw glob: symlink and containment checks, the
+        # noise-directory excludes, and this source's own `exclude` list.
+        archives = list(discover_files(self._root, self._glob))
         if not archives:
             logger.warning("%s: no .olm archives under %s", self.source_type, self._root)
 
@@ -374,10 +377,12 @@ def _message_digest(document: SourceDocument) -> str:
 
 def build(cfg: Any) -> OlmConnector:
     """Factory used by `connectors/registry.py`."""
+    from corpus.connectors.registry import DEFAULT_GLOBS
+
     return OlmConnector(
         source_type=cfg.name,
         path=cfg.path,
-        glob=cfg.glob or "**/*.olm",
+        glob=cfg.glob or DEFAULT_GLOBS["olm"],
         folders=cfg.olm_folders,
         skip_mirror_tree=cfg.olm_skip_mirror_tree,
         trim_quotes=cfg.olm_trim_quotes,

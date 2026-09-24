@@ -360,3 +360,37 @@ def test_counters_reset_between_runs(tmp_path: Path) -> None:
     list(connector.load())
 
     assert connector.skipped_files == first
+
+
+# --- file discovery is the shared, guarded walk ----------------------------------
+
+
+def _one_message_archive(path: Path, subject: str = "Status update") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(f"{MESSAGE_ROOT}/Inbox/message_1.xml", _message(subject=subject))
+
+
+def test_the_sources_exclude_list_applies_to_archives(tmp_path: Path) -> None:
+    """olm walked with a raw glob, so the source's own `exclude` -- honoured
+    by every other file connector -- silently matched nothing here."""
+    from corpus.connectors.discovery import source_excludes
+
+    _one_message_archive(tmp_path / "keep" / "a.olm", subject="kept")
+    _one_message_archive(tmp_path / "old" / "b.olm", subject="excluded")
+
+    with source_excludes(["old"]):
+        docs = list(OlmConnector(source_type="mail", path=tmp_path).load())
+
+    assert [d.title for d in docs] == ["kept"]
+
+
+def test_an_archive_symlinked_from_outside_the_root_is_not_read(tmp_path: Path) -> None:
+    """The containment check every other connector gets from `discover_files`."""
+    outside = tmp_path / "outside" / "private.olm"
+    _one_message_archive(outside)
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "linked.olm").symlink_to(outside)
+
+    assert list(OlmConnector(source_type="mail", path=root).load()) == []
