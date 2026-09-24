@@ -148,11 +148,11 @@ def _decode_aup3(path: Path, *, timeout_s: float) -> np.ndarray:
     """
     import numpy as np
 
-    from corpus.connectors.aup3 import _connect_ro
     from corpus.connectors.aup3_layout import LayoutError, mix_to_mono, read_layout
+    from corpus.util.sqlite_ro import connect_ro
 
     try:
-        conn = _connect_ro(path)
+        conn = connect_ro(path)
         try:
             layout = read_layout(conn)
             if layout is None:

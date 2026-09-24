@@ -102,13 +102,13 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import urllib.parse
 import wave
 from collections.abc import Iterable
 from pathlib import Path
 
 from corpus.connectors.aup3_layout import LayoutError, ProjectLayout, mix_to_mono, read_layout
 from corpus.types import SourceDocument
+from corpus.util.sqlite_ro import connect_ro
 
 logger = logging.getLogger(__name__)
 
@@ -175,13 +175,6 @@ class FFmpegNotFoundError(Aup3Error):
     caller asked for a specific format and gets a specific, actionable
     reason it can't have it."""
 
-
-def _connect_ro(path: Path) -> sqlite3.Connection:
-    """Open `path` strictly read-only via a `mode=ro` SQLite URI — see the
-    module docstring's non-negotiable. Matches the identical idiom already
-    used by `ChunkStore(read_only=True)` and `corpus.survey.overlap`."""
-    # Quoted: a `?` or `#` in a real filename would otherwise end the path.
-    return sqlite3.connect(f"file:{urllib.parse.quote(path.as_posix())}?mode=ro", uri=True)
 
 
 def _has_sampleblocks_table(conn: sqlite3.Connection) -> bool:
@@ -401,7 +394,7 @@ class AupThreeConnector:
     def _load_one(self, path: Path) -> SourceDocument | None:
         conn: sqlite3.Connection | None = None
         try:
-            conn = _connect_ro(path)
+            conn = connect_ro(path)
             return self._build_document(conn, path)
         except sqlite3.DatabaseError as e:
             logger.warning(
@@ -647,7 +640,7 @@ def extract_audio(
 
     target = _resolve_output_path(source, output_path, audio_format)
 
-    conn = _connect_ro(source)
+    conn = connect_ro(source)
     try:
         if not _has_sampleblocks_table(conn):
             raise Aup3Error(f"{source}: no `sampleblocks` table — not an Audacity 3 project")

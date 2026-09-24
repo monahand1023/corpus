@@ -197,11 +197,11 @@ def _probe_duration_seconds(
 
 
 def _aup3_duration_seconds(path: Path) -> float | None:
-    from corpus.connectors.aup3 import _connect_ro
     from corpus.connectors.aup3_layout import LayoutError, read_layout
+    from corpus.util.sqlite_ro import connect_ro
 
     try:
-        conn = _connect_ro(path)
+        conn = connect_ro(path)
     except sqlite3.Error:
         return None
     try:

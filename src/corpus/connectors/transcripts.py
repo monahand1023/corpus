@@ -57,6 +57,7 @@ from corpus.transcripts import (
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
 from corpus.util.hash import chunk_id, sha256
 from corpus.util.scrub import scrub
+from corpus.util.sqlite_ro import connect_ro
 from corpus.util.tokens import estimate_tokens
 
 # A window that survived filtering but says almost nothing is not worth a chunk
@@ -166,7 +167,7 @@ class TranscriptConnector:
         return _excluded(path, path.name, self._exclude)
 
     def load(self) -> Iterable[SourceDocument]:
-        conn = sqlite3.connect(f"file:{self._db}?mode=ro", uri=True)
+        conn = connect_ro(self._db)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(

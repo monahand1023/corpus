@@ -57,6 +57,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from corpus.util.sqlite_ro import connect_ro
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS transcripts (
   path TEXT PRIMARY KEY,
@@ -181,7 +183,7 @@ def _stable(value: Any) -> Any:
 def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     """Open the sidecar, creating and migrating it unless read-only."""
     if read_only:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = connect_ro(path)
         conn.row_factory = sqlite3.Row
         return conn
     Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
