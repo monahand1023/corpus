@@ -28,3 +28,6 @@ corpus.toml
 # Local-only AI-workflow process docs (design specs, implementation plans).
 # Kept out of the public repo and the published sdist by design.
 docs/superpowers/
+
+# Local-only Claude notes (may name private instances). Never commit.
+CLAUDE.local.md

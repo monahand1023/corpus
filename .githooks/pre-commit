@@ -50,7 +50,9 @@
 # config, pointing at someone's real data, ended up in the one place this
 # is a public repo. .db files and .env, by contrast, are never correct to
 # commit from ANY path, so they are matched with no such anchor.
-pattern='\.db(-shm|-wal)?$|^corpus\.toml$|(^|/)\.env$'
+# CLAUDE.local.md holds local-only agent notes that may name private
+# instances; it is gitignored, and this stops a `git add -f` of it.
+pattern='\.db(-shm|-wal)?$|^corpus\.toml$|(^|/)\.env$|(^|/)CLAUDE\.local\.md$'
 
 # Positive control: prove the matcher fires on something it MUST match before
 # believing a clean result from it. `grep` exits 0 on a match, 1 on no match

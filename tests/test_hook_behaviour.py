@@ -188,6 +188,15 @@ def test_pre_commit_blocks_a_root_config(tmp_path):
     assert _staged_commit(tmp_path, "corpus.toml").returncode == 1
 
 
+def test_pre_commit_blocks_local_agent_notes(tmp_path):
+    """CLAUDE.local.md may name private instances; only CLAUDE.md is public."""
+    assert _staged_commit(tmp_path, "CLAUDE.local.md").returncode == 1
+
+
+def test_pre_commit_allows_the_public_agent_notes(tmp_path):
+    assert _staged_commit(tmp_path, "CLAUDE.md").returncode == 0
+
+
 # --- the positive controls themselves -----------------------------------------
 #
 # A canary that is never exercised is the very thing it guards against: a
