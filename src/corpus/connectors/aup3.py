@@ -394,7 +394,7 @@ class AupThreeConnector:
     def _load_one(self, path: Path) -> SourceDocument | None:
         conn: sqlite3.Connection | None = None
         try:
-            conn = connect_ro(path)
+            conn = connect_ro(path, immutable=True)
             return self._build_document(conn, path)
         except sqlite3.DatabaseError as e:
             logger.warning(
@@ -640,7 +640,7 @@ def extract_audio(
 
     target = _resolve_output_path(source, output_path, audio_format)
 
-    conn = connect_ro(source)
+    conn = connect_ro(source, immutable=True)
     try:
         if not _has_sampleblocks_table(conn):
             raise Aup3Error(f"{source}: no `sampleblocks` table — not an Audacity 3 project")

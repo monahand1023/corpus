@@ -100,3 +100,21 @@ def test_a_filename_with_url_characters_opens(tmp_path: Path) -> None:
 
     path = _stereo(tmp_path / "take #2?.aup3", seconds=1.5)
     assert _probe_duration_seconds(path, "/nonexistent/ffprobe", 5.0) == pytest.approx(1.5)
+
+
+def test_reading_a_project_leaves_nothing_beside_it(tmp_path: Path) -> None:
+    """Real projects are WAL-mode databases; every read-only open used to
+    leave `-shm`/`-wal` files next to the user's recordings."""
+    from corpus.connectors.aup3 import AupThreeConnector
+    from corpus.survey.media import _probe_duration_seconds
+
+    path = _stereo(tmp_path / "session.aup3")
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+    for side in ("-shm", "-wal"):
+        (tmp_path / f"session.aup3{side}").unlink(missing_ok=True)
+
+    list(AupThreeConnector(source_type="recordings", path=tmp_path).load())
+    _probe_duration_seconds(path, "/nonexistent/ffprobe", 5.0)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session.aup3"]

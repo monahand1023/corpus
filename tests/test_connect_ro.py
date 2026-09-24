@@ -46,3 +46,25 @@ def test_never_creates_a_missing_file(tmp_path: Path) -> None:
     with pytest.raises(sqlite3.OperationalError):
         connect_ro(tmp_path / "absent.db")
     assert not (tmp_path / "absent.db").exists()
+
+
+def test_an_immutable_open_of_a_wal_database_leaves_no_side_files(tmp_path: Path) -> None:
+    """Audacity projects are WAL-mode databases, and a plain read-only open of
+    one creates `-shm`/`-wal` files beside it -- litter in a folder of
+    personal recordings. `immutable=True` reads without creating them."""
+    path = tmp_path / "project.aup3"
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (x)")
+    conn.execute("INSERT INTO t VALUES (1)")
+    conn.commit()
+    conn.close()
+    for side in ("-shm", "-wal"):
+        (tmp_path / f"project.aup3{side}").unlink(missing_ok=True)
+
+    ro = connect_ro(path, immutable=True)
+    try:
+        assert ro.execute("SELECT x FROM t").fetchone() == (1,)
+    finally:
+        ro.close()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["project.aup3"]

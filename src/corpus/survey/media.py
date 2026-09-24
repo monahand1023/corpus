@@ -201,7 +201,7 @@ def _aup3_duration_seconds(path: Path) -> float | None:
     from corpus.util.sqlite_ro import connect_ro
 
     try:
-        conn = connect_ro(path)
+        conn = connect_ro(path, immutable=True)
     except sqlite3.Error:
         return None
     try:

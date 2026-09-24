@@ -146,7 +146,7 @@ def _decode_aup3(path: Path, *, timeout_s: float) -> np.ndarray:
     from corpus.util.sqlite_ro import connect_ro
 
     try:
-        conn = connect_ro(path)
+        conn = connect_ro(path, immutable=True)
         try:
             layout = read_layout(conn)
             if layout is None:
