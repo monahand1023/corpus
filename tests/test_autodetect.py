@@ -141,3 +141,15 @@ def test_the_same_folder_name_is_stable_across_calls() -> None:
     # folder must land on the same source and update it rather than creating
     # a second one beside it.
     assert normalize_source_name("2024 Taxes") == normalize_source_name("2024 Taxes")
+
+
+
+def test_a_detected_transcript_sidecar_points_at_the_database(tmp_path: Path) -> None:
+    """The transcripts connector reads a sidecar DATABASE. Detection gave it
+    the folder, which it cannot open, so the source failed on every run."""
+    from corpus.connectors.registry import build_pipeline
+
+    db = _touch(tmp_path, "data/transcripts.db")
+    (source,) = [s for s in detect_sources(tmp_path) if s.type == "transcripts"]
+    assert Path(source.path) == db.resolve()
+    build_pipeline(source)  # raises if the path is not a database file

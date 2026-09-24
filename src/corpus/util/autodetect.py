@@ -74,6 +74,17 @@ def detect_sources(path: Path | str) -> list[SourceConfig]:
     prefix = normalize_source_name(root.name)
     detected: list[SourceConfig] = []
     for source_type, glob in DEFAULT_GLOBS.items():
+        if source_type == "transcripts":
+            # The connector reads a sidecar DATABASE, not a folder: one source
+            # per sidecar found, pointing at the file itself.
+            for i, db in enumerate(discover_files(root, glob)):
+                suffix = "" if i == 0 else f"_{i + 1}"
+                detected.append(
+                    SourceConfig(
+                        name=f"{prefix}_transcripts{suffix}", type="transcripts", path=str(db)
+                    )
+                )
+            continue
         if next(discover_files(root, glob), None) is None:
             continue
         detected.append(
@@ -84,3 +95,4 @@ def detect_sources(path: Path | str) -> list[SourceConfig]:
             )
         )
     return detected
+
