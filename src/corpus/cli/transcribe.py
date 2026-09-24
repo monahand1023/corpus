@@ -253,6 +253,42 @@ def _dry_run(
     return 0 if not backend_problem else 2
 
 
+def _dry_run_redo_stale(
+    db: Path, settings: Settings, rate: float, since: str | None
+) -> int:
+    """Price a --redo-stale run from the sidecar: the same work list the real
+    run reads, and durations already stored, so nothing is walked or probed."""
+    from corpus.transcripts import store
+    from corpus.transcripts.backends import BackendUnavailableError, default_backend
+    from corpus.transcripts.run import stale_paths_present
+
+    try:
+        model_name = default_backend().model_name
+    except BackendUnavailableError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    policy = store.policy_fingerprint(settings.as_policy(model_name))
+    with store.open_store(db, read_only=True) as conn:
+        only, missing = stale_paths_present(conn, policy=policy, since=since)
+        durations: dict[str, float] = {}
+        for table in ("no_text", "transcripts"):
+            for path, duration in conn.execute(f"SELECT path, duration_s FROM {table}"):
+                durations[path] = float(duration or 0.0)
+    seconds = sum(durations.get(str(p), 0.0) for p in only)
+    print(f"corpus-transcribe --redo-stale --dry-run: {db}")
+    print(f"  {human_count(len(only))} file(s) invalidated by the current policy")
+    if missing:
+        print(f"  {human_count(missing)} more are recorded but not on disk right now")
+    hours = seconds / 3600
+    print(f"  audio to redo      : {_format_duration(hours)}")
+    print(
+        f"  estimated runtime  : {_format_duration(hours / rate)} at {rate:g}x "
+        "realtime (local compute; no API spend)"
+    )
+    print("(dry run — nothing transcribed)")
+    return 0
+
+
 def _refilter(db: Path, settings: Settings) -> int:
     """Re-apply text filters to stored windows. No model, no audio, no GPU."""
     from corpus.transcripts import store
@@ -399,6 +435,8 @@ def main_argv(argv: list[str]) -> int:
     db = Path(args.db).expanduser()
 
     settings = Settings(expected_languages=frozenset(args.languages))
+    if args.dry_run and args.redo_stale:
+        return _dry_run_redo_stale(db, settings, args.rate, args.transcribed_since)
     if args.dry_run:
         return _dry_run(root, db, args.excludes, args.rate, settings, args.min_seconds)
     if args.refilter:

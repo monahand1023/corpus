@@ -195,3 +195,30 @@ def test_transcribed_since_without_redo_stale_is_refused(tmp_path, capsys) -> No
     with pytest.raises(SystemExit):
         main_argv([str(tmp_path), "--transcribed-since", "2026-09-14"])
     assert "only applies with --redo-stale" in capsys.readouterr().err
+
+
+def test_a_redo_stale_dry_run_prices_the_redo_not_a_walk(tmp_path, capsys) -> None:
+    """--dry-run ignored --redo-stale and walked the given path instead, so
+    the one warning before a multi-hour redo reported 'nothing to transcribe'."""
+    db = tmp_path / "t.db"
+    media = tmp_path / "media"
+    media.mkdir()
+    for name, dur, at in (("a.mov", 3600.0, "2026-09-20"), ("b.mov", 1800.0, "2026-09-01")):
+        (media / name).write_bytes(b"x")
+        with store.open_store(db) as conn:
+            conn.execute(
+                "INSERT INTO transcripts (path, duration_s, dropped_windows, text, languages,"
+                " segments, model, transcribed_at, elapsed_s, policy)"
+                " VALUES (?, ?, 0, 'hi', '[]', '[]', 'fake-v1', ?, 1.0, 'old')",
+                (str(media / name), dur, at),
+            )
+            conn.commit()
+
+    main_argv([".", "--db", str(db), "--redo-stale", "--dry-run", "--rate", "10"])
+    out = capsys.readouterr().out
+    assert "2 file(s) invalidated" in out, out
+    assert "1.5 h" in out, out
+
+    main_argv([".", "--db", str(db), "--redo-stale", "--transcribed-since", "2026-09-14", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "1 file(s) invalidated" in out and "1.0 h" in out, out
