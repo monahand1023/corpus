@@ -21,7 +21,7 @@ def test_make_client_with_key_returns_client(monkeypatch):
 
 
 def test_retry_recovers_after_transient_failure(monkeypatch):
-    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr("corpus.contextual.batch_util.time.sleep", lambda *_: None)
     calls = {"n": 0}
 
     def flaky():
@@ -35,7 +35,7 @@ def test_retry_recovers_after_transient_failure(monkeypatch):
 
 
 def test_retry_reraises_after_exhausting_attempts(monkeypatch):
-    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr("corpus.contextual.batch_util.time.sleep", lambda *_: None)
     calls = {"n": 0}
 
     def always_fail():

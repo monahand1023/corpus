@@ -113,3 +113,58 @@ def test_backoff_grows_and_is_capped(monkeypatch) -> None:
     assert slept == sorted(slept), "delays must be non-decreasing"
     assert max(slept) <= 60.0, f"backoff exceeded its cap: {slept}"
     assert len(slept) == 9, "one sleep per failure except the last"
+
+
+class _StatusError(Exception):
+    """Shaped like the SDK's APIStatusError: a `status_code` attribute."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_a_request_that_cannot_succeed_is_not_retried(monkeypatch, status) -> None:
+    """A bad key or a malformed request fails identically on every attempt;
+    retrying it only delayed the error by ~30 seconds of backoff."""
+    slept: list[float] = []
+    monkeypatch.setattr("corpus.contextual.batch_util.time.sleep", slept.append)
+    calls = []
+
+    def fn():
+        calls.append(1)
+        raise _StatusError(status)
+
+    with pytest.raises(_StatusError):
+        retry_with_backoff(fn, "thing")
+    assert len(calls) == 1 and slept == []
+
+
+@pytest.mark.parametrize("status", [408, 409, 429, 500, 529])
+def test_transient_statuses_are_still_retried(monkeypatch, status) -> None:
+    monkeypatch.setattr("corpus.contextual.batch_util.time.sleep", lambda _s: None)
+    calls = []
+
+    def fn():
+        calls.append(1)
+        if len(calls) < 3:
+            raise _StatusError(status)
+        return "ok"
+
+    assert retry_with_backoff(fn, "thing") == "ok"
+
+
+def test_the_summarizer_and_eval_retry_is_the_same_function(monkeypatch) -> None:
+    """`_anthropic.retry` was a second copy of this loop."""
+    from corpus import _anthropic
+
+    calls = []
+
+    def fn():
+        calls.append(1)
+        raise _StatusError(401)
+
+    monkeypatch.setattr("corpus.contextual.batch_util.time.sleep", lambda _s: None)
+    with pytest.raises(_StatusError):
+        _anthropic.retry(fn, "thing")
+    assert len(calls) == 1

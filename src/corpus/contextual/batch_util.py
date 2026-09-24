@@ -44,15 +44,31 @@ def pack_batches(
     return batches
 
 
+# 4xx statuses that can succeed on a later attempt: request timeout, conflict,
+# rate limit. Every other 4xx (bad key, malformed request, missing model)
+# fails identically each time, so retrying it only delays the error.
+_RETRYABLE_CLIENT_STATUSES = frozenset({408, 409, 429})
+
+
+def _cannot_succeed(e: Exception) -> bool:
+    status = getattr(e, "status_code", None)
+    return (
+        isinstance(status, int)
+        and 400 <= status < 500
+        and status not in _RETRYABLE_CLIENT_STATUSES
+    )
+
+
 def retry_with_backoff(fn: Callable[[], Any], what: str, attempts: int = RETRY_ATTEMPTS) -> Any:
     """Retry a network call with exponential backoff (2s→60s cap) so a transient
-    blip can't crash a long, money-spending batch run."""
+    blip can't crash a long, money-spending batch run. A client error that
+    cannot succeed on retry (see `_RETRYABLE_CLIENT_STATUSES`) raises at once."""
     delay = 2.0
     for attempt in range(attempts):
         try:
             return fn()
-        except Exception as e:  # network/SDK errors are heterogeneous; retry them all
-            if attempt == attempts - 1:
+        except Exception as e:  # network/SDK errors are heterogeneous
+            if attempt == attempts - 1 or _cannot_succeed(e):
                 raise
             logger.warning("%s failed (attempt %d/%d): %s — retrying in %.0fs",
                            what, attempt + 1, attempts, e, delay)

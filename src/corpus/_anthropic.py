@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+
+from corpus.contextual.batch_util import retry_with_backoff
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
@@ -41,19 +42,7 @@ def make_client(api_key: str | None = None) -> Anthropic:
 def retry(fn: Callable[[], Any], what: str) -> Any:
     """Retry a network call with exponential backoff so a transient blip
     (429/503/connection reset) doesn't crash an otherwise-resumable run."""
-    delay = 2.0
-    for attempt in range(RETRY_ATTEMPTS):
-        try:
-            return fn()
-        except Exception as e:  # SDK/network errors are heterogeneous
-            if attempt == RETRY_ATTEMPTS - 1:
-                raise
-            logger.warning(
-                "%s failed (attempt %d/%d): %s — retrying in %.0fs",
-                what, attempt + 1, RETRY_ATTEMPTS, e, delay,
-            )
-            time.sleep(delay)
-            delay = min(delay * 2, 60)
+    return retry_with_backoff(fn, what, attempts=RETRY_ATTEMPTS)
 
 
 def extract_tool_input(response: Any, tool_name: str) -> dict[str, Any]:
