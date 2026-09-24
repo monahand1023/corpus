@@ -337,6 +337,15 @@ async def corpus_stats() -> str:
     return "\n".join(lines)
 
 
+# The env vars each embedder reads its key from; any one will do. `hash`
+# needs none -- it is the offline embedder for tests and dry runs.
+_PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
+    "voyage": ("VOYAGE_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "hash": (),
+}
+
+
 def main() -> None:
     import argparse
 
@@ -373,15 +382,11 @@ def main() -> None:
         logger.error("%s", e)
         sys.exit(2)
 
-    expected_key = {
-        "voyage": "VOYAGE_API_KEY",
-        "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    }.get(config.embedder.provider)
-    if expected_key is None:
+    keys = _PROVIDER_KEYS.get(config.embedder.provider)
+    if keys is None:
         logger.error("Unknown embedder provider in corpus.toml: %s", config.embedder.provider)
         sys.exit(2)
-    keys = expected_key if isinstance(expected_key, tuple) else (expected_key,)
-    if not any(os.environ.get(k) for k in keys):
+    if keys and not any(os.environ.get(k) for k in keys):
         logger.error(
             "Embedder provider '%s' requires one of: %s. corpus looked for a "
             ".env: %s. Set the variable in your shell, or add it to one of "

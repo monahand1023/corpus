@@ -699,3 +699,26 @@ class TestUnknownSourceType:
             asyncio.run(search_knowledge(query="q"))
 
         store.stats.assert_not_called()
+
+
+def test_the_server_starts_with_the_keyless_hash_embedder(tmp_path, monkeypatch) -> None:
+    """The startup key check mapped only voyage and gemini, so the `hash`
+    embedder -- which needs no key and exists for offline use and tests --
+    was rejected as an unknown provider and the server exited 2."""
+    import sys
+
+    import corpus.mcp_server as server
+
+    cfg = tmp_path / "corpus.toml"
+    cfg.write_text(
+        f'[corpus]\ndb_path = "{(tmp_path / "x.db").as_posix()}"\n\n'
+        '[embedder]\nprovider = "hash"\nmodel = "hash"\ndim = 8\n'
+    )
+    started = []
+    monkeypatch.setattr(server.mcp, "run", lambda **_k: started.append(True))
+    monkeypatch.setattr(sys, "argv", ["corpus-mcp", "--config", str(cfg)])
+    # main() records the config path in a module global; restore it after.
+    monkeypatch.setattr(server, "_config_path_override", None)
+
+    server.main()
+    assert started == [True]
