@@ -27,7 +27,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import statistics
 import sys
@@ -36,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from corpus.cli._common import load_config_or_exit, open_store_read_only
+from corpus.cli._common import load_config_or_exit, load_python_export, open_store_read_only
 from corpus.config import CorpusConfig
 from corpus.credentials import resolve_dotenv
 from corpus.embedder.factory import make_embedder
@@ -258,16 +257,7 @@ def _print_compare_report(report: dict[str, Any]) -> None:
 
 
 def _load_queries(path: Path) -> list[str]:
-    spec = importlib.util.spec_from_file_location("eval_queries", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load {path}")
-    module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules before exec: dataclasses with `from __future__
-    # import annotations` resolve string annotations via
-    # sys.modules[cls.__module__], which raises AttributeError otherwise.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return [q.query for q in module.EVAL_QUERIES]
+    return [q.query for q in load_python_export(path, "EVAL_QUERIES")]
 
 
 def _print_report(report: dict[str, Any]) -> None:
