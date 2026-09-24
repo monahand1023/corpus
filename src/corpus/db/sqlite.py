@@ -29,13 +29,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sqlite_vec
 
 from corpus.types import Chunk
 from corpus.util.fts_normalize import fts_terms, normalize_for_fts
 from corpus.util.sqlite_ro import connect_ro
+
+if TYPE_CHECKING:
+    from corpus.config import CorpusConfig
 
 logger = logging.getLogger(__name__)
 
@@ -1477,6 +1480,29 @@ class ChunkStore:
             )
         }
         return {"total": total, "by_source": by_source}
+
+    @classmethod
+    def from_config(
+        cls,
+        config: CorpusConfig,
+        *,
+        read_only: bool = False,
+        embedding_dim: int | None = None,
+    ) -> ChunkStore:
+        """Open the store `config` describes, with its performance settings.
+
+        `embedding_dim` overrides the configured dim for callers that sweep
+        providers; the store's own dim guard still applies.
+        """
+        perf = config.performance
+        return cls(
+            config.db_path,
+            embedding_dim=config.embedder.dim if embedding_dim is None else embedding_dim,
+            read_only=read_only,
+            cache_size_mb=perf.cache_size_mb,
+            mmap_size_mb=perf.mmap_size_mb,
+            temp_store_memory=perf.temp_store_memory,
+        )
 
     def close(self) -> None:
         """Close every connection opened across all threads."""

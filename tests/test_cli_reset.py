@@ -9,6 +9,7 @@ GPU and real API spend to rebuild, so the prompt's behaviour is the point.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,7 +29,7 @@ def _run(monkeypatch, argv, *, answer=None, store=None, cfg=None):
 
     monkeypatch.setattr(mod, "load_config_or_exit", lambda _p: cfg)
     if store is not None:
-        monkeypatch.setattr(mod, "ChunkStore", lambda *a, **k: store)
+        monkeypatch.setattr(mod, "ChunkStore", SimpleNamespace(from_config=lambda *a, **k: store))
     if answer is not None:
         monkeypatch.setattr("builtins.input", lambda _prompt="": answer)
     monkeypatch.setattr("sys.argv", argv)

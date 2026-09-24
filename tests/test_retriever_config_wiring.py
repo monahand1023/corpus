@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,7 +51,9 @@ def test_the_query_cli_passes_the_configured_diversity_cap(
     monkeypatch.setattr(mod, "load_config_or_exit",
                         lambda _p: _config(tmp_path, max_per_source_type=configured))
     monkeypatch.setattr(mod, "make_embedder", lambda **k: MagicMock())
-    monkeypatch.setattr(mod, "ChunkStore", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        mod, "ChunkStore", SimpleNamespace(from_config=lambda *a, **k: MagicMock())
+    )
     monkeypatch.setattr("sys.argv", ["corpus-query", "a question"])
 
     mod.main()

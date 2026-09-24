@@ -56,14 +56,7 @@ def open_store_read_only(
             file=sys.stderr,
         )
         raise SystemExit(1)
-    return ChunkStore(
-        db_path,
-        embedding_dim=config.embedder.dim if embedding_dim is None else embedding_dim,
-        read_only=True,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    return ChunkStore.from_config(config, read_only=True, embedding_dim=embedding_dim)
 
 
 def load_python_export(path: Path, attr: str) -> Any:

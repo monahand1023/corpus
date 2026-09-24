@@ -191,13 +191,7 @@ class Ingester:
         embedder: Embedder | None = None,
     ):
         self._config = config
-        self._store = store or ChunkStore(
-            config.db_path,
-            embedding_dim=config.embedder.dim,
-            cache_size_mb=config.performance.cache_size_mb,
-            mmap_size_mb=config.performance.mmap_size_mb,
-            temp_store_memory=config.performance.temp_store_memory,
-        )
+        self._store = store or ChunkStore.from_config(config)
         self._embedder = embedder or make_embedder(
             provider=config.embedder.provider,
             model=config.embedder.model,

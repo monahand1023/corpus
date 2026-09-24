@@ -1146,3 +1146,27 @@ def test_every_read_path_returns_the_chunks_context(tmp_path: Path) -> None:
         assert got and got[0] is not None, f"{name} returned nothing"
         assert got[0].context == blurb, name
     store.close()
+
+
+def test_from_config_applies_the_configured_performance_settings(tmp_path: Path) -> None:
+    """Seven call sites spelled out the same five ChunkStore arguments from
+    config; one place now, so a new setting cannot reach six of them."""
+    from corpus.config import CorpusConfig
+
+    cfg_path = tmp_path / "corpus.toml"
+    cfg_path.write_text(
+        f'[corpus]\ndb_path = "{(tmp_path / "x.db").as_posix()}"\n\n'
+        f"[embedder]\ndim = {DIM}\n\n"
+        "[performance]\ncache_size_mb = 7\nmmap_size_mb = 3\n"
+    )
+    config = CorpusConfig.load(cfg_path)
+
+    store = ChunkStore.from_config(config)
+    assert store._conn.execute("PRAGMA cache_size").fetchone()[0] == -7 * 1024
+    assert store._conn.execute("PRAGMA mmap_size").fetchone()[0] == 3 * 1024 * 1024
+    store.close()
+
+    ro = ChunkStore.from_config(config, read_only=True)
+    with pytest.raises(ReadOnlyStoreError):
+        ro.upsert_batch([(make_chunk("doc", 0, ChunkKind.BODY, "x"), fake_embedding(1))])
+    ro.close()

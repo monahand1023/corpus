@@ -138,13 +138,7 @@ def main() -> int:
             print(f"error: database not found: {config.db_path}", file=sys.stderr)
             print("Run `corpus-index` first.", file=sys.stderr)
             return 1
-        store = ChunkStore(
-            config.db_path,
-            embedding_dim=config.embedder.dim,
-            cache_size_mb=config.performance.cache_size_mb,
-            mmap_size_mb=config.performance.mmap_size_mb,
-            temp_store_memory=config.performance.temp_store_memory,
-        )
+        store = ChunkStore.from_config(config)
 
     summarizer = None
     if not args.dry_run:

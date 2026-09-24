@@ -55,13 +55,7 @@ def main() -> int:
         print(f"No DB at {db_path} — nothing to drop.")
         return 0
 
-    store = ChunkStore(
-        config.db_path,
-        embedding_dim=config.embedder.dim,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    store = ChunkStore.from_config(config)
     try:
         before = store.stats()["by_source"].get(args.source, 0)
         if before == 0:

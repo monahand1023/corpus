@@ -138,13 +138,7 @@ def main() -> int:
     else:
         parser.error("specify --source NAME (repeatable) or --all")
 
-    store = ChunkStore(
-        config.db_path,
-        embedding_dim=config.embedder.dim,
-        cache_size_mb=config.performance.cache_size_mb,
-        mmap_size_mb=config.performance.mmap_size_mb,
-        temp_store_memory=config.performance.temp_store_memory,
-    )
+    store = ChunkStore.from_config(config)
     try:
         if args.clear:
             for name in names:
