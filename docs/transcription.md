@@ -153,14 +153,19 @@ designed in the abstract (`corpus.transcripts.quality`):
   that is a recording to keep.
 - **Impossible speech rate** — more characters than a human mouth produces in
   the window's duration.
-- **Unexpected language**, when you name the languages you actually speak
-  (`--language en --language ja`). Silence gets labelled as languages nobody
-  in the recording speaks. **This one is lossy and opt-in for a reason**: the
-  label is least reliable exactly when the audio is hard, so short real
-  utterances get mislabelled too. On a 200-clip test it removed 11 more files,
-  of which several were genuine English mislabelled as Norwegian. It applies
-  only to short text for that reason. Leave it off unless you have looked at
-  what it removes.
+- **The languages actually spoken**, when you name them (`--language en
+  --language ja`). Short or quiet audio gets labelled as languages nobody in
+  the recording speaks, and its text then comes back written in that
+  language. With languages named, such a window is decoded again in the
+  likeliest named language, so the speech is kept rather than filtered out;
+  the cost falls only on the windows that went wrong. Whatever still comes
+  back in another language is rejected on short text, as before.
+
+Speech regions are packed into windows of up to 30 seconds before
+transcription. One window per detected region sent the model one- and
+two-second clips; on a real archive 41% of windows under 2 seconds came back
+in a language the rest of the recording was not in, against about 7% at 10
+seconds or more. Packing also cut decoding time by roughly 40% on a sample.
 
 Voice-activity detection is used only to decide where to SPEND time, and
 never to decide whether a recording is worth keeping. On that same archive a

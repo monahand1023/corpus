@@ -167,7 +167,7 @@ implicit_reexport = true
 # mlx-whisper ships no stubs, and is Apple-Silicon only: it is absent
 # from every environment mypy runs in except a developer's Mac.
 [[tool.mypy.overrides]]
-module = "mlx_whisper"
+module = ["mlx_whisper", "mlx_whisper.*", "mlx", "mlx.*"]
 ignore_missing_imports = true
 
 # silero-vad is located by find_spec rather than imported, but torch

@@ -61,8 +61,15 @@ class TranscriberBackend(Protocol):
         """
         ...
 
-    def transcribe_window(self, samples: np.ndarray) -> WindowResult:
+    def transcribe_window(
+        self, samples: np.ndarray, languages: frozenset[str] | None = None
+    ) -> WindowResult:
         """Transcribe ONE window of 16 kHz mono float32 samples.
+
+        `languages`, when given, is the set actually spoken in the archive:
+        a window must come back in one of them. The pipeline passes it only
+        when the run names languages, so a backend without the parameter
+        still works for runs that do not.
 
         Windowing is the caller's job, and deliberately so: a model detects
         language once -- usually on the first thirty seconds -- and applies
@@ -113,10 +120,33 @@ class MlxWhisperBackend:
                 "supply your own backend satisfying TranscriberBackend."
             ) from exc
 
-    def transcribe_window(self, samples: np.ndarray) -> WindowResult:
+    def transcribe_window(
+        self, samples: np.ndarray, languages: frozenset[str] | None = None
+    ) -> WindowResult:
         self.preflight()
+        out = self._decode(samples)
+        detected = out.get("language")
+        if languages and (out.get("text") or "").strip() and detected not in languages:
+            # Short or quiet audio gets labelled as a language nobody in the
+            # archive speaks, and its text is then written in that language.
+            # Decode again in the likeliest language that IS spoken; the
+            # extra cost falls only on the windows that went wrong.
+            probs = self._language_probs(samples)
+            best = max(sorted(languages), key=lambda lang: probs.get(lang, 0.0))
+            out = self._decode(samples, language=best)
+            out["language"] = best
+        segments = out.get("segments") or []
+        return WindowResult(
+            text=(out.get("text") or "").strip(),
+            language=out.get("language"),
+            no_speech=_mean(segments, "no_speech_prob"),
+            avg_logprob=_mean(segments, "avg_logprob"),
+        )
+
+    def _decode(self, samples: np.ndarray, language: str | None = None) -> dict[str, Any]:
         import mlx_whisper
 
+        options: dict[str, Any] = {} if language is None else {"language": language}
         out: dict[str, Any] = mlx_whisper.transcribe(
             samples,
             path_or_hf_repo=self._model,
@@ -127,14 +157,21 @@ class MlxWhisperBackend:
             # Asked for because they are stored as evidence behind a discard,
             # not because they decide anything -- see the module docstring.
             condition_on_previous_text=False,
+            **options,
         )
-        segments = out.get("segments") or []
-        return WindowResult(
-            text=(out.get("text") or "").strip(),
-            language=out.get("language"),
-            no_speech=_mean(segments, "no_speech_prob"),
-            avg_logprob=_mean(segments, "avg_logprob"),
-        )
+        return out
+
+    def _language_probs(self, samples: np.ndarray) -> dict[str, float]:
+        """Whisper's language distribution for this window, the same way
+        `mlx_whisper.transcribe` computes it before choosing the maximum."""
+        import mlx.core as mx
+        from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
+        from mlx_whisper.transcribe import ModelHolder
+
+        model = ModelHolder.get_model(self._model, mx.float16)
+        mel = log_mel_spectrogram(samples, n_mels=model.dims.n_mels, padding=N_SAMPLES)
+        _, probs = model.detect_language(pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16))
+        return {str(k): float(v) for k, v in dict(probs).items()}
 
 
 def _mean(segments: list[dict[str, Any]], key: str) -> float | None:

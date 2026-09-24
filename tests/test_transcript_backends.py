@@ -138,3 +138,72 @@ def test_a_missing_extra_names_the_extra_rather_than_raising_importerror(
         MlxWhisperBackend().transcribe_window(None)
     assert "corpus-rag[transcribe-mlx]" in str(caught.value)
     assert "Apple Silicon" in str(caught.value)
+
+
+# --- restricting the language to the ones actually spoken ----------------------------
+
+
+class _ScriptedMlx(MlxWhisperBackend):
+    """The MLX backend with the model calls scripted, so the language logic
+    is tested without a model or Apple Silicon."""
+
+    def __init__(self, detected: str, probs: dict[str, float]) -> None:
+        super().__init__()
+        self.detected, self.probs, self.decodes = detected, probs, []
+
+    def preflight(self) -> None:
+        pass
+
+    def _decode(self, samples, language=None):
+        self.decodes.append(language)
+        lang = language or self.detected
+        return {"text": f"text in {lang}", "language": lang, "segments": []}
+
+    def _language_probs(self, samples):
+        return self.probs
+
+
+def test_a_language_outside_the_allowed_set_is_decoded_again_in_the_likeliest_allowed_one() -> None:
+    """Short or quiet windows get labelled as languages nobody in the archive
+    speaks (Nynorsk, Javanese, Hawaiian...) and their text is then garbage in
+    that language. Forcing the likeliest allowed language keeps the speech."""
+    backend = _ScriptedMlx("nn", {"nn": 0.5, "en": 0.1, "ja": 0.3, "es": 0.1})
+    result = backend.transcribe_window(None, languages=frozenset({"en", "ja", "es"}))
+    assert result.language == "ja"
+    assert result.text == "text in ja"
+    assert backend.decodes == [None, "ja"]
+
+
+def test_an_allowed_language_costs_one_decode() -> None:
+    backend = _ScriptedMlx("es", {"es": 0.9})
+    result = backend.transcribe_window(None, languages=frozenset({"en", "es"}))
+    assert result.language == "es" and backend.decodes == [None]
+
+
+def test_without_a_language_set_nothing_is_constrained() -> None:
+    backend = _ScriptedMlx("nn", {"nn": 0.9})
+    assert backend.transcribe_window(None).language == "nn"
+    assert backend.decodes == [None]
+
+
+def test_the_pipeline_passes_the_run_languages_to_the_backend(tmp_path) -> None:
+    import numpy as np
+
+    from corpus.transcripts.pipeline import Settings, transcribe_file
+
+    seen = []
+
+    class _Backend:
+        model_name = "fake"
+
+        def transcribe_window(self, samples, languages=None):
+            seen.append(languages)
+            return WindowResult(text="we fed the ducks by the pond", language="en")
+
+    transcribe_file(
+        tmp_path / "a.wav", _Backend(), settings=Settings(expected_languages=frozenset({"en", "ja"})),
+        decode=lambda p: np.full(16000 * 5, 0.1, dtype=np.float32),
+        speech_regions=lambda s: [(0.0, 5.0)],
+        peak_speech_probability=lambda s: 0.9,
+    )
+    assert seen == [frozenset({"en", "ja"})]

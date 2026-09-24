@@ -332,10 +332,19 @@ def transcribe_file(
     # the judgement `filter_windows` has to make: dropping the ONLY window is
     # deleting the recording, not trimming it.
     results = []
+    # A backend written before `languages` existed still runs; the language
+    # filter in `judge` then remains the only check, as it was.
+    constrain = bool(settings.expected_languages) and _accepts_languages(backend)
     for window in plan:
         begin = int(window.start * 16_000)
         finish = int(window.end * 16_000)
-        results.append((window, backend.transcribe_window(samples[begin:finish])))
+        clip = samples[begin:finish]
+        result = (
+            backend.transcribe_window(clip, languages=settings.expected_languages)
+            if constrain
+            else backend.transcribe_window(clip)
+        )
+        results.append((window, result))
 
     kept, dropped_pairs = filter_windows(
         [(r.text, w.duration, w.continues_previous) for w, r in results], settings
@@ -394,3 +403,15 @@ __all__ = [
     "Settings",
     "transcribe_file",
 ]
+
+
+def _accepts_languages(backend: TranscriberBackend) -> bool:
+    import inspect
+
+    try:
+        params = inspect.signature(backend.transcribe_window).parameters
+    except (TypeError, ValueError):
+        return False
+    return "languages" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )

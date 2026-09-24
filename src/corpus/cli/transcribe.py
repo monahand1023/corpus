@@ -335,9 +335,10 @@ def main_argv(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--language", action="append", default=[], dest="languages", metavar="CODE",
-        help="A language you actually speak (repeatable). Transcribers "
-             "mislabel silence as languages nobody in the recording speaks, "
-             "and naming yours lets that be used as a rejection signal.",
+        help="A language actually spoken in these recordings (repeatable). "
+             "A window the model labels as any other language is decoded "
+             "again in the likeliest of these, instead of coming back as "
+             "text in a language nobody speaks.",
     )
     parser.add_argument(
         "--refilter",
