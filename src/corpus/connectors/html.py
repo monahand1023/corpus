@@ -20,7 +20,7 @@ from pathlib import Path
 
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
-from corpus.util.dedup import fingerprint
+from corpus.util.dedup import NearDuplicates
 from corpus.util.encoding import read_text_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class HtmlConnector:
                 f"HTML source '{self.source_type}': directory not found: {self._root}"
             )
 
-        seen: dict[str, str] = {}
+        dupes = NearDuplicates(self.source_type)
         for path in discover_files(self._root, self._glob):
             try:
                 raw_html = read_text_with_fallback(path)
@@ -89,16 +89,8 @@ class HtmlConnector:
                 created_at = getattr(meta, "date", None)
 
             source_key = str(path.relative_to(self._root))
-            fp = fingerprint(extracted)
-            if fp in seen:
-                logger.info(
-                    "%s: skipping near-duplicate '%s' (matches '%s')",
-                    self.source_type,
-                    source_key,
-                    seen[fp],
-                )
+            if dupes.seen_before(extracted, source_key):
                 continue
-            seen[fp] = source_key
 
             yield SourceDocument(
                 source_type=self.source_type,

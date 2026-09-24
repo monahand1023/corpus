@@ -36,7 +36,10 @@ the thing that makes it a different message.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s)]+|www\.[^\s)]+")
 _DATE_RE = re.compile(
@@ -55,3 +58,25 @@ def normalize_for_dedup(text: str) -> str:
 
 def fingerprint(text: str) -> str:
     return hashlib.sha256(normalize_for_dedup(text).encode("utf-8")).hexdigest()[:32]
+
+
+class NearDuplicates:
+    """Near-duplicate documents within one `load()`: the first one seen is
+    kept, later ones are skipped and logged against it. Scoped to one run and
+    keyed on discovery order, so the survivor is deterministic."""
+
+    def __init__(self, source_type: str) -> None:
+        self._source_type = source_type
+        self._seen: dict[str, str] = {}
+
+    def seen_before(self, text: str, key: str) -> bool:
+        fp = fingerprint(text)
+        first = self._seen.get(fp)
+        if first is not None:
+            logger.info(
+                "%s: skipping near-duplicate '%s' (matches '%s')",
+                self._source_type, key, first,
+            )
+            return True
+        self._seen[fp] = key
+        return False

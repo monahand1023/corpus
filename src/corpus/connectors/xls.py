@@ -38,7 +38,7 @@ from typing import Any
 
 from corpus.connectors.discovery import discover_files
 from corpus.types import SourceDocument
-from corpus.util.dedup import fingerprint
+from corpus.util.dedup import NearDuplicates
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class XlsConnector:
                 f"Xls source '{self.source_type}': directory not found: {self._root}"
             )
 
-        seen: dict[str, str] = {}
+        dupes = NearDuplicates(self.source_type)
         for path in discover_files(self._root, self._glob):
             try:
                 book = xlrd.open_workbook(str(path), on_demand=True)
@@ -142,16 +142,8 @@ class XlsConnector:
                 continue
 
             source_key = str(path.relative_to(self._root))
-            fp = fingerprint(body)
-            if fp in seen:
-                logger.info(
-                    "%s: skipping near-duplicate '%s' (matches '%s')",
-                    self.source_type,
-                    source_key,
-                    seen[fp],
-                )
+            if dupes.seen_before(body, source_key):
                 continue
-            seen[fp] = source_key
 
             yield SourceDocument(
                 source_type=self.source_type,

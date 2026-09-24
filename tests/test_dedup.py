@@ -70,3 +70,17 @@ def test_fingerprint_is_32_hex_characters() -> None:
 
     assert len(fp) == 32
     assert all(c in "0123456789abcdef" for c in fp)
+
+
+def test_near_duplicates_keeps_the_first_and_names_it(caplog) -> None:
+    """The per-load tracker ten connectors each hand-wrote."""
+    import logging
+
+    from corpus.util.dedup import NearDuplicates
+
+    dupes = NearDuplicates("notes")
+    assert not dupes.seen_before("Quarterly report  2024-01-05", "a.md")
+    with caplog.at_level(logging.INFO, logger="corpus.util.dedup"):
+        assert dupes.seen_before("quarterly report 2025-02-06", "copy of a.md")
+    assert "matches 'a.md'" in caplog.text
+    assert not dupes.seen_before("something else entirely", "b.md")

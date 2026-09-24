@@ -21,7 +21,7 @@ from corpus.chunkers.markdown import chunk_markdown_body, parse_markdown
 from corpus.connectors.discovery import discover_files
 from corpus.transcripts.quality import strip_caption_tail
 from corpus.types import Chunk, ChunkKind, ChunkMetadata, SourceDocument
-from corpus.util.dedup import fingerprint
+from corpus.util.dedup import NearDuplicates
 from corpus.util.encoding import read_text_with_fallback
 from corpus.util.hash import chunk_id, sha256
 from corpus.util.scrub import scrub
@@ -58,7 +58,7 @@ class MarkdownConnector:
             raise FileNotFoundError(
                 f"Markdown source '{self.source_type}': directory not found: {self._root}"
             )
-        seen: dict[str, str] = {}
+        dupes = NearDuplicates(self.source_type)
         for md_path in discover_files(self._root, self._glob):
             try:
                 text = read_text_with_fallback(md_path)
@@ -71,16 +71,8 @@ class MarkdownConnector:
             # Stable source key: frontmatter `id` if present, else relative path.
             source_key = fm.get("id") or str(md_path.relative_to(self._root))
 
-            fp = fingerprint(parsed.body)
-            if fp in seen:
-                logger.info(
-                    "%s: skipping near-duplicate '%s' (matches earlier '%s')",
-                    self.source_type,
-                    source_key,
-                    seen[fp],
-                )
+            if dupes.seen_before(parsed.body, source_key):
                 continue
-            seen[fp] = source_key
 
             # Frontmatter dates take precedence; fall back to filesystem mtime/ctime
             # so timeline + recent_activity tools work for plain markdown without
