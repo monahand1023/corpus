@@ -191,16 +191,9 @@ class SourceConfig(BaseModel):
     # and read in none.
     exclude: list[str] = Field(default_factory=list)
     exclude_dependencies: bool = True
-    # `aup3` connector only -- every other connector ignores these two.
-    # Audacity's `.aup3` project files store sample rate and channel count
-    # only inside their unparseable binary-XML `project.doc` column (see
-    # `corpus.connectors.aup3`'s module docstring), so neither is ever
-    # detected -- these are the assumed values, reported as assumptions in
-    # the generated document, overridable here when you know the real ones
-    # for a given source. Defaults mirror
-    # `corpus.connectors.aup3.DEFAULT_SAMPLE_RATE_HZ`/`DEFAULT_CHANNELS`
-    # (not imported from there -- config.py stays free of any dependency on
-    # a specific connector's module).
+    # `aup3` connector only, and only for a project whose layout cannot be
+    # read from its `project.doc` (see `corpus.connectors.aup3_layout`); a
+    # saved project reports its real rate and tracks.
     sample_rate: int = 44100
     channels: int = 1
     # `olm` connector only -- every other connector ignores these three.

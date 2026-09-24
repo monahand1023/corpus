@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -110,6 +111,8 @@ def decode(path: Path | str, *, timeout_s: float = 1800.0) -> np.ndarray:
     """
     import numpy as np
 
+    if Path(path).suffix.lower() == ".aup3":
+        return _decode_aup3(Path(path), timeout_s=timeout_s)
     if not ffmpeg_available():
         raise AudioUnavailableError(
             "ffmpeg is not on PATH. Transcription decodes audio with it; "
@@ -133,6 +136,55 @@ def decode(path: Path | str, *, timeout_s: float = 1800.0) -> np.ndarray:
         if _NO_STREAM_RE.search(detail):
             raise NoAudioStreamError(f"{path} has no audio stream: {detail}")
         raise AudioUnavailableError(f"ffmpeg could not decode {path}: {detail}")
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
+def _decode_aup3(path: Path, *, timeout_s: float) -> np.ndarray:
+    """An Audacity project, mixed to mono at its own rate, then resampled to
+    16 kHz by ffmpeg reading the samples from a pipe.
+
+    A project whose layout cannot be read is refused: guessing its rate or
+    channel layout produces audio that transcribes to nonsense.
+    """
+    import numpy as np
+
+    from corpus.connectors.aup3 import _connect_ro
+    from corpus.connectors.aup3_layout import LayoutError, mix_to_mono, read_layout
+
+    try:
+        conn = _connect_ro(path)
+        try:
+            layout = read_layout(conn)
+            if layout is None:
+                raise LayoutError("the project has no saved layout")
+            samples, rate = mix_to_mono(conn, layout)
+        finally:
+            conn.close()
+    except (LayoutError, sqlite3.Error) as e:
+        raise AudioUnavailableError(f"cannot read Audacity project layout of {path}: {e}") from e
+    if not samples.size:
+        raise NoAudioStreamError(f"{path} has no audible audio")
+    if not ffmpeg_available():
+        raise AudioUnavailableError(
+            "ffmpeg is not on PATH. Transcription resamples audio with it; "
+            "install it (macOS: `brew install ffmpeg`) and retry."
+        )
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-v", "error",
+                "-f", "f32le", "-ar", str(rate), "-ac", "1", "-i", "pipe:0",
+                "-f", "f32le", "-acodec", "pcm_f32le",
+                "-ac", "1", "-ar", str(SAMPLE_RATE), "-",
+            ],
+            input=samples.astype("<f4").tobytes(),
+            capture_output=True, timeout=timeout_s, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioUnavailableError(f"ffmpeg timed out after {timeout_s}s") from exc
+    if proc.returncode != 0 or not proc.stdout:
+        detail = proc.stderr.decode(errors="replace").strip()[:200]
+        raise AudioUnavailableError(f"ffmpeg could not resample {path}: {detail}")
     return np.frombuffer(proc.stdout, dtype=np.float32)
 
 

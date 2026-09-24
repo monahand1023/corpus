@@ -31,27 +31,18 @@ Verified structure (by hand, against a real project — not assumed):
     misdecoding audio into noise. A block in one of these formats is
     reported, never decoded. See "What isn't supported" below.
 
-What isn't recoverable: `project.doc` is Audacity's own binary XML dialect
-with a string dictionary (`project.dict`) — not parseable as text, and it
-yields no readable keys without fully reverse-engineering that dictionary
-encoding. Sample rate, channel count, and track/channel boundaries (which
-sampleblocks belong to which channel of which track) all live only in that
-tree. None of them are recoverable from `sampleblocks` alone. Rather than
-pretend otherwise, this connector defaults sample rate to 44100 Hz and
-channel count to 1 (mono) — both overridable per source — and documents the
-limitation everywhere it matters (module here, `SourceConfig`,
-`corpus.toml.example`, README) instead of quietly guessing.
+The project's layout -- sample rate, tracks, clip positions, trims, mute --
+lives in `project.doc`, Audacity's binary XML. `corpus.connectors.aup3_layout`
+reads it, so the document reports the real duration and rate, and
+`extract_audio` writes the audible tracks mixed to mono at the real rate.
+A project whose layout cannot be read (no `project` row, or one that does
+not decode) falls back to the old assumptions: 44100 Hz, one channel, every
+block joined in id order. Those are overridable per source, and the document
+says they are assumptions.
 
-One consequence of not knowing track boundaries: `extract_audio`'s
-`channels` parameter does NOT mean "deinterleave this many channels from
-their real positions" — there is no way to know real positions. It means
-"treat the full ordered sequence of sample values as one flat stream and
-group it into N-wide frames." That's only correct if the project really was
-authored as N-channel interleaved data, which is the less common case for
-Audacity specifically (a stereo track there is usually two independent
-per-channel block sequences, not one interleaved one). Default stays 1 for
-exactly this reason — get `channels` wrong and the output isn't merely
-mislabeled, it's genuinely wrong-sounding.
+Transcription: `corpus-transcribe` treats an `.aup3` like any recording
+(`corpus.transcripts.audio.decode` reads it through the layout), so what is
+said in one becomes searchable through a `transcripts` source.
 
 Why "connector + companion extraction API", not "extraction-only CLI
 utility" or "connector that extracts automatically": an `.aup3` holds audio,
@@ -111,10 +102,12 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import wave
 from collections.abc import Iterable
 from pathlib import Path
 
+from corpus.connectors.aup3_layout import LayoutError, ProjectLayout, mix_to_mono, read_layout
 from corpus.types import SourceDocument
 
 logger = logging.getLogger(__name__)
@@ -134,8 +127,8 @@ _KNOWN_SAMPLE_FORMATS: dict[int, str] = {
 
 BYTES_PER_FLOAT_SAMPLE = 4
 
-# Not recoverable from the project file — see the module docstring. Both are
-# constructor / SourceConfig overrides, never auto-detected.
+# Used only for a project whose layout cannot be read -- see the module
+# docstring. Both are constructor / SourceConfig overrides.
 DEFAULT_SAMPLE_RATE_HZ = 44100
 DEFAULT_CHANNELS = 1
 
@@ -187,7 +180,8 @@ def _connect_ro(path: Path) -> sqlite3.Connection:
     """Open `path` strictly read-only via a `mode=ro` SQLite URI — see the
     module docstring's non-negotiable. Matches the identical idiom already
     used by `ChunkStore(read_only=True)` and `corpus.survey.overlap`."""
-    return sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    # Quoted: a `?` or `#` in a real filename would otherwise end the path.
+    return sqlite3.connect(f"file:{urllib.parse.quote(path.as_posix())}?mode=ro", uri=True)
 
 
 def _has_sampleblocks_table(conn: sqlite3.Connection) -> bool:
@@ -315,14 +309,14 @@ def _describe_project(
         lines.append(f"Estimated duration: {_format_duration(duration)} ({duration:.1f}s)")
 
     lines.append(
-        f"Assumed sample rate: {sample_rate} Hz — NOT recoverable from this "
-        "project's binary XML; override via `sample_rate` on this source in "
-        "corpus.toml if you know the real value"
+        f"Assumed sample rate: {sample_rate} Hz — this project has no readable "
+        "layout; override via `sample_rate` on this source in corpus.toml if "
+        "you know the real value"
     )
     lines.append(
-        f"Assumed channels: {channels} — NOT recoverable from this "
-        "project's binary XML; override via `channels` on this source in "
-        "corpus.toml if you know the real value"
+        f"Assumed channels: {channels} — this project has no readable layout; "
+        "override via `channels` on this source in corpus.toml if you know "
+        "the real value"
     )
     lines.append(
         "Note: audio content itself is not indexed here — this document "
@@ -331,6 +325,26 @@ def _describe_project(
         "WAV/FLAC/MP3 file for transcription."
     )
     return "\n".join(lines)
+
+
+def _describe_layout(*, path: Path, layout: ProjectLayout, total_blocks: int) -> str:
+    audible = len(layout.audible_tracks())
+    tracks = f"{len(layout.tracks)}" + (
+        f" ({audible} audible)" if audible != len(layout.tracks) else ""
+    )
+    return "\n".join(
+        [
+            f"Audacity project: {path.name}",
+            f"Source path: {path}",
+            f"Duration: {_format_duration(layout.duration_s)} ({layout.duration_s:.1f}s)",
+            f"Sample rate: {layout.rate} Hz",
+            f"Tracks: {tracks}",
+            f"Sample blocks: {total_blocks}",
+            "Note: what is said in this recording is not in this document. "
+            "Run corpus-transcribe over this folder to transcribe it; the "
+            "transcript is indexed through a `transcripts` source.",
+        ]
+    )
 
 
 def _describe_empty_project(path: Path) -> str:
@@ -423,6 +437,24 @@ class AupThreeConnector:
                 raw={"body": _describe_empty_project(path), "path": str(path)},
             )
 
+        layout_error = None
+        try:
+            layout = read_layout(conn)
+        except LayoutError as e:
+            layout, layout_error = None, str(e)
+            logger.warning("%s: layout of '%s' could not be read: %s", self.source_type, path, e)
+        if layout is not None:
+            return SourceDocument(
+                source_type=self.source_type,
+                source_key=source_key,
+                title=path.stem,
+                url=None,
+                raw={
+                    "body": _describe_layout(path=path, layout=layout, total_blocks=total_blocks),
+                    "path": str(path),
+                },
+            )
+
         verified = False
         if FLOAT_SAMPLE_FORMAT in breakdown:
             row = conn.execute(
@@ -441,6 +473,11 @@ class AupThreeConnector:
             sample_rate=self._sample_rate,
             channels=self._channels,
         )
+        if layout_error is not None:
+            body += (
+                f"\nNote: the project's layout could not be read ({layout_error}), "
+                "so the rate, channels and duration above are assumptions."
+            )
         return SourceDocument(
             source_type=self.source_type,
             source_key=source_key,
@@ -533,6 +570,39 @@ def _write_wav(path: Path, conn: sqlite3.Connection, sample_rate: int, channels:
     return frames_written
 
 
+def _write_mixed_wav(path: Path, conn: sqlite3.Connection, layout: ProjectLayout) -> int:
+    """Write the project's audible tracks, mixed to mono at their real rate,
+    as 16-bit PCM. Returns the number of frames written."""
+    import numpy as np
+
+    try:
+        samples, rate = mix_to_mono(conn, layout)
+    except LayoutError as e:
+        raise UnsupportedSampleFormatError(str(e)) from e
+    pcm = np.round(np.clip(samples, -1.0, 1.0) * _INT16_PEAK).astype("<i2")
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(pcm.tobytes())
+    return int(pcm.size)
+
+
+def _write_project_wav(
+    path: Path, conn: sqlite3.Connection, sample_rate: int, channels: int
+) -> int:
+    """The project's own layout when it can be read; otherwise the flat,
+    assumed-rate stream, which is all a project without one supports."""
+    try:
+        layout = read_layout(conn)
+    except LayoutError as e:
+        logger.warning("%s: layout could not be read (%s); using assumed rate/channels", path, e)
+        layout = None
+    if layout is not None:
+        return _write_mixed_wav(path, conn, layout)
+    return _write_wav(path, conn, sample_rate, channels)
+
+
 def extract_audio(
     aup3_path: Path | str,
     output_path: Path | str | None = None,
@@ -554,7 +624,12 @@ def extract_audio(
     fully written, so a crash mid-extraction cannot leave a truncated file
     that looks complete.
 
-    `audio_format="wav"` needs nothing beyond the stdlib. "flac"/"mp3"
+    With a readable layout the output is the audible tracks mixed to mono
+    at the project's real rate (needs numpy); `sample_rate` and `channels`
+    apply only to a project without one.
+
+    `audio_format="wav"` needs nothing beyond the stdlib for a project
+    without a layout. "flac"/"mp3"
     transcode from that same WAV via `ffmpeg` on PATH — if it's missing,
     raises `FFmpegNotFoundError` rather than silently falling back to WAV.
 
@@ -598,7 +673,7 @@ def extract_audio(
         if audio_format == "wav":
             wav_tmp = target.with_name(target.name + ".tmp")
             try:
-                _write_wav(wav_tmp, conn, sample_rate, channels)
+                _write_project_wav(wav_tmp, conn, sample_rate, channels)
             except BaseException:
                 wav_tmp.unlink(missing_ok=True)
                 raise
@@ -619,7 +694,7 @@ def extract_audio(
         tmp_wav = Path(tmp_wav_name)
         final_tmp = target.with_name(target.name + ".tmp")
         try:
-            _write_wav(tmp_wav, conn, sample_rate, channels)
+            _write_project_wav(tmp_wav, conn, sample_rate, channels)
             proc = subprocess.run(
                 # `-f audio_format` names the muxer explicitly rather than
                 # letting ffmpeg guess it from `final_tmp`'s extension --

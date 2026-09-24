@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import random
 import shutil
+import sqlite3
 import statistics
 import subprocess
 from collections.abc import Callable, Sequence
@@ -30,7 +31,10 @@ from corpus.survey.sampling import ReservoirSampler
 from corpus.survey.walk import WalkStats, walk_files
 
 AUDIO_EXTENSIONS: frozenset[str] = frozenset(
-    {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".aiff", ".aif", ".opus"}
+    {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".aiff", ".aif", ".opus",
+     # An Audacity project: a SQLite database, not a stream ffmpeg reads.
+     # `_probe_duration_seconds` and `transcripts.audio.decode` read it directly.
+     ".aup3"}
 )
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
     {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp"}
@@ -159,7 +163,12 @@ def _probe_duration_seconds(
     """Run `ffprobe` against one file, returning its duration in seconds, or
     `None` if ffprobe can't read it (corrupt/unsupported/times out) — never
     raises. A module-level function so tests can monkeypatch it directly
-    without needing a real `ffprobe` binary or real media files."""
+    without needing a real `ffprobe` binary or real media files.
+
+    An Audacity project is read from its own layout instead: ffprobe cannot
+    open one, and a None here gives it the flat base deadline."""
+    if path.suffix.lower() == ".aup3":
+        return _aup3_duration_seconds(path)
     try:
         proc = subprocess.run(
             [
@@ -185,6 +194,23 @@ def _probe_duration_seconds(
         return float(proc.stdout.strip())
     except ValueError:
         return None
+
+
+def _aup3_duration_seconds(path: Path) -> float | None:
+    from corpus.connectors.aup3 import _connect_ro
+    from corpus.connectors.aup3_layout import LayoutError, read_layout
+
+    try:
+        conn = _connect_ro(path)
+    except sqlite3.Error:
+        return None
+    try:
+        layout = read_layout(conn)
+    except (LayoutError, sqlite3.Error):
+        return None
+    finally:
+        conn.close()
+    return layout.duration_s if layout is not None else None
 
 
 def run_media_survey(

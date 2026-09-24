@@ -437,3 +437,59 @@ def test_extract_audio_flac_with_real_ffmpeg(tmp_path: Path) -> None:
 def test_aup3_error_hierarchy() -> None:
     assert issubclass(UnsupportedSampleFormatError, Aup3Error)
     assert issubclass(FFmpegNotFoundError, Aup3Error)
+
+
+# ---------------------------------------------------------------------------
+# With the project's own layout (a saved project always has one)
+# ---------------------------------------------------------------------------
+
+
+def _stereo_project(path: Path, seconds: float = 1.0, rate: int = 8000) -> Path:
+    from tests.aup3_fixture import ClipSpec, TrackSpec, make_project, tone
+
+    n = round(seconds * rate)
+    return make_project(path, [
+        TrackSpec([ClipSpec(tone(n, 0.2))], rate=rate, channel=0, linked=3),
+        TrackSpec([ClipSpec(tone(n, 0.4))], rate=rate, channel=1, linked=0),
+    ])
+
+
+def test_the_document_reports_the_real_layout_not_assumptions(tmp_path: Path) -> None:
+    """Joined end to end, a stereo pair reads as twice its length; that was
+    every real project checked. The layout makes the numbers real."""
+    _stereo_project(tmp_path / "trip.aup3", seconds=2.0, rate=48000)
+
+    (doc,) = AupThreeConnector(source_type="recordings", path=tmp_path).load()
+    body = doc.raw["body"]
+    assert "Duration: 2s (2.0s)" in body
+    assert "Sample rate: 48000 Hz" in body
+    assert "Tracks: 2" in body
+    assert "Assumed" not in body
+    assert "corpus-transcribe" in body
+
+
+def test_an_unreadable_layout_falls_back_to_the_assumptions(tmp_path: Path) -> None:
+    path = _stereo_project(tmp_path / "trip.aup3")
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE project SET doc = X'7F'")
+    conn.commit()
+    conn.close()
+
+    (doc,) = AupThreeConnector(source_type="recordings", path=tmp_path).load()
+    body = doc.raw["body"]
+    assert "Assumed sample rate" in body
+    assert "layout could not be read" in body
+
+
+def test_extract_audio_writes_the_mixed_recording_at_its_real_rate(tmp_path: Path) -> None:
+    pytest.importorskip("numpy")
+    source = _stereo_project(tmp_path / "trip.aup3", seconds=0.5, rate=48000)
+
+    out = extract_audio(source)
+
+    with wave.open(str(out), "rb") as wf:
+        assert wf.getnchannels() == 1
+        assert wf.getframerate() == 48000
+        assert wf.getnframes() == 24000  # not 48000: the pair is mixed, not joined
+        first = struct.unpack("<h", wf.readframes(1))[0]
+    assert first == round(0.3 * 32767)

@@ -7,6 +7,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Audacity projects are transcribed.** `corpus-transcribe` now finds `.aup3`
+  files, mixes their audible tracks to mono at the project's real rate, and
+  transcribes them like any recording, so what is said in them is searchable
+  through a `transcripts` source. Their duration comes from the project, so
+  their deadline scales like any file's.
+- **`corpus.connectors.aup3_layout`** reads a project's layout (sample rate,
+  tracks, clip offsets, trims, mute/solo) from its binary-XML `project.doc`.
+  The `aup3` document now reports real duration, rate and tracks instead of
+  assuming 44100 Hz mono, which doubled the duration of every stereo project.
+  `extract_audio` writes the same mono mix. `sample_rate` / `channels` apply
+  only to a project whose layout cannot be read.
 - **`corpus.retriever.assemble_results()`** — the selection pass (source
   dedupe, the per-type diversity cap, backfill, truncation to `top_k`) is now a
   shared function rather than something each consumer reimplements. Hooks cover
