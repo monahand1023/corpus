@@ -35,6 +35,7 @@ import sqlite_vec
 
 from corpus.types import Chunk
 from corpus.util.fts_normalize import fts_terms, normalize_for_fts
+from corpus.util.sqlite_ro import connect_ro
 
 logger = logging.getLogger(__name__)
 
@@ -385,8 +386,7 @@ class ChunkStore:
             # mode=ro: SQLite refuses any write against this connection at the
             # OS/file level, as a second line of defense behind
             # _require_writable's explicit checks.
-            conn = sqlite3.connect(
-                f"file:{self._db_path.as_posix()}?mode=ro", uri=True, check_same_thread=False
+            conn = connect_ro(self._db_path, check_same_thread=False
             )
         else:
             conn = sqlite3.connect(self._db_path, check_same_thread=False)

@@ -40,6 +40,7 @@ from corpus.db.sqlite import ChunkStore
 from corpus.survey.sampling import ReservoirSampler
 from corpus.survey.stats import wilson_interval
 from corpus.survey.walk import WalkStats, walk_files
+from corpus.util.sqlite_ro import connect_ro
 
 # Extensions this module can extract a phrase from without any optional
 # extra installed — plain UTF-8-decodable text. Deliberately excludes
@@ -100,7 +101,7 @@ def _read_stored_embedding_dim(db_path: Path) -> int | None:
     dim-mismatch error over a value this module invented."""
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'embedding_dim'"

@@ -41,6 +41,7 @@ from corpus.eval.query_log_audit import (
     audit_query_log,
     cross_archive_overlap,
 )
+from corpus.util.sqlite_ro import connect_ro
 from corpus.verify import Coverage
 
 # An empty log younger than this is a fresh install; older is a writer that
@@ -209,7 +210,7 @@ def _all_keys(db_path: str) -> list[str]:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_ro(db_path)
     except sqlite3.Error:
         return []
     try:
@@ -229,7 +230,7 @@ def _document_total(db_path: str) -> int:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_ro(db_path)
     except sqlite3.Error:
         return 0
     try:

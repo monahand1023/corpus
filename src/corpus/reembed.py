@@ -42,6 +42,7 @@ from pathlib import Path
 
 import sqlite_vec
 
+from corpus.util.sqlite_ro import connect_ro
 from corpus.util.tokens import estimate_tokens
 
 Embed = Callable[[list[str]], list[list[float] | None]]
@@ -116,7 +117,7 @@ def reembed_plan(db_path: Path | str, *, new_dim: int) -> ReembedPlan:
     actually be sent, so it is an estimate and not a quote -- non-English text
     runs materially higher.
     """
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     conn.row_factory = sqlite3.Row
     try:
         total = conn.execute("SELECT count(*) AS c FROM chunks").fetchone()["c"]

@@ -26,12 +26,12 @@ ingest and re-running left 1.
 
 from __future__ import annotations
 
-import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpus.transcripts.quality import strip_caption_tail, subtitle_boilerplate
+from corpus.util.sqlite_ro import connect_ro
 from corpus.verify import Coverage, self_check
 
 # Read in batches so a large index does not have to fit in memory, and so a
@@ -111,7 +111,7 @@ def run_index_quality(
     )
 
     result = IndexQualityResult()
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         # A consumer repo holds several SQLite files -- a caption cache, a
         # sidecar, an embeddings copy -- and only one of them is the index.

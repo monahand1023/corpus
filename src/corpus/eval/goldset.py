@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from corpus.util.sqlite_ro import connect_ro
+
 # Sizes that look chosen by a person rather than produced by data. An answer
 # set landing exactly on one is weak evidence on its own; several sets sharing
 # one is strong evidence of a LIMIT in the labelling code.
@@ -442,7 +444,7 @@ def sqlite_lookup(db_path: Path | str) -> _KeyLookup:
     def lookup(keys: Sequence[str]) -> set[str]:
         found: set[str] = set()
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = connect_ro(db_path)
         except sqlite3.Error:
             return set(keys)
         try:
@@ -478,7 +480,7 @@ def sqlite_documents(
         return {}
     out: dict[str, str] = {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_ro(db_path)
     except sqlite3.Error:
         return {}
     try:

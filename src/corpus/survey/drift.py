@@ -20,11 +20,12 @@ it can show that it is not, which is the direction that matters here.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from corpus.util.sqlite_ro import connect_ro
 
 DEFAULT_SAMPLE = 200
 
@@ -84,7 +85,7 @@ def chunker_drift(
     stale content, and counting it as drift would make every growing archive
     look permanently out of date.
     """
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         stored: dict[str, str] = {
             row[0]: row[1]

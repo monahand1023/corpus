@@ -20,6 +20,7 @@ from pathlib import Path
 
 from corpus.cli._common import configure_logging, load_config_or_exit
 from corpus.rename import SourceNotFound, TargetExists, rename_source
+from corpus.util.sqlite_ro import connect_ro
 
 
 def main() -> int:
@@ -43,9 +44,8 @@ def main() -> int:
         print(f"error: database not found: {db_path}", file=sys.stderr)
         return 1
 
-    import sqlite3
 
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         count = conn.execute(
             "SELECT count(*) FROM chunks WHERE source_type = ?", (args.old,)

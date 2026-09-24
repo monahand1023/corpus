@@ -23,11 +23,11 @@ duplicate files.
 
 from __future__ import annotations
 
-import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from corpus.util.sqlite_ro import connect_ro
 from corpus.verify import Coverage
 
 
@@ -60,7 +60,7 @@ def find_duplicate_content(
     same file in two places, which is the case worth acting on.
     """
     report = DuplicateReport()
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         rows = conn.execute(
             "SELECT content_hash, source_type, source_key FROM chunks"
@@ -159,7 +159,7 @@ def duplicate_documents(
     `min_chunks` skips single-chunk documents: one shared passage is a stock
     sentence, not a copied file.
     """
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = connect_ro(db_path)
     try:
         rows = conn.execute("SELECT content_hash, source_key FROM chunks").fetchall()
     finally:

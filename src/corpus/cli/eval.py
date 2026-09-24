@@ -33,6 +33,7 @@ from corpus.eval.metrics import MetricSummary, QueryScore, aggregate, score_quer
 from corpus.eval.noise import METRICS, MetricSpread, gate_verdict, spread_report
 from corpus.retriever import Retriever
 from corpus.util.priority import DEFAULT_NICE, be_nice
+from corpus.util.sqlite_ro import connect_ro
 
 
 @dataclass(frozen=True)
@@ -157,7 +158,7 @@ def _all_source_keys(db_path: str | Path) -> list[str]:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_ro(db_path)
     except sqlite3.Error:
         return []
     try:
@@ -178,7 +179,7 @@ def _document_count(db_path: str | Path) -> int:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_ro(db_path)
     except sqlite3.Error:
         return 0
     try:
