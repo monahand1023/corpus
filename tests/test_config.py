@@ -177,12 +177,12 @@ def test_the_contextual_section_is_actually_read(tmp_path: Path) -> None:
     cfg_path = tmp_path / "corpus.toml"
     cfg_path.write_text(
         '[corpus]\ndb_path = "./x.db"\n\n'
-        "[contextual]\nmin_tokens = 260\nwindow_size = 12\n"
+        "[contextual]\nmin_tokens = 123\nwindow_size = 12\n"
     )
 
     config = CorpusConfig.load(cfg_path)
 
-    assert config.contextual.min_tokens == 260
+    assert config.contextual.min_tokens == 123
     assert config.contextual.window_size == 12
 
 
@@ -245,3 +245,35 @@ def test_a_valid_reference_regex_still_loads(tmp_path) -> None:
     pattern, source_type = loaded.compiled_references()[0]
     assert pattern.search("see TICKET-42")
     assert source_type == "jira"
+
+
+def test_the_contextual_defaults_are_the_measured_ones() -> None:
+    """The contextualizer's floor was measured and raised to 260, but the
+    config kept the old 50 -- and the CLI always passes the config value, so
+    the measured floor never applied. The defaults must be one value, not two.
+    """
+    from corpus.config import ContextualConfig
+    from corpus.contextual.contextualizer import DEFAULT_MIN_TOKENS, DEFAULT_MODEL
+
+    assert ContextualConfig().min_tokens == DEFAULT_MIN_TOKENS
+    assert ContextualConfig().model == DEFAULT_MODEL
+
+
+def test_a_source_floor_of_zero_is_honoured(tmp_path: Path) -> None:
+    """`context_min_tokens = 0` means contextualize every chunk of that source.
+    Read with `or`, a 0 fell through to the global floor."""
+    from corpus.cli.contextualize import _min_tokens_for
+
+    cfg_path = tmp_path / "corpus.toml"
+    cfg_path.write_text(
+        '[corpus]\ndb_path = "./x.db"\n\n'
+        '[[sources]]\nname = "all"\ntype = "text"\npath = "."\n'
+        "context_min_tokens = 0\n\n"
+        '[[sources]]\nname = "default"\ntype = "text"\npath = "."\n'
+    )
+    config = CorpusConfig.load(cfg_path)
+
+    assert _min_tokens_for(config) == {
+        "all": 0,
+        "default": config.contextual.min_tokens,
+    }

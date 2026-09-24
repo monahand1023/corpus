@@ -23,6 +23,7 @@ import sys
 import time
 
 from corpus.cli._common import configure_logging, load_config_or_exit
+from corpus.config import CorpusConfig
 from corpus.contextual.batch_runner import BatchContextualizer
 from corpus.contextual.contextualizer import (
     estimate_chunk_cost_tokens,
@@ -32,6 +33,18 @@ from corpus.credentials import resolve_dotenv
 from corpus.db.sqlite import ChunkStore
 from corpus.embedder.factory import make_embedder
 from corpus.util.priority import DEFAULT_NICE, be_nice
+
+
+def _min_tokens_for(config: CorpusConfig) -> dict[str, int]:
+    """Each source's floor: its own `context_min_tokens` (0 included), else the global one."""
+    return {
+        s.name: (
+            s.context_min_tokens
+            if s.context_min_tokens is not None
+            else config.contextual.min_tokens
+        )
+        for s in config.sources
+    }
 
 
 def _estimate(store: ChunkStore, source: str, min_tokens: int) -> tuple[int, int, int]:
@@ -143,10 +156,7 @@ def main() -> int:
             )
             return 0
 
-        min_tokens_for = {
-            s.name: (s.context_min_tokens or config.contextual.min_tokens)
-            for s in config.sources
-        }
+        min_tokens_for = _min_tokens_for(config)
 
         if args.dry_run:
             print(f"{'source':<28}{'chunks':>10}{'in (Mtok)':>12}{'out (Mtok)':>12}")

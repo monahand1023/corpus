@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from corpus.contextual.contextualizer import DEFAULT_MIN_TOKENS, DEFAULT_MODEL
 from corpus.types import SOURCE_TYPE_PATTERN
 
 DEFAULT_CONFIG_PATH = Path("corpus.toml")
@@ -157,9 +158,10 @@ class ContextualConfig(BaseModel):
     does on their behalf.
     """
 
-    model: str = "claude-haiku-4-5-20251001"
+    model: str = DEFAULT_MODEL
     # Global floor; a source can raise or lower it via `context_min_tokens`.
-    min_tokens: int = 50
+    # The default is the contextualizer's measured one, not a second copy.
+    min_tokens: int = DEFAULT_MIN_TOKENS
     # Chunks per request. Each request re-sends the parent document, so a
     # larger window means fewer paid document copies — bounded by the model's
     # output limit, since every chunk in the window needs a context back.
