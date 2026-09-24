@@ -18,6 +18,7 @@ the container header and does not decode.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from corpus.transcripts.run import below_duration_floor, partition_by_duration
@@ -109,11 +110,10 @@ def test_the_dry_run_hours_exclude_the_files_the_floor_removed(tmp_path, capsys,
     monkeypatch.setattr(
         mod, "_duration_probe", lambda: (lambda p: durations[Path(p).name])
     )
-    monkeypatch.setattr(mod, "default_backend_or_none", lambda: None, raising=False)
 
     mod._dry_run(tmp_path, tmp_path / "absent.db", (), 15.0, Settings(), 15.0)
     out = capsys.readouterr().out
 
-    assert "1 skipped" in out or "1 " in out
+    assert re.search(r"under 15s\s+: 1 skipped", out), out
     # 2 hours of long clips, not 2.0008 with the 3-second one folded in.
     assert "~2.0 h" in out, out

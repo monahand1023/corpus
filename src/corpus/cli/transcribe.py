@@ -32,13 +32,6 @@ from corpus.util.priority import DEFAULT_NICE, be_nice
 DEFAULT_DB = "data/transcripts.db"
 
 
-def _humanise_hours(seconds: float) -> str:
-    hours = seconds / 3600
-    if hours < 1:
-        return f"{seconds / 60:.0f} min"
-    return f"{hours:.1f} h"
-
-
 def _duration_probe() -> Callable[[Path], float | None]:
     """ffprobe-backed duration lookup, or a no-op when ffprobe is missing.
 
@@ -513,7 +506,7 @@ def main_argv(argv: list[str]) -> int:
         f"\n  no speech   : {human_count(stats.empty)}"
         f"\n  failed      : {human_count(stats.failed)}"
         f"\n  skipped     : {human_count(stats.skipped_done)} (done by an earlier run)"
-        f"\n  audio seen  : {_humanise_hours(stats.seconds_of_audio)}"
+        f"\n  audio seen  : {_format_duration(stats.seconds_of_audio / 3600).lstrip("~")}"
     )
     for path, error in stats.errors[:5]:
         print(f"    ERR {Path(path).name}: {error}")

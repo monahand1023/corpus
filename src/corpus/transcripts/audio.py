@@ -47,12 +47,6 @@ VAD_FRAME = 512
 # losing a recording. See the module docstring for the 0.145/0.144 measurement.
 VAD_SPEECH_PROB = 0.2
 
-# Below this, for the WHOLE file, the audio is treated as true silence and
-# skipped entirely. Deliberately far below the speech threshold: this is the
-# one verdict here that discards a file without a model ever running, so it
-# only fires when there is nothing at all.
-VAD_SILENCE_MAX_PROB = 0.05
-
 # A region shorter than this is a click or a breath, not speech.
 VAD_MIN_SPEECH_S = 0.25
 # Gaps shorter than this are pauses inside one utterance, not boundaries.

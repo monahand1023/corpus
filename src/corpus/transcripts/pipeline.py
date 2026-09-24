@@ -37,7 +37,6 @@ from corpus.transcripts import quality
 from corpus.transcripts.segment import (
     OVERLAP_S,
     WINDOW_S,
-    file_timeout,
     fixed_windows,
     join_windows,
     windows_for_regions,
@@ -65,6 +64,10 @@ class Settings:
     expected_languages: frozenset[str] = frozenset()
     window_s: float = WINDOW_S
     overlap_s: float = OVERLAP_S
+    # Below this peak speech probability, for the WHOLE file, the audio is
+    # treated as true silence and skipped. Deliberately far below the speech
+    # threshold: the one verdict that discards a file without a model ever
+    # running, so it only fires when there is nothing at all.
     silence_max_prob: float = 0.05
     max_repeat_share: float = 0.9
     max_looping_share: float = quality.DEFAULT_MAX_LOOPING_SHARE
@@ -382,6 +385,5 @@ __all__ = [
     "DroppedWindow",
     "Outcome",
     "Settings",
-    "file_timeout",
     "transcribe_file",
 ]
