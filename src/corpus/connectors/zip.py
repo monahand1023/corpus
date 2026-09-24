@@ -181,6 +181,7 @@ from corpus.connectors.discovery import default_excludes_suppressed, discover_fi
 from corpus.connectors.music import MUSIC_EXTENSIONS
 from corpus.connectors.registry import CONNECTOR_REGISTRY, DEFAULT_GLOBS
 from corpus.types import SourceDocument
+from corpus.util.exclude import CORROBORATED_BUILD_DIRS, DEPENDENCY_DIR_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -434,32 +435,14 @@ def _is_archive_noise(member_name: str) -> bool:
 # directory containing the flagged folder — a corroborating signal that this
 # really is that ecosystem's build output, not a same-named personal folder
 # that happens to sit alone in the archive. See `_is_dependency_noise`.
-_UNAMBIGUOUS_DEPENDENCY_DIRS = frozenset(
-    {
-        "node_modules",
-        "bower_components",
-        "site-packages",
-        "vendor",
-        ".git",
-        ".svn",
-        ".hg",
-        "__pycache__",
-        ".tox",
-        ".venv",
-        "venv",
-        ".next",
-        ".nuxt",
-    }
-)
+# Shared with discovery (`corpus.util.exclude`), plus `vendor`: safe to drop
+# inside an archive, too costly on a live filesystem.
+_UNAMBIGUOUS_DEPENDENCY_DIRS = DEPENDENCY_DIR_NAMES | frozenset({"vendor"})
 
 # Directory name (lowercase) -> marker filenames (lowercase) whose presence
 # anywhere at or above that directory in the SAME archive corroborates it as
 # build output rather than a same-named personal folder.
-_CORROBORATED_BUILD_DIRS: dict[str, frozenset[str]] = {
-    "dist": frozenset({"package.json"}),
-    "build": frozenset({"package.json", "pyproject.toml", "setup.py"}),
-    "target": frozenset({"cargo.toml", "pom.xml"}),
-}
+_CORROBORATED_BUILD_DIRS = CORROBORATED_BUILD_DIRS
 
 # Minified/compiled leaf artifacts: never hand-authored content, matched on
 # the basename regardless of which directory they're in — a `dist/app.min.js`

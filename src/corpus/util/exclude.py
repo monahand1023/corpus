@@ -18,17 +18,10 @@ them is its own bug — which is exactly what motivated pulling this out of
     from its counts and told the user so. That claim was false — this
     module, and `discover_files` using it, is what makes it true.
 
-`corpus.connectors.zip` (archive members, not a live directory) keeps its
-own, deliberately broader list rather than importing this one — see that
-module's docstring's "Dependency and build-output noise" section for why it
-can safely be more aggressive: everything it filters is already inside an
-archive someone chose to keep, not a raw personal filesystem. Its
-`_CORROBORATED_BUILD_DIRS` mapping is, by inspection, identical to
-`CORROBORATED_BUILD_DIRS` below; the two are not literally shared (zip.py
-was under concurrent modification when this module was written), so a
-change to one should be checked against the other — see `tests/test_zip_connector.py`
-and `tests/test_survey_walk.py`/`tests/test_discovery.py` for the coverage
-that would need updating together.
+`corpus.connectors.zip` (archive members, not a live directory) uses
+`DEPENDENCY_DIR_NAMES` and `CORROBORATED_BUILD_DIRS` from here, plus `vendor`,
+which it can afford to exclude because an archive is not a raw personal
+filesystem (see below).
 
 Split into two tiers, matching the same reasoning `corpus.connectors.zip`
 already uses for archive members:
@@ -66,7 +59,9 @@ from pathlib import Path
 # never personal content, and that otherwise dominate a walk to the point of
 # hiding the signal (a `node_modules` tree alone can be 100k+ files).
 # Matched on the exact basename, case-insensitively.
-DEFAULT_EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
+# Dependency, package and VCS directories. Shared with
+# `corpus.connectors.zip`, which adds `vendor` for archive members.
+DEPENDENCY_DIR_NAMES: frozenset[str] = frozenset(
     {
         ".git",
         ".svn",
@@ -80,6 +75,11 @@ DEFAULT_EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
         "venv",
         ".next",
         ".nuxt",
+    }
+)
+
+DEFAULT_EXCLUDED_DIR_NAMES: frozenset[str] = DEPENDENCY_DIR_NAMES | frozenset(
+    {
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
@@ -97,9 +97,8 @@ DEFAULT_EXCLUDED_DIR_SUFFIXES: tuple[str, ...] = (".photoslibrary", ".photoslibr
 
 # Directory name (lowercase) -> marker filenames (lowercase) whose presence
 # in an ancestor directory corroborates it as build output rather than a
-# same-named personal folder. See `has_corroborating_manifest`. Values kept
-# identical to `corpus.connectors.zip._CORROBORATED_BUILD_DIRS` by
-# inspection, not by import — see the module docstring.
+# same-named personal folder. See `has_corroborating_manifest`. Also used by
+# `corpus.connectors.zip` for archive members.
 CORROBORATED_BUILD_DIRS: dict[str, frozenset[str]] = {
     "dist": frozenset({"package.json"}),
     "build": frozenset({"package.json", "pyproject.toml", "setup.py"}),
