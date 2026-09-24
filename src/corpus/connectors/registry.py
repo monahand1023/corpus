@@ -9,10 +9,11 @@ To add a new source type:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from corpus.config import SourceConfig
-from corpus.connectors.markdown import MarkdownChunker, MarkdownConnector
+from corpus.connectors.markdown import MarkdownChunker
 
 # Default glob per connector type. Single source of truth: the factories below
 # read it, and `corpus.util.autodetect` scans a folder with it to work out which
@@ -50,14 +51,77 @@ class _ConnectorFactory(Protocol):
     def __call__(self, cfg: SourceConfig) -> tuple[Any, Any]: ...
 
 
-def _build_markdown(cfg: SourceConfig) -> tuple[MarkdownConnector, MarkdownChunker]:
-    connector = MarkdownConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["markdown"],
-    )
-    chunker = MarkdownChunker(source_type=cfg.name)
-    return connector, chunker
+
+@dataclass(frozen=True)
+class _FileType:
+    """A connector that takes (source_type, path, glob) and is chunked as
+    markdown -- most of them. `extra` is (probe import, extra name, pip
+    package) for one that needs an optional dependency."""
+
+    module: str
+    cls: str
+    label: str
+    extra: tuple[str, str, str] | None = None
+    kwargs: tuple[tuple[str, Any], ...] = ()
+
+
+_FILE_TYPES: dict[str, _FileType] = {
+    "markdown": _FileType("corpus.connectors.markdown", "MarkdownConnector", "Markdown"),
+    "text": _FileType("corpus.connectors.text", "TextConnector", "Text"),
+    "pdf": _FileType("corpus.connectors.pdf", "PdfConnector", "PDF", ("pypdf", "pdf", "pypdf")),
+    "html": _FileType(
+        "corpus.connectors.html", "HtmlConnector", "HTML", ("trafilatura", "html", "trafilatura")
+    ),
+    "docx": _FileType(
+        "corpus.connectors.docx", "DocxConnector", "Docx", ("docx", "docx", "python-docx")
+    ),
+    "xls": _FileType("corpus.connectors.xls", "XlsConnector", "Xls", ("xlrd", "xls", "xlrd")),
+    "xlsx": _FileType(
+        "corpus.connectors.xlsx", "XlsxConnector", "Xlsx", ("openpyxl", "xlsx", "openpyxl")
+    ),
+    "rtf": _FileType(
+        "corpus.connectors.rtf", "RtfConnector", "Rtf", ("striprtf.striprtf", "rtf", "striprtf")
+    ),
+    "pptx": _FileType(
+        "corpus.connectors.pptx", "PptxConnector", "Pptx", ("pptx", "pptx", "python-pptx")
+    ),
+    # stdlib only -- see csv_.py for why pandas was not added.
+    "csv": _FileType("corpus.connectors.csv_", "CsvConnector", "CSV"),
+    # Same class, tab default (still sniffed per file), and its own glob so a
+    # folder of `.tsv` exports is found without a hand-written override.
+    "tsv": _FileType(
+        "corpus.connectors.csv_", "CsvConnector", "TSV", kwargs=(("default_delimiter", "\t"),)
+    ),
+    # plistlib is stdlib, so a Contacts backup needs no extra.
+    "abcdp": _FileType("corpus.connectors.abcdp", "AbcdpConnector", "Abcdp"),
+}
+
+
+def _file_builder(type_name: str, spec: _FileType) -> _ConnectorFactory:
+    def build(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
+        if spec.extra is not None:
+            probe, extra, package = spec.extra
+            try:
+                # `__import__`, not importlib: the import statement's own hook,
+                # which is what a missing package is simulated through in tests.
+                __import__(probe)
+            except ImportError as e:
+                raise ImportError(
+                    f"{spec.label} connector requires the [{extra}] extra. "
+                    f"Install with `pip install corpus-rag[{extra}]` or `uv add {package}`."
+                ) from e
+        connector_cls = getattr(__import__(spec.module, fromlist=[spec.cls]), spec.cls)
+        connector = connector_cls(
+            source_type=cfg.name,
+            path=cfg.path,
+            glob=cfg.glob or DEFAULT_GLOBS[type_name],
+            **dict(spec.kwargs),
+        )
+        return connector, MarkdownChunker(source_type=cfg.name)
+
+    build.__name__ = f"_build_{type_name}"
+    return build
+
 
 
 def _build_transcripts(cfg: SourceConfig) -> tuple[Any, Any]:
@@ -78,171 +142,24 @@ def _build_transcripts(cfg: SourceConfig) -> tuple[Any, Any]:
     return connector, TranscriptChunker(source_type=cfg.name)
 
 
-def _build_text(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    from corpus.connectors.text import TextConnector
-
-    connector = TextConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["text"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_pdf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import pypdf  # noqa: F401
-
-        from corpus.connectors.pdf import PdfConnector
-    except ImportError as e:
-        raise ImportError(
-            "PDF connector requires the [pdf] extra. "
-            "Install with `pip install corpus-rag[pdf]` or `uv add pypdf`."
-        ) from e
-    connector = PdfConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["pdf"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_html(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import trafilatura  # noqa: F401
-
-        from corpus.connectors.html import HtmlConnector
-    except ImportError as e:
-        raise ImportError(
-            "HTML connector requires the [html] extra. "
-            "Install with `pip install corpus-rag[html]` or `uv add trafilatura`."
-        ) from e
-    connector = HtmlConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["html"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_docx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import docx  # noqa: F401
-
-        from corpus.connectors.docx import DocxConnector
-    except ImportError as e:
-        raise ImportError(
-            "Docx connector requires the [docx] extra. "
-            "Install with `pip install corpus-rag[docx]` or `uv add python-docx`."
-        ) from e
-    connector = DocxConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["docx"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_xls(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import xlrd  # noqa: F401
-
-        from corpus.connectors.xls import XlsConnector
-    except ImportError as e:
-        raise ImportError(
-            "Xls connector requires the [xls] extra. "
-            "Install with `pip install corpus-rag[xls]` or `uv add xlrd`."
-        ) from e
-    connector = XlsConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["xls"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_xlsx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import openpyxl  # noqa: F401
-
-        from corpus.connectors.xlsx import XlsxConnector
-    except ImportError as e:
-        raise ImportError(
-            "Xlsx connector requires the [xlsx] extra. "
-            "Install with `pip install corpus-rag[xlsx]` or `uv add openpyxl`."
-        ) from e
-    connector = XlsxConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["xlsx"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_rtf(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import striprtf.striprtf  # noqa: F401
-
-        from corpus.connectors.rtf import RtfConnector
-    except ImportError as e:
-        raise ImportError(
-            "Rtf connector requires the [rtf] extra. "
-            "Install with `pip install corpus-rag[rtf]` or `uv add striprtf`."
-        ) from e
-    connector = RtfConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["rtf"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_pptx(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    try:
-        import pptx  # noqa: F401
-
-        from corpus.connectors.pptx import PptxConnector
-    except ImportError as e:
-        raise ImportError(
-            "Pptx connector requires the [pptx] extra. "
-            "Install with `pip install corpus-rag[pptx]` or `uv add python-pptx`."
-        ) from e
-    connector = PptxConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["pptx"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_csv(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    # No import guard, unlike the factories above: this connector uses only
-    # the stdlib `csv` module — see csv_.py's module docstring for why
-    # pandas was deliberately not added.
-    from corpus.connectors.csv_ import CsvConnector
-
-    connector = CsvConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["csv"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_tsv(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    # Same connector class as `csv`, just a tab default (still auto-detected
-    # per file via csv.Sniffer — see csv_.py) and its own default glob so a
-    # folder of `.tsv` exports is discovered without hand-writing a
-    # `[[sources]]` glob override.
-    from corpus.connectors.csv_ import CsvConnector
-
-    connector = CsvConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["tsv"],
-        default_delimiter="\t",
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
 def _build_aup3(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
@@ -263,17 +180,6 @@ def _build_aup3(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
     return connector, MarkdownChunker(source_type=cfg.name)
 
 
-def _build_abcdp(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
-    # No import guard: plistlib is stdlib, so an Apple Contacts backup needs
-    # no optional extra.
-    from corpus.connectors.abcdp import AbcdpConnector
-
-    connector = AbcdpConnector(
-        source_type=cfg.name,
-        path=cfg.path,
-        glob=cfg.glob or DEFAULT_GLOBS["abcdp"],
-    )
-    return connector, MarkdownChunker(source_type=cfg.name)
 
 
 def _build_music(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
@@ -323,21 +229,10 @@ def _build_zip(cfg: SourceConfig) -> tuple[Any, MarkdownChunker]:
 
 
 CONNECTOR_REGISTRY: dict[str, _ConnectorFactory] = {
-    "markdown": _build_markdown,
-    "text": _build_text,
-    "pdf": _build_pdf,
-    "html": _build_html,
-    "docx": _build_docx,
-    "xls": _build_xls,
-    "xlsx": _build_xlsx,
-    "rtf": _build_rtf,
-    "abcdp": _build_abcdp,
+    **{name: _file_builder(name, spec) for name, spec in _FILE_TYPES.items()},
     "music": _build_music,
     "olm": _build_olm,
     "zip": _build_zip,
-    "pptx": _build_pptx,
-    "csv": _build_csv,
-    "tsv": _build_tsv,
     "aup3": _build_aup3,
     "transcripts": _build_transcripts,
 }
