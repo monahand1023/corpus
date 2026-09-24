@@ -171,3 +171,25 @@ def test_an_invalid_name_is_refused(tmp_path):
     db = _store(tmp_path, {"old": 1})
     with pytest.raises(ValueError):
         rename_source(db, "old", "Not A Valid Name")
+
+
+def test_the_yield_baseline_follows_the_rename(tmp_path):
+    """`source_yield` is keyed by source_type too. Left behind, the renamed
+    source's next ingest had no baseline -- no drop-in-yield warning, no
+    skip-rise check, no recorded path -- and the old row lingered for a
+    source that no longer exists."""
+    db = _store(tmp_path, {"old": 2})
+    store = ChunkStore(db, embedding_dim=DIM)
+    store.record_yield("old", documents=2, chunks=2, source_path="/archive", skipped=1)
+    store.close()
+
+    rename_source(db, "old", "new")
+
+    store = ChunkStore(db, embedding_dim=DIM, read_only=True)
+    try:
+        assert store.last_yield("new") == (2, 2)
+        assert store.last_skipped("new") == 1
+        assert store.last_source_path("new") == "/archive"
+        assert store.last_yield("old") is None
+    finally:
+        store.close()

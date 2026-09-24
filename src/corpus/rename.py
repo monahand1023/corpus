@@ -137,6 +137,16 @@ def rename_source(db_path: Path | str, old: str, new: str) -> int:
             "UPDATE summaries SET source_type = ? WHERE source_type = ?",
             (new, old),
         )
+        # The ingest baseline (yield, skips, path) is keyed by name as well;
+        # left behind, the renamed source's next ingest has nothing to compare
+        # against. A database older than the table has nothing to move.
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_yield'"
+        ).fetchone():
+            conn.execute(
+                "UPDATE source_yield SET source_type = ? WHERE source_type = ?",
+                (new, old),
+            )
         conn.commit()
         return len(rows)
     finally:
