@@ -299,40 +299,19 @@ corpus-migrate-fts --db archive/corpus.db      # rebuild the FTS index after a s
 
 ## corpus-index: point it at a folder
 
-`corpus-index` is the one-command path from "here's a messy folder" to
-"it's searchable" — the layer above `corpus-survey` and `corpus-ingest
---path` that does not require knowing either exists:
+The one-command path from "here's a messy folder" to "it's searchable":
 
 ```bash
 corpus-index ~/Downloads/export
 ```
 
-It surveys the directory (reusing `corpus-survey census`), then prints,
-**before touching anything**:
-
-- **the gap** — file types corpus has no connector for, with counts and
-  sizes. This is deliberately the first thing printed: it's the single most
-  useful fact about a real directory, and a user should never have to ask
-  for it separately.
-- **noise** — how many directories (`node_modules`, `.git`, caches,
-  `.photoslibrary` bundles, ...) were excluded by default, plus any
-  loose-file noise (`.DS_Store`, minified JS, ...) found alongside real
-  content.
-- **the plan** — exactly which connectors will run over which files, with
-  per-source file counts, sizes, and an estimated token count. Calibrated
-  per format from a real, measured corpus rather than a flat file-size/4
-  guess — a compressed container format like PDF or DOCX extracts to a
-  small fraction of its file size (packed with images, fonts, XML
-  scaffolding), so a flat guess overstated real PDF-heavy sources by
-  roughly 400x in practice. Still an estimate, not the embedder's real
-  tokenizer count, and rounded up rather than down when uncertain — meant
-  to catch a real surprise before it happens without inventing a fake one.
-- optionally, with `--check-overlap corpus.db`, an estimate of how much of
-  the directory is already indexed somewhere else (reusing `corpus-survey
-  overlap`) — so you can skip paying to re-embed content you already have.
-
-Nothing is written or ingested until you confirm (`[y/N]`), pass `--yes`, or
-until you decide `--dry-run` is enough and stop there:
+It surveys the directory, then prints **before touching anything**: the
+**gap** (file types corpus cannot index, first, because it is the most useful
+fact about a real directory), the **noise** it excluded (`node_modules`, `.git`,
+caches, ...), and the **plan** (which connectors run over which files, with a
+token estimate calibrated per format, since a PDF extracts to a tiny fraction
+of its file size). `--check-overlap corpus.db` also estimates how much is
+already indexed elsewhere.
 
 ```
 corpus-index: /Users/you/Downloads/export
@@ -361,44 +340,11 @@ Plan — sources that would be written to corpus.toml and ingested
 Write these sources to corpus.toml and ingest? [y/N]
 ```
 
-(Illustrative numbers — run it against your own directory. Note how little
-the 18.4 MB of PDFs actually costs to embed compared to the markdown, even
-though it's a bigger source by file size — that gap is exactly what a flat
-file-size/4 estimate used to hide.)
-
-Confirmed sources are **merged into corpus.toml** (`[[sources]]` blocks are
-appended, existing ones are never touched), not ingested transiently — a
-one-off ingest nobody can repeat is a trap, since re-running the same
-command is how you pick up files added or changed later. Re-running
-`corpus-index` on a directory you already indexed is a no-op on the config
-(reported as "already configured") and just re-ingests, picking up changes.
-
-Source names follow the same folder-basename namespacing as `corpus-ingest
---path` (see below) — `export_pdf`, not `pdf` — but because `corpus-index`
-*persists* sources across runs, two differently-located folders sharing a
-basename (`~/Work/Inbox` and `~/Personal/Inbox`) can now actually collide in
-one corpus.toml, which the transient `--path` mode never had to worry
-about. `corpus-index` refuses that merge outright rather than guessing which
-folder should win — deleting the wrong folder's chunks via `source_type`-scoped
-orphan pruning is a real data-loss footgun — and tells you to pass
-`--name-prefix` or edit corpus.toml by hand.
-
-The noise directories excluded from the plan's counts above are excluded
-from the real ingest too — every file connector applies the identical
-default exclusion when it actually reads a source's files, so "excluded
-from the plan, not ingested" is a real guarantee. **Known limitation:**
-`--no-default-excludes`/`--exclude PATTERN` change only this preview — there
-is currently no per-source way to turn off default exclusion at ingest time
-from `corpus.toml`. If you genuinely need a vendored/build tree indexed,
-point a source's `path` directly at that subdirectory (exclusion only ever
-prunes a directory encountered *during* a walk, never the configured root
-itself). If you're upgrading from a version where this wasn't yet enforced
-and a source previously picked up files inside what's now an excluded
-directory, expect those chunks to be pruned as orphans on the next
-`corpus-index`/`corpus-ingest` run — the existing blast-radius guard
-(`[pruning]` in corpus.toml) refuses a drop over 20% of a source rather than
-silently deleting it, so a large prune will ask you to confirm with
-`--prune-anyway` instead of happening invisibly.
+Nothing is written until you confirm, pass `--yes`, or stop at `--dry-run`.
+Confirmed sources are appended to `corpus.toml` (existing ones are never
+touched), so re-running the command picks up later changes. Name collisions,
+exclusion behaviour and the estimate's method:
+[`docs/indexing.md`](docs/indexing.md).
 
 ## corpus-transcribe: speech into the index
 
@@ -571,53 +517,23 @@ The `hash` embedder is a **reproducibility substrate, not a semantic-quality mod
 
 CI runs this same keyless flow as a regression gate (`eval-gate` in `.github/workflows/ci.yml`): it fails the build if the sample corpus's recall@5 or nDCG@5 drops below the floors in `examples/sample_corpus/thresholds.json` — see [docs/eval.md](docs/eval.md#ci-gate-phase-3) for details.
 
-Write your own queries in any Python file that defines `EVAL_QUERIES`, then pass `--queries path/to/your_queries.py`:
-
-```python
-# my_queries.py
-from dataclasses import dataclass, field
-
-@dataclass(frozen=True)
-class EvalQuery:
-    query: str
-    expected_keys: list[str] = field(default_factory=list)
-    source_filter: list[str] | None = None
-    source_type: str | None = None   # bucket tag for the per-source-type breakdown
-    note: str = ""
-
-EVAL_QUERIES = [
-    EvalQuery(
-        query="how does the payment flow work?",
-        expected_keys=["payment-design-doc"],
-        source_type="doc",
-        note="paraphrased to stress semantic retrieval",
-    ),
-    # add more...
-]
-```
+Write your own known-answer queries in any Python file that defines
+`EVAL_QUERIES` (the `EvalQuery` schema, writing tips and negative queries are in
+[`docs/eval.md`](docs/eval.md#writing-queries)), then:
 
 ```sh
 corpus-eval --queries my_queries.py --top-k 5     # baseline
 corpus-eval --queries my_queries.py --rerank      # with the BGE reranker
-corpus-eval --queries my_queries.py --no-hybrid   # vector-only baseline
-corpus-eval --queries my_queries.py --compare     # metric x config table (hybrid vs vector-only vs +rerank)
+corpus-eval --queries my_queries.py --compare     # hybrid vs vector-only vs +rerank in one table
+corpus-eval --queries my_queries.py --repeat 5    # noise floor: hosted embeddings are not bit-reproducible
 corpus-eval --queries my_queries.py --json        # structured output for tooling / CI
 ```
 
-`--compare` runs the whole query set under several retrieval configs in one invocation:
-
-```
-=== Config comparison (top_k=5) ===
-  config             recall      mrr     ndcg
-  hybrid              1.000    0.865    0.898
-  vector-only         0.933    0.838    0.861
-```
-
-**Finding:** on this corpus, hybrid beats vector-only on all three metrics — recall 1.000 vs. 0.933, MRR 0.865 vs. 0.838, nDCG@5 0.898 vs. 0.861 — so fusing BM25 with vectors earns its place even on a purely lexical `hash` embedder ([full writeup](docs/eval.md#results)).
-
-Tips: paraphrase away from doc titles to stress semantic retrieval on a real embedder (the shipped sample-corpus queries deliberately do the opposite, since the `hash` embedder has only lexical overlap to work with); list multiple `expected_keys` when several docs are valid answers; add a few negative queries (empty `expected_keys`) to confirm the corpus correctly fails on absent topics.
-
-See [`docs/eval.md`](docs/eval.md) for the full methodology — precise metric definitions, the `EvalQuery` schema, and reading the reports and `--json` shape. New to evals entirely? [`docs/understanding-evals.md`](docs/understanding-evals.md) explains RAG and evaluation from scratch (no prior knowledge assumed).
+On the sample corpus, hybrid beats vector-only on all three metrics, so fusing
+BM25 with vectors earns its place even on the lexical `hash` embedder
+([results](docs/eval.md#results)). New to evals entirely?
+[`docs/understanding-evals.md`](docs/understanding-evals.md) explains RAG and
+evaluation from scratch.
 
 ## Generation quality (LLM-as-judge)
 
@@ -708,6 +624,7 @@ A database or a real `corpus.toml` inside `corpus`'s own package directory or re
 | [`docs/configuration.md`](docs/configuration.md) | Every `corpus.toml` setting + env var, including the Voyage-vs-Gemini embedder choice |
 | [`docs/mcp_integration.md`](docs/mcp_integration.md) | Claude Code + Claude Desktop wiring, all 7 tools, the investigation pattern |
 | [`docs/adding_a_source.md`](docs/adding_a_source.md) | Walkthrough for writing a custom connector |
+| [`docs/indexing.md`](docs/indexing.md) | `corpus-index` in full: the gap/noise/plan report, how the token estimate is calibrated, source naming and collisions, exclusions |
 | [`docs/transcription.md`](docs/transcription.md) | Running `corpus-transcribe`: the dry run, the duration floor, re-filtering after a threshold change, interrupting, backends, Audacity projects |
 | [`docs/transcript_quality.md`](docs/transcript_quality.md) | Filtering invented text out of machine transcripts — why confidence and voice-activity detection both fail as quality gates, and the four signals that work |
 | [`docs/testing.md`](docs/testing.md) | **How this project is tested, and what each layer actually proves** — unit / smoke / eval / judge, plus the verification layer that asks whether a check could have failed at all |
