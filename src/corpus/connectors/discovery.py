@@ -172,22 +172,18 @@ def _excluded(rel: PurePath, name: str, patterns: Sequence[str]) -> bool:
     return False
 
 
-def discover_files(
-    root: Path,
-    glob: str,
-    use_default_excludes: bool = True,
-    exclude: Sequence[str] = (),
-) -> Iterator[Path]:
+def discover_files(root: Path, glob: str) -> Iterator[Path]:
     """Yield regular files under `root` matching `glob`, excluding symlinks,
     any path that resolves outside `root`, and — by default — anything under
     a well-known noise directory (see the module docstring and
     `corpus.util.exclude`).
 
-    `exclude` is the SOURCE's own list, from `corpus.toml`. It exists so the
-    documents `corpus-survey duplicates` names as removable can actually be
-    removed: naming them while offering no way to act was the same defect as
-    a setting documented in three places and read in none."""
-    effective_use_default_excludes = use_default_excludes and not _suppress_default_excludes.get()
+    The source's own `exclude` list (from `corpus.toml`) applies through
+    `source_excludes`, and the default exclusion is lifted with
+    `default_excludes_suppressed`: both reach every connector's call without
+    a parameter on each constructor."""
+    use_default_excludes = not _suppress_default_excludes.get()
+    source_exclude = _source_excludes.get()
     root = root.resolve()
     for path in sorted(root.glob(glob)):
         if path.is_symlink():
@@ -199,13 +195,10 @@ def discover_files(
         if resolved != root and root not in resolved.parents:
             logger.warning("skipping path outside source root: %s", path)
             continue
-        if effective_use_default_excludes and _is_under_excluded_dir(resolved, root):
+        if use_default_excludes and _is_under_excluded_dir(resolved, root):
             logger.debug("skipping file under excluded noise directory: %s", path)
             continue
-        effective_exclude = tuple(exclude) or _source_excludes.get()
-        if effective_exclude and _excluded(
-            resolved.relative_to(root), path.name, effective_exclude
-        ):
+        if source_exclude and _excluded(resolved.relative_to(root), path.name, source_exclude):
             logger.debug("skipping file excluded by this source: %s", path)
             continue
         yield path

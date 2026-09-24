@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from corpus.connectors.discovery import default_excludes_suppressed, discover_files
+
 
 def test_discovery_finds_regular_files(tmp_path: Path) -> None:
     from corpus.connectors.discovery import discover_files
@@ -84,7 +86,6 @@ def test_discovery_purely_noise_tree_yields_nothing(tmp_path: Path) -> None:
 
 
 def test_discovery_use_default_excludes_false_yields_both(tmp_path: Path) -> None:
-    from corpus.connectors.discovery import discover_files
 
     root = tmp_path / "project"
     _touch(root, "docs/real.md")
@@ -92,7 +93,7 @@ def test_discovery_use_default_excludes_false_yields_both(tmp_path: Path) -> Non
 
     found = {
         str(p.relative_to(root))
-        for p in discover_files(root, "**/*.md", use_default_excludes=False)
+        for p in _without_default_excludes(root)
     }
 
     assert found == {"docs/real.md", "node_modules/pkg/readme.md"}
@@ -155,3 +156,8 @@ def test_discovery_dist_with_ancestor_manifest_is_excluded(tmp_path: Path) -> No
     found = list(discover_files(root, "**/*.md"))
 
     assert found == []
+
+
+def _without_default_excludes(root):
+    with default_excludes_suppressed():
+        return list(discover_files(root, "**/*.md"))

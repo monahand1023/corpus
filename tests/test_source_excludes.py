@@ -17,8 +17,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from corpus.connectors.discovery import discover_files
+from corpus.connectors.discovery import discover_files, source_excludes
 
+
+def _discover(root, patterns):
+    """What a connector sees for a source configured with `exclude = patterns`."""
+    with source_excludes(patterns):
+        return list(discover_files(root, "**/*.md"))
 
 def _tree(tmp_path: Path) -> Path:
     # Distinct bodies on purpose: MarkdownConnector collapses near-duplicates
@@ -57,7 +62,7 @@ def test_a_directory_name_excludes_everything_under_it(tmp_path):
     report.md, so a set of names collapses them and the assertion passes
     whether or not anything was excluded."""
     root = _tree(tmp_path)
-    paths = _rel(root, discover_files(root, "**/*.md", exclude=("Backup",)))
+    paths = _rel(root, _discover(root, ("Backup",)))
     assert paths == {
         "live/report.md", "live/notes.md", "live/copy of report.md",
         "Old Backup/deep/report.md",
@@ -69,23 +74,23 @@ def test_a_directory_pattern_matches_a_name_exactly_not_loosely(tmp_path):
     in its name -- the same way `"report.md"` is not `"final report.md"`.
     Write `*Backup*` for that, and the next test proves it works."""
     root = _tree(tmp_path)
-    paths = _rel(root, discover_files(root, "**/*.md", exclude=("Backup",)))
+    paths = _rel(root, _discover(root, ("Backup",)))
     assert "Old Backup/deep/report.md" in paths
 
 
 def test_a_wildcard_directory_pattern_catches_the_variants(tmp_path):
     root = _tree(tmp_path)
-    paths = _rel(root, discover_files(root, "**/*.md", exclude=("*Backup*",)))
+    paths = _rel(root, _discover(root, ("*Backup*",)))
     assert paths == {"live/report.md", "live/notes.md", "live/copy of report.md"}
 
 
 def test_a_glob_path_pattern_works_too(tmp_path):
-    found = discover_files(_tree(tmp_path), "**/*.md", exclude=("**/Backup/*",))
+    found = _discover(_tree(tmp_path), ("**/Backup/*",))
     assert "Backup" not in {p.parent.name for p in found}
 
 
 def test_a_filename_pattern_excludes_by_basename(tmp_path):
-    names = _names(discover_files(_tree(tmp_path), "**/*.md", exclude=("copy of *",)))
+    names = _names(_discover(_tree(tmp_path), ("copy of *",)))
     assert "copy of report.md" not in names
     assert "report.md" in names
 
@@ -93,14 +98,14 @@ def test_a_filename_pattern_excludes_by_basename(tmp_path):
 def test_an_exact_relative_path_excludes_exactly_one_file(tmp_path):
     """What `corpus-survey duplicates --excludes-for` emits: full paths, so
     one copy goes and its twin stays."""
-    found = list(discover_files(_tree(tmp_path), "**/*.md", exclude=("Backup/report.md",)))
+    found = list(_discover(_tree(tmp_path), ("Backup/report.md",)))
     paths = {str(p.relative_to(tmp_path)) for p in found}
     assert "Backup/report.md" not in paths
     assert "live/report.md" in paths
 
 
 def test_excluding_nothing_that_matches_leaves_the_tree_alone(tmp_path):
-    found = discover_files(_tree(tmp_path), "**/*.md", exclude=("nothing-matches-this",))
+    found = _discover(_tree(tmp_path), ("nothing-matches-this",))
     assert len(list(found)) == 5
 
 
