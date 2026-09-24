@@ -416,7 +416,9 @@ def partition_by_duration(
 MAX_TIMEOUT_ATTEMPTS = 3
 
 
-def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
+def stale_paths(
+    conn: sqlite3.Connection, *, policy: str, since: str | None = None
+) -> list[Path]:
     """Files the current policy invalidated, read from the STORE.
 
     After a threshold change, re-walking the media roots is the wrong
@@ -430,16 +432,23 @@ def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
 
     The sidecar's contents already encode every one of those decisions.
 
+    `since` (an ISO date) keeps only rows written on or after it: a
+    pipeline change invalidates every row's policy, but only the rows that
+    pipeline wrote carry its defect.
+
     Rejections count. A `no_text` row is a verdict too, and redoing only the
     transcripts leaves every rejection frozen under rules that no longer
     apply -- the half-kept promise the policy fingerprint exists to close.
     """
     seen: dict[str, None] = {}
-    for table in ("transcripts", "no_text"):
+    for table, written in (("transcripts", "transcribed_at"), ("no_text", "checked_at")):
+        sql = f"SELECT path FROM {table} WHERE policy IS NOT ?"
+        params: tuple[str, ...] = (policy,)
+        if since is not None:
+            sql += f" AND {written} >= ?"
+            params += (since,)
         try:
-            rows = conn.execute(
-                f"SELECT path FROM {table} WHERE policy IS NOT ?", (policy,)
-            )
+            rows = conn.execute(sql, params)
         except sqlite3.Error:
             continue
         for (path,) in rows:
@@ -449,7 +458,7 @@ def stale_paths(conn: sqlite3.Connection, *, policy: str) -> list[Path]:
 
 
 def stale_paths_present(
-    conn: sqlite3.Connection, *, policy: str
+    conn: sqlite3.Connection, *, policy: str, since: str | None = None
 ) -> tuple[list[Path], int]:
     """`stale_paths`, minus what is not on disk right now, and how many.
 
@@ -458,7 +467,7 @@ def stale_paths_present(
     would bury the real ones -- so they are counted and reported, not tried.
     """
     present, missing = [], 0
-    for path in stale_paths(conn, policy=policy):
+    for path in stale_paths(conn, policy=policy, since=since):
         if path.exists():
             present.append(path)
         else:

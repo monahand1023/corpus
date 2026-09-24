@@ -91,3 +91,20 @@ def test_the_work_list_comes_from_the_store_not_the_filesystem(tmp_path):
     stranger.write_bytes(b"x")
     conn = _sidecar(tmp_path, [("/a.mov", "old")], [])
     assert stranger not in stale_paths(conn, policy="current")
+
+
+def test_since_limits_the_redo_to_rows_written_on_or_after_a_date(tmp_path):
+    """A windowing change invalidates every row's policy, but only the rows a
+    given pipeline wrote carry its defect. Redoing an archive's older rows
+    too would triple the GPU time for no change in what they say."""
+    conn = _sidecar(tmp_path, [("/old.mov", "old")], [("/old-empty.mov", "old")])
+    conn.execute(
+        "INSERT INTO transcripts (path, duration_s, dropped_windows, text, languages,"
+        " segments, model, transcribed_at, elapsed_s, policy)"
+        " VALUES ('/new.mov', 10.0, 0, 'hi', '[]', '[]', 'm', '2026-09-20T00:00:00+00:00', 1.0, 'old')"
+    )
+    conn.execute(
+        "UPDATE transcripts SET transcribed_at = '2026-09-01T00:00:00+00:00' WHERE path = '/old.mov'"
+    )
+    assert stale_paths(conn, policy="current", since="2026-09-14") == [Path("/new.mov")]
+    assert len(stale_paths(conn, policy="current")) == 3

@@ -353,6 +353,16 @@ def main_argv(argv: list[str]) -> int:
         ),
     )
     parser.add_argument(
+        "--transcribed-since",
+        metavar="DATE",
+        default=None,
+        help=(
+            "With --redo-stale: only rows written on or after DATE (YYYY-MM-DD). "
+            "A pipeline change invalidates every row's policy, but only the "
+            "rows that pipeline wrote carry its defect."
+        ),
+    )
+    parser.add_argument(
         "--redo-stale",
         action="store_true",
         help=(
@@ -377,6 +387,8 @@ def main_argv(argv: list[str]) -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
+    if args.transcribed_since and not args.redo_stale:
+        parser.error("--transcribed-since only applies with --redo-stale")
     be_nice(args.nice)
 
     configure_logging(args.verbose)
@@ -418,7 +430,9 @@ def main_argv(argv: list[str]) -> int:
             policy = store.policy_fingerprint(
                 settings.as_policy(getattr(backend, "model_name", "unknown"))
             )
-            only, missing = stale_paths_present(conn, policy=policy)
+            only, missing = stale_paths_present(
+                conn, policy=policy, since=args.transcribed_since
+            )
         total = len(only)
         print(f"corpus-transcribe --redo-stale: {db}")
         print(f"  {human_count(total)} file(s) invalidated by the current policy")

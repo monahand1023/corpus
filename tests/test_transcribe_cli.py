@@ -173,3 +173,25 @@ def test_dry_run_reports_what_is_done_before_it_prices_the_run(tmp_path, capsys)
     assert done_at < min(priced), (
         "the run was priced before the skip set was known:\n" + out
     )
+
+
+def test_transcribed_since_scopes_redo_stale(tmp_path, monkeypatch, capsys) -> None:
+    import corpus.transcripts.run as run_mod
+
+    seen = {}
+
+    def fake_present(conn, *, policy, since=None):
+        seen["since"] = since
+        return [], 0
+
+    monkeypatch.setattr(run_mod, "stale_paths_present", fake_present)
+    db = tmp_path / "t.db"
+    store.open_store(db).__enter__()
+    main_argv([str(tmp_path), "--db", str(db), "--redo-stale", "--transcribed-since", "2026-09-14"])
+    assert seen["since"] == "2026-09-14"
+
+
+def test_transcribed_since_without_redo_stale_is_refused(tmp_path, capsys) -> None:
+    with pytest.raises(SystemExit):
+        main_argv([str(tmp_path), "--transcribed-since", "2026-09-14"])
+    assert "only applies with --redo-stale" in capsys.readouterr().err
