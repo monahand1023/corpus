@@ -6,6 +6,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`corpus-transcribe --redo-stale --transcribed-since DATE`** limits a redo to
+  rows written on or after DATE, so a pipeline fix redoes only what that
+  pipeline wrote.
+
+### Changed
+- **Speech regions are packed into windows of up to 30s** before transcription.
+  One window per detected region sent 1-2s clips to the model; on a real archive
+  41% of windows under 2s came back in the wrong language. On a sample, packing
+  cut wrong-language text from 6.1% to 0.7% and decoding time by about half.
+  Part of the policy fingerprint, so `--redo-stale` picks up affected files.
+- **`--language` constrains decoding instead of only filtering.** A window the
+  model labels as any other language is decoded again in the likeliest named
+  one, keeping its speech. `TranscriberBackend.transcribe_window` takes an
+  optional `languages`; a backend without it still runs unconstrained.
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
