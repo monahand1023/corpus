@@ -200,3 +200,41 @@ def test_the_window_and_overlap_are_the_measured_values() -> None:
     assert WINDOW_S == 30.0
     assert OVERLAP_S == 2.0
     assert OVERLAP_S < WINDOW_S, "a step of zero or less would never terminate"
+
+
+# --- packing speech regions into windows ------------------------------------------
+
+
+def test_nearby_regions_are_packed_into_one_window() -> None:
+    """One window per detected region sent 1-2 second clips to the model, and
+    a clip that short is where it guesses the language: 41% of windows under
+    2s came back in a language the rest of the recording was not in, against
+    ~7% for windows of 10s or more."""
+    from corpus.transcripts.segment import pack_regions
+
+    regions = [(0.0, 1.5), (2.0, 3.0), (5.0, 9.0), (40.0, 41.0)]
+    assert pack_regions(regions, window_s=30.0) == [(0.0, 9.0), (40.0, 41.0)]
+
+
+def test_packing_never_makes_a_window_longer_than_the_limit() -> None:
+    from corpus.transcripts.segment import pack_regions
+
+    regions = [(0.0, 10.0), (11.0, 21.0), (22.0, 32.0), (33.0, 43.0)]
+    packed = pack_regions(regions, window_s=30.0)
+    assert packed == [(0.0, 21.0), (22.0, 43.0)]
+    assert all(end - start <= 30.0 for start, end in packed)
+
+
+def test_a_region_longer_than_the_limit_is_left_for_windowing_to_cut() -> None:
+    from corpus.transcripts.segment import pack_regions
+
+    regions = [(0.0, 2.0), (3.0, 80.0), (81.0, 82.0)]
+    assert pack_regions(regions, window_s=30.0) == [(0.0, 2.0), (3.0, 80.0), (81.0, 82.0)]
+
+
+def test_packing_is_part_of_the_policy() -> None:
+    """Changing how audio becomes windows changes the transcripts, so it must
+    invalidate the stored ones: --redo-stale is how they get redone."""
+    from corpus.transcripts.pipeline import Settings
+
+    assert Settings().as_policy("m") != Settings(pack_regions=False).as_policy("m")

@@ -39,6 +39,7 @@ from corpus.transcripts.segment import (
     WINDOW_S,
     fixed_windows,
     join_windows,
+    pack_regions,
     windows_for_regions,
 )
 from corpus.transcripts.store import Transcript
@@ -64,6 +65,9 @@ class Settings:
     expected_languages: frozenset[str] = frozenset()
     window_s: float = WINDOW_S
     overlap_s: float = OVERLAP_S
+    # Merge nearby speech regions into windows of up to `window_s` (see
+    # `segment.pack_regions`). Off reproduces one window per region.
+    pack_regions: bool = True
     # Below this peak speech probability, for the WHOLE file, the audio is
     # treated as true silence and skipped. Deliberately far below the speech
     # threshold: the one verdict that discards a file without a model ever
@@ -96,6 +100,7 @@ class Settings:
             "model": model_name,
             "window_s": self.window_s,
             "overlap_s": self.overlap_s,
+            "pack_regions": self.pack_regions,
             "silence_max_prob": self.silence_max_prob,
             "max_repeat_share": self.max_repeat_share,
             "max_looping_share": self.max_looping_share,
@@ -303,6 +308,8 @@ def transcribe_file(
         return outcome
 
     regions = list(speech_regions(samples))
+    if regions and settings.pack_regions:
+        regions = pack_regions(regions, window_s=settings.window_s)
     if regions:
         plan = list(
             windows_for_regions(
