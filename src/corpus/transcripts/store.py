@@ -114,8 +114,15 @@ _ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # it speech. That is exactly the defect that put decode loops into a
         # live index. Kept so "auditable" is true rather than advertised.
         ("segments", "TEXT NOT NULL DEFAULT ''"),
+        ("decode_policy", "TEXT NOT NULL DEFAULT ''"),
     ),
-    "transcripts": (("policy", "TEXT NOT NULL DEFAULT ''"),),
+    "transcripts": (
+        ("policy", "TEXT NOT NULL DEFAULT ''"),
+        # Fingerprint of the DECODE settings alone (`Settings.as_decode_policy`).
+        # `policy` is restamped by a text-only re-judge; this is not, so a row
+        # whose text came from an older decode stays visibly stale.
+        ("decode_policy", "TEXT NOT NULL DEFAULT ''"),
+    ),
     "dropped_windows": (("reason", "TEXT NOT NULL DEFAULT ''"),),
     # How many times in a row this file failed the SAME way. A timeout is
     # retried because a hang is usually about the run; that stops being true
@@ -148,6 +155,7 @@ class Transcript:
     model: str = ""
     policy: str = ""
     elapsed_s: float | None = None
+    decode_policy: str = ""
 
     @property
     def languages(self) -> list[str | None]:
@@ -227,8 +235,9 @@ def _now() -> str:
 def save_transcript(conn: sqlite3.Connection, transcript: Transcript) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO transcripts (path, duration_s, dropped_windows,"
-        " text, languages, segments, model, policy, transcribed_at, elapsed_s)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " text, languages, segments, model, policy, transcribed_at, elapsed_s,"
+        " decode_policy)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             transcript.path,
             transcript.duration_s,
@@ -241,6 +250,7 @@ def save_transcript(conn: sqlite3.Connection, transcript: Transcript) -> None:
             transcript.policy,
             _now(),
             transcript.elapsed_s,
+            transcript.decode_policy,
         ),
     )
     conn.commit()
@@ -294,6 +304,7 @@ def save_no_text(
     policy: str,
     reason: str = "",
     rejected_text: str = "",
+    decode_policy: str = "",
 ) -> None:
     """Record that a file produced nothing usable, under THESE rules.
 
@@ -303,9 +314,9 @@ def save_no_text(
     """
     conn.execute(
         "INSERT OR REPLACE INTO no_text"
-        " (path, duration_s, policy, reason, rejected_text, checked_at)"
-        " VALUES (?,?,?,?,?,?)",
-        (path, duration_s, policy, reason, rejected_text, _now()),
+        " (path, duration_s, policy, reason, rejected_text, checked_at, decode_policy)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (path, duration_s, policy, reason, rejected_text, _now(), decode_policy),
     )
     conn.commit()
 
@@ -473,12 +484,19 @@ def demote_transcript(
     restored the three decode loops that had just been removed -- and looked
     right doing it.
     """
+    # The windows came from the transcript's decode, so its fingerprint
+    # travels with them: a demotion re-judges text, it does not re-decode.
+    row = conn.execute(
+        "SELECT decode_policy FROM transcripts WHERE path = ?", (path,)
+    ).fetchone()
+    decode_policy = (row[0] if row else "") or ""
     conn.execute("DELETE FROM transcripts WHERE path = ?", (path,))
     conn.execute(
         "INSERT OR REPLACE INTO no_text"
-        " (path, duration_s, policy, reason, rejected_text, segments, checked_at)"
-        " VALUES (?,?,?,?,?,?,?)",
-        (path, duration_s, policy, reason, rejected_text, segments, _now()),
+        " (path, duration_s, policy, reason, rejected_text, segments, checked_at,"
+        " decode_policy)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (path, duration_s, policy, reason, rejected_text, segments, _now(), decode_policy),
     )
     conn.commit()
 

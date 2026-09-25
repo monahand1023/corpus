@@ -95,6 +95,22 @@ class Settings:
             unspoken_max_chars=self.unspoken_max_chars,
         )
 
+    def as_decode_policy(self, model_name: str) -> dict[str, Any]:
+        """The settings that decide how audio becomes windows and text.
+
+        A re-judge re-reads stored TEXT, so it can apply a change to anything
+        in `as_policy` EXCEPT these: after a change here the stored text is
+        itself out of date and only re-decoding fixes it.
+        """
+        return {
+            "model": model_name,
+            "window_s": self.window_s,
+            "overlap_s": self.overlap_s,
+            "pack_regions": self.pack_regions,
+            "silence_max_prob": self.silence_max_prob,
+            "expected_languages": sorted(self.expected_languages),
+        }
+
     def as_policy(self, model_name: str) -> dict[str, Any]:
         return {
             "model": model_name,

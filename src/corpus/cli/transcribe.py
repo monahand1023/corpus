@@ -268,8 +268,11 @@ def _dry_run_redo_stale(
         print(f"error: {exc}", file=sys.stderr)
         return 2
     policy = store.policy_fingerprint(settings.as_policy(model_name))
+    decode_policy = store.policy_fingerprint(settings.as_decode_policy(model_name))
     with store.open_store(db, read_only=True) as conn:
-        only, missing = stale_paths_present(conn, policy=policy, since=since)
+        only, missing = stale_paths_present(
+            conn, policy=policy, since=since, decode_policy=decode_policy
+        )
         durations: dict[str, float] = {}
         for table in ("no_text", "transcripts"):
             for path, duration in conn.execute(f"SELECT path, duration_s FROM {table}"):
@@ -468,8 +471,12 @@ def main_argv(argv: list[str]) -> int:
             policy = store.policy_fingerprint(
                 settings.as_policy(getattr(backend, "model_name", "unknown"))
             )
+            decode_policy = store.policy_fingerprint(
+                settings.as_decode_policy(getattr(backend, "model_name", "unknown"))
+            )
             only, missing = stale_paths_present(
-                conn, policy=policy, since=args.transcribed_since
+                conn, policy=policy, since=args.transcribed_since,
+                decode_policy=decode_policy,
             )
         total = len(only)
         print(f"corpus-transcribe --redo-stale: {db}")
@@ -537,6 +544,7 @@ def main_argv(argv: list[str]) -> int:
             on_progress=progress, only=only,
             run_one=lambda path, timeout: worker.run(path, timeout, settings),
             duration_of=_duration_probe(),
+            redo=bool(args.redo_stale),
         )
     finally:
         worker.close()

@@ -180,7 +180,7 @@ def test_transcribed_since_scopes_redo_stale(tmp_path, monkeypatch, capsys) -> N
 
     seen = {}
 
-    def fake_present(conn, *, policy, since=None):
+    def fake_present(conn, *, policy, since=None, decode_policy=None):
         seen["since"] = since
         return [], 0
 
@@ -222,3 +222,22 @@ def test_a_redo_stale_dry_run_prices_the_redo_not_a_walk(tmp_path, capsys) -> No
     main_argv([".", "--db", str(db), "--redo-stale", "--transcribed-since", "2026-09-14", "--dry-run"])
     out = capsys.readouterr().out
     assert "1 file(s) invalidated" in out and "1.0 h" in out, out
+
+
+def test_redo_stale_asks_the_run_to_redo_not_skip(tmp_path, monkeypatch) -> None:
+    import corpus.cli.transcribe as mod
+    import corpus.transcripts.run as run_mod
+
+    captured = {}
+
+    def fake_directory(*args, **kwargs):
+        captured.update(kwargs)
+        return run_mod.RunStats()
+
+    monkeypatch.setattr(mod, "transcribe_directory", fake_directory)
+    monkeypatch.setattr(run_mod, "stale_paths_present", lambda conn, **k: ([tmp_path / "a.mov"], 0))
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
+    db = tmp_path / "t.db"
+    store.open_store(db).__enter__()
+    mod.main_argv([".", "--db", str(db), "--redo-stale"])
+    assert captured.get("redo") is True

@@ -417,7 +417,11 @@ MAX_TIMEOUT_ATTEMPTS = 3
 
 
 def stale_paths(
-    conn: sqlite3.Connection, *, policy: str, since: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    policy: str,
+    since: str | None = None,
+    decode_policy: str | None = None,
 ) -> list[Path]:
     """Files the current policy invalidated, read from the STORE.
 
@@ -436,14 +440,22 @@ def stale_paths(
     pipeline change invalidates every row's policy, but only the rows that
     pipeline wrote carry its defect.
 
+    `decode_policy`, when given, also marks stale any row whose text came
+    from a different decode, even if a text-only re-judge restamped its
+    `policy` since: re-reading old text cannot apply a windowing change.
+
     Rejections count. A `no_text` row is a verdict too, and redoing only the
     transcripts leaves every rejection frozen under rules that no longer
     apply -- the half-kept promise the policy fingerprint exists to close.
     """
     seen: dict[str, None] = {}
     for table, written in (("transcripts", "transcribed_at"), ("no_text", "checked_at")):
-        sql = f"SELECT path FROM {table} WHERE policy IS NOT ?"
+        sql = f"SELECT path FROM {table} WHERE (policy IS NOT ?"
         params: tuple[str, ...] = (policy,)
+        if decode_policy is not None:
+            sql += " OR decode_policy IS NOT ?"
+            params += (decode_policy,)
+        sql += ")"
         if since is not None:
             sql += f" AND {written} >= ?"
             params += (since,)
@@ -458,7 +470,11 @@ def stale_paths(
 
 
 def stale_paths_present(
-    conn: sqlite3.Connection, *, policy: str, since: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    policy: str,
+    since: str | None = None,
+    decode_policy: str | None = None,
 ) -> tuple[list[Path], int]:
     """`stale_paths`, minus what is not on disk right now, and how many.
 
@@ -467,7 +483,7 @@ def stale_paths_present(
     would bury the real ones -- so they are counted and reported, not tried.
     """
     present, missing = [], 0
-    for path in stale_paths(conn, policy=policy, since=since):
+    for path in stale_paths(conn, policy=policy, since=since, decode_policy=decode_policy):
         if path.exists():
             present.append(path)
         else:
@@ -538,6 +554,7 @@ def transcribe_directory(
     file_timeout_s: float | None = None,
     run_one: Callable[[Path, float], tuple[str, Any]] | None = None,
     duration_of: Callable[[Path], float | None] | None = None,
+    redo: bool = False,
 ) -> RunStats:
     """Transcribe everything under `root` into the sidecar at `db_path`.
 
@@ -549,6 +566,10 @@ def transcribe_directory(
     `stale_paths`, which reads the work list from the store so an archive's
     own exclusion rules are not rediscovered and overturned.
 
+    `redo` re-transcribes every file in `only` even if it already has a
+    verdict -- what `--redo-stale` asks for. Without it a stored transcript
+    counts as done, and a re-judge of its old text is all it gets.
+
     `duration_of` reads a file's length when the sidecar has none, which is
     every file seen for the first time. Without it such a file gets the flat
     base deadline, too short for any long recording.
@@ -556,6 +577,7 @@ def transcribe_directory(
     settings = settings or Settings()
     model_name = getattr(backend, "model_name", "unknown")
     policy = store.policy_fingerprint(settings.as_policy(model_name))
+    decode_policy = store.policy_fingerprint(settings.as_decode_policy(model_name))
     stats = RunStats()
 
     files = list(only) if only is not None else list(find_media(root, excludes=excludes))
@@ -576,6 +598,8 @@ def transcribe_directory(
             logger.info("cleared %d stale failure row(s)", swept)
 
         done = store.already_done(conn, policy=policy)
+        if redo and only is not None:
+            done -= {str(f) for f in files}
         todo = [p for p in files if str(p) not in done]
         stats.skipped_done = len(files) - len(todo)
         if limit is not None:
@@ -619,6 +643,7 @@ def transcribe_directory(
                     store.save_no_text(
                         conn, str(path), duration_s=0.0,
                         reason="repeatedly_timed_out", policy=policy,
+                        decode_policy=decode_policy,
                     )
                     logger.warning(
                         "%s has now timed out %d times; recording it as "
@@ -644,6 +669,7 @@ def transcribe_directory(
                 store.save_no_text(
                     conn, str(path), duration_s=0.0,
                     reason="no_audio_stream", policy=policy,
+                    decode_policy=decode_policy,
                 )
                 if on_progress:
                     # NOT None. None is what a crash reports, and this is a
@@ -675,7 +701,7 @@ def transcribe_directory(
             # protected per file while the write beside it was not, so one
             # unstorable window discarded every file after it.
             try:
-                _record(conn, path, outcome, policy, stats)
+                _record(conn, path, outcome, policy, stats, decode_policy)
             except Exception as exc:
                 detail = f"could not record result: {type(exc).__name__}: {exc}"
                 stats.failed += 1
@@ -701,6 +727,7 @@ def _record(
     outcome: Outcome,
     policy: str,
     stats: RunStats,
+    decode_policy: str = "",
 ) -> None:
     """Write one file's result to the store.
 
@@ -736,6 +763,7 @@ def _record(
 
     if outcome.transcript is not None:
         outcome.transcript.policy = policy
+        outcome.transcript.decode_policy = decode_policy
         store.save_transcript(conn, outcome.transcript)
         stats.transcribed += 1
     else:
@@ -749,5 +777,6 @@ def _record(
             policy=policy,
             reason=outcome.empty_reason or "no_text",
             rejected_text=outcome.rejected_text,
+            decode_policy=decode_policy,
         )
         stats.empty += 1

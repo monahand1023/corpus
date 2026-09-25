@@ -108,3 +108,69 @@ def test_since_limits_the_redo_to_rows_written_on_or_after_a_date(tmp_path):
     )
     assert stale_paths(conn, policy="current", since="2026-09-14") == [Path("/new.mov")]
     assert len(stale_paths(conn, policy="current")) == 3
+
+
+# --- a decode change must re-decode, not only re-judge ------------------------------
+
+
+def test_a_transcript_restamped_by_a_rejudge_is_still_stale_if_its_decode_differs(tmp_path):
+    """A re-judge re-reads stored TEXT and restamps the policy. That is valid
+    only while the decode (model, windows, languages) is unchanged; after a
+    windowing change it marked 4,393 transcripts current without re-decoding
+    any of them, so --redo-stale then skipped the very files it was run for."""
+    conn = _sidecar(tmp_path, [("/restamped.mov", "current"), ("/fine.mov", "current")], [])
+    conn.execute("UPDATE transcripts SET decode_policy = 'decode-now' WHERE path = '/fine.mov'")
+    conn.commit()
+    assert stale_paths(conn, policy="current", decode_policy="decode-now") == [Path("/restamped.mov")]
+
+
+def test_redo_retranscribes_files_that_already_have_a_transcript(tmp_path):
+    from corpus.transcripts.pipeline import Settings
+    from corpus.transcripts.run import transcribe_directory
+
+    media = tmp_path / "a.mov"
+    media.write_bytes(b"x")
+    db = tmp_path / "t.db"
+    conn = store.connect(db)
+    conn.execute(
+        "INSERT INTO transcripts (path, duration_s, dropped_windows, text, languages,"
+        " segments, model, transcribed_at, elapsed_s, policy)"
+        " VALUES (?, 10.0, 0, 'old text', '[]', '[]', 'm', '2026-09-20', 1.0, 'x')",
+        (str(media),),
+    )
+    conn.commit()
+    conn.close()
+    calls = []
+
+    def fake(path, backend, *, settings=None):
+        calls.append(path)
+        outcome = type("O", (), {})()
+        outcome.duration_s, outcome.dropped, outcome.elapsed_s = 10.0, [], 0.1
+        outcome.transcript = store.Transcript(
+            path=str(path), text="new text",
+            windows=[store.Window(0.0, 10.0, "new text", "en")], duration_s=10.0, model="m",
+        )
+        outcome.empty_reason, outcome.rejected_text = None, ""
+        return outcome
+
+    class _Backend:
+        model_name = "m"
+
+    transcribe_directory(tmp_path, db, _Backend(), settings=Settings(), transcribe=fake, only=[media])
+    assert calls == [], "without redo, a file with a transcript is skipped as before"
+
+    transcribe_directory(
+        tmp_path, db, _Backend(), settings=Settings(), transcribe=fake, only=[media], redo=True
+    )
+    assert calls == [media]
+    with store.open_store(db, read_only=True) as c:
+        row = c.execute("SELECT text, decode_policy FROM transcripts").fetchone()
+    expected = store.policy_fingerprint(Settings().as_decode_policy("m"))
+    assert (row["text"], row["decode_policy"]) == ("new text", expected)
+
+
+def test_a_demoted_transcript_keeps_the_decode_it_came_from(tmp_path):
+    conn = _sidecar(tmp_path, [("/a.mov", "old")], [])
+    conn.execute("UPDATE transcripts SET decode_policy = 'decode-then' WHERE path = '/a.mov'")
+    store.demote_transcript(conn, "/a.mov", duration_s=10.0, policy="new", reason="r", rejected_text="t")
+    assert conn.execute("SELECT decode_policy FROM no_text WHERE path = '/a.mov'").fetchone()[0] == "decode-then"
