@@ -174,3 +174,24 @@ def test_a_demoted_transcript_keeps_the_decode_it_came_from(tmp_path):
     conn.execute("UPDATE transcripts SET decode_policy = 'decode-then' WHERE path = '/a.mov'")
     store.demote_transcript(conn, "/a.mov", duration_s=10.0, policy="new", reason="r", rejected_text="t")
     assert conn.execute("SELECT decode_policy FROM no_text WHERE path = '/a.mov'").fetchone()[0] == "decode-then"
+
+
+def test_a_sidecar_from_before_the_decode_column_is_all_stale_not_empty(tmp_path):
+    """Opened read-only, an older sidecar is not migrated, so the column is
+    absent. The query error was swallowed and --redo-stale --dry-run
+    reported '0 files' for an archive that needed 6,000 redone."""
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE transcripts (path TEXT PRIMARY KEY, duration_s REAL, text TEXT,"
+        " languages TEXT, segments TEXT, model TEXT, policy TEXT, transcribed_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO transcripts VALUES ('/a.mov', 1.0, 't', '[]', '[]', 'm', 'current', '2026-09-20')"
+    )
+    conn.commit()
+    conn.close()
+    with store.open_store(db, read_only=True) as ro:
+        assert stale_paths(ro, policy="current", decode_policy="decode-now") == [Path("/a.mov")]

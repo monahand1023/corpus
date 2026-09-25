@@ -450,19 +450,24 @@ def stale_paths(
     """
     seen: dict[str, None] = {}
     for table, written in (("transcripts", "transcribed_at"), ("no_text", "checked_at")):
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns:
+            continue  # table absent: nothing recorded there
         sql = f"SELECT path FROM {table} WHERE (policy IS NOT ?"
         params: tuple[str, ...] = (policy,)
         if decode_policy is not None:
-            sql += " OR decode_policy IS NOT ?"
-            params += (decode_policy,)
+            if "decode_policy" in columns:
+                sql += " OR decode_policy IS NOT ?"
+                params += (decode_policy,)
+            else:
+                # An unmigrated sidecar predates the decode fingerprint, so
+                # no row in it can be known to match the current decode.
+                sql += " OR 1"
         sql += ")"
         if since is not None:
             sql += f" AND {written} >= ?"
             params += (since,)
-        try:
-            rows = conn.execute(sql, params)
-        except sqlite3.Error:
-            continue
+        rows = conn.execute(sql, params)
         for (path,) in rows:
             if path:
                 seen.setdefault(path, None)
