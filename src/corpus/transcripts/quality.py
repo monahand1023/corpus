@@ -827,9 +827,15 @@ def judge_transcript(
         return TranscriptVerdict(False, "empty")
     if subtitle_boilerplate(text):
         return TranscriptVerdict(False, "subtitle_boilerplate")
-    if len(text) > 40 and repeat_share(text) >= max_repeat_share:
+    # Repetition is measured on the text WITHOUT an invented caption sign-off,
+    # as the index measures it. The sign-off is new text at the end of a loop
+    # and dilutes the score: nine single-window loops scored 0.80-0.85 raw and
+    # passed here, while the index, stripping the tail first, measured
+    # 0.85-0.92 and rejected them.
+    body = strip_caption_tail(text).strip() or text
+    if len(body) > 40 and repeat_share(body) >= max_repeat_share:
         return TranscriptVerdict(False, "degenerate_repetition")
-    if looping_share(text) >= max_looping_share:
+    if looping_share(body) >= max_looping_share:
         return TranscriptVerdict(False, "looping_repetition")
     if impossible_speech_rate(text, duration_s, ceiling=max_chars_per_second):
         return TranscriptVerdict(False, "impossible_speech_rate")

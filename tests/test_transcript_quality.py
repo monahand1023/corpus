@@ -889,3 +889,22 @@ def test_settings_judge_applies_the_runs_own_thresholds() -> None:
     assert Settings().judge(text, duration_s=30.0, languages=["en"]).keep
     strict = Settings(max_chars_per_second=1.0)
     assert not strict.judge(text, duration_s=30.0, languages=["en"]).keep
+
+
+def test_a_loop_is_measured_without_the_caption_signoff_appended_to_it() -> None:
+    """A model's invented sign-off is new text at the end of a loop, and it
+    diluted the loop score: nine single-window loops scored 0.80-0.85 raw and
+    passed, while the index, which strips the tail first, measured 0.85-0.92
+    and rejected them. The two stages must judge the same text."""
+    loop = "今日は、私の家に行きました。私は、" * 10 + "ご視聴ありがとうございました"
+    assert looping_share(loop) < DEFAULT_MAX_LOOPING_SHARE, "precondition: the tail dilutes it"
+    verdict = judge_transcript(loop, duration_s=30.0, languages=["ja"])
+    assert not verdict.keep and verdict.reason == "looping_repetition"
+
+
+def test_real_speech_ending_in_a_thank_you_is_still_kept() -> None:
+    text = (
+        "We drove up to the lake on Saturday and the kids swam until dark. "
+        "Alice made her lemon cake and everyone had seconds. Thank you for watching."
+    )
+    assert judge_transcript(text, duration_s=30.0, languages=["en"]).keep
