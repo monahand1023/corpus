@@ -182,7 +182,7 @@ def test_transcribed_since_scopes_redo_stale(tmp_path, monkeypatch, capsys) -> N
 
     def fake_present(conn, *, policy, since=None, decode_policy=None):
         seen["since"] = since
-        return [], 0
+        return [], 0, 0
 
     monkeypatch.setattr(run_mod, "stale_paths_present", fake_present)
     db = tmp_path / "t.db"
@@ -235,7 +235,7 @@ def test_redo_stale_asks_the_run_to_redo_not_skip(tmp_path, monkeypatch) -> None
         return run_mod.RunStats()
 
     monkeypatch.setattr(mod, "transcribe_directory", fake_directory)
-    monkeypatch.setattr(run_mod, "stale_paths_present", lambda conn, **k: ([tmp_path / "a.mov"], 0))
+    monkeypatch.setattr(run_mod, "stale_paths_present", lambda conn, **k: ([tmp_path / "a.mov"], 0, 0))
     monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
     db = tmp_path / "t.db"
     store.open_store(db).__enter__()

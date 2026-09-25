@@ -79,7 +79,7 @@ def test_files_missing_from_disk_are_dropped_with_a_count(tmp_path):
     present = tmp_path / "here.mov"
     present.write_bytes(b"x")
     conn = _sidecar(tmp_path, [(str(present), "old"), ("/gone/away.mov", "old")], [])
-    paths, missing = stale_paths_present(conn, policy="current")
+    paths, missing, _ = stale_paths_present(conn, policy="current")
     assert paths == [present]
     assert missing == 1
 
@@ -228,3 +228,19 @@ def test_opening_the_sidecar_resolves_existing_double_verdicts_by_the_newer(tmp_
     with store.open_store(db) as c:
         assert [r[0] for r in c.execute("SELECT path FROM transcripts")] == ["/fresh-transcript.mov"]
         assert [r[0] for r in c.execute("SELECT path FROM no_text")] == ["/stale-transcript.mov"]
+
+
+def test_the_redo_list_honours_the_archives_media_scope(tmp_path):
+    """The list comes from the sidecar, not a walk, so the archive's own
+    media policy never saw it: a redo transcribed 103 photo-library renders
+    the archive excludes and would never index."""
+    from corpus.transcripts.run import media_scope, stale_paths_present
+
+    keep = tmp_path / "keep.mov"
+    render = tmp_path / "render.mov"
+    keep.write_bytes(b"x")
+    render.write_bytes(b"x")
+    conn = _sidecar(tmp_path, [(str(keep), "old"), (str(render), "old")], [])
+    with media_scope(lambda p: "render" not in p.name):
+        present, missing, out_of_scope = stale_paths_present(conn, policy="current")
+    assert present == [keep] and missing == 0 and out_of_scope == 1

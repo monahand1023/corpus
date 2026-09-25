@@ -270,7 +270,7 @@ def _dry_run_redo_stale(
     policy = store.policy_fingerprint(settings.as_policy(model_name))
     decode_policy = store.policy_fingerprint(settings.as_decode_policy(model_name))
     with store.open_store(db, read_only=True) as conn:
-        only, missing = stale_paths_present(
+        only, missing, out_of_scope = stale_paths_present(
             conn, policy=policy, since=since, decode_policy=decode_policy
         )
         durations: dict[str, float] = {}
@@ -282,6 +282,8 @@ def _dry_run_redo_stale(
     print(f"  {human_count(len(only))} file(s) invalidated by the current policy")
     if missing:
         print(f"  {human_count(missing)} more are recorded but not on disk right now")
+    if out_of_scope:
+        print(f"  {human_count(out_of_scope)} more are outside this archive's media policy")
     hours = seconds / 3600
     print(f"  audio to redo      : {_format_duration(hours)}")
     print(
@@ -474,7 +476,7 @@ def main_argv(argv: list[str]) -> int:
             decode_policy = store.policy_fingerprint(
                 settings.as_decode_policy(getattr(backend, "model_name", "unknown"))
             )
-            only, missing = stale_paths_present(
+            only, missing, out_of_scope = stale_paths_present(
                 conn, policy=policy, since=args.transcribed_since,
                 decode_policy=decode_policy,
             )
@@ -487,6 +489,11 @@ def main_argv(argv: list[str]) -> int:
             print(
                 f"  {human_count(missing)} more are recorded but not on disk "
                 "right now (unmounted volume?) and are left alone"
+            )
+        if out_of_scope:
+            print(
+                f"  {human_count(out_of_scope)} more are outside this archive's "
+                "media policy and are left alone"
             )
         print()
         if not total:

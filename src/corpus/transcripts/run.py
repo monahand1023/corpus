@@ -480,20 +480,29 @@ def stale_paths_present(
     policy: str,
     since: str | None = None,
     decode_policy: str | None = None,
-) -> tuple[list[Path], int]:
-    """`stale_paths`, minus what is not on disk right now, and how many.
+) -> tuple[list[Path], int, int]:
+    """`stale_paths` that are on disk and in scope: (paths, missing, out_of_scope).
 
     This archive spans external drives. A path that is not mounted is not a
     broken file, and recording thousands of failures for an unplugged volume
     would bury the real ones -- so they are counted and reported, not tried.
+
+    The archive's `media_scope` applies too. The list comes from the store,
+    not a walk, so without this the archive's own media policy never saw it:
+    a redo transcribed 103 photo-library renders the archive excludes and
+    would never index.
     """
-    present, missing = [], 0
+    in_scope = _media_scope.get()
+    present: list[Path] = []
+    missing = out_of_scope = 0
     for path in stale_paths(conn, policy=policy, since=since, decode_policy=decode_policy):
-        if path.exists():
+        if in_scope is not None and not in_scope(path):
+            out_of_scope += 1
+        elif path.exists():
             present.append(path)
         else:
             missing += 1
-    return present, missing
+    return present, missing, out_of_scope
 
 
 def _call_bounded(
