@@ -195,3 +195,36 @@ def test_a_sidecar_from_before_the_decode_column_is_all_stale_not_empty(tmp_path
     conn.close()
     with store.open_store(db, read_only=True) as ro:
         assert stale_paths(ro, policy="current", decode_policy="decode-now") == [Path("/a.mov")]
+
+
+# --- one verdict per file ---------------------------------------------------------
+
+
+def test_a_no_speech_verdict_replaces_an_existing_transcript(tmp_path):
+    """A redo that ended in 'no speech' wrote the verdict and left the old
+    transcript beside it -- still indexed, because the connector reads the
+    transcripts table. 244 files after one run, 55 of them loops."""
+    conn = _sidecar(tmp_path, [("/a.mov", "old")], [])
+    store.save_no_text(conn, "/a.mov", duration_s=10.0, policy="new", reason="looping_repetition")
+    assert conn.execute("SELECT count(*) FROM transcripts WHERE path = '/a.mov'").fetchone()[0] == 0
+
+
+def test_a_transcript_replaces_an_older_rejection(tmp_path):
+    conn = _sidecar(tmp_path, [], [("/a.mov", "old")])
+    store.save_transcript(conn, store.Transcript(path="/a.mov", text="hi", model="m", policy="new"))
+    assert conn.execute("SELECT count(*) FROM no_text WHERE path = '/a.mov'").fetchone()[0] == 0
+
+
+def test_opening_the_sidecar_resolves_existing_double_verdicts_by_the_newer(tmp_path):
+    db = tmp_path / "t.db"
+    conn = _sidecar(tmp_path, [("/stale-transcript.mov", "p"), ("/fresh-transcript.mov", "p")],
+                    [("/stale-transcript.mov", "p"), ("/fresh-transcript.mov", "p")])
+    conn.execute("UPDATE transcripts SET transcribed_at = '2026-09-01'")
+    conn.execute("UPDATE no_text SET checked_at = '2026-09-25' WHERE path = '/stale-transcript.mov'")
+    conn.execute("UPDATE no_text SET checked_at = '2026-08-01' WHERE path = '/fresh-transcript.mov'")
+    conn.commit()
+    conn.close()
+
+    with store.open_store(db) as c:
+        assert [r[0] for r in c.execute("SELECT path FROM transcripts")] == ["/fresh-transcript.mov"]
+        assert [r[0] for r in c.execute("SELECT path FROM no_text")] == ["/stale-transcript.mov"]

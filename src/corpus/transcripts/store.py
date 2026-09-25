@@ -199,6 +199,7 @@ def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     migrate(conn)
+    resolve_double_verdicts(conn)
     return conn
 
 
@@ -215,6 +216,28 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
                 applied.append(f"{table}.{name}")
     conn.commit()
     return applied
+
+
+def resolve_double_verdicts(conn: sqlite3.Connection) -> int:
+    """Keep only the newer verdict for a file recorded in both tables.
+
+    Saving one verdict did not remove the other, so a sidecar accumulated
+    files with both: a live one held 1,805, among them 244 stale transcripts
+    that stayed indexed after the file was judged to hold no speech, and
+    1,561 old rejections that a full --redo-stale would have redone for
+    nothing. Run on every writable open; a no-op once clean. Returns how many
+    rows it removed.
+    """
+    stale_transcripts = conn.execute(
+        "DELETE FROM transcripts WHERE EXISTS (SELECT 1 FROM no_text n"
+        " WHERE n.path = transcripts.path AND n.checked_at > transcripts.transcribed_at)"
+    ).rowcount
+    stale_rejections = conn.execute(
+        "DELETE FROM no_text WHERE EXISTS (SELECT 1 FROM transcripts t"
+        " WHERE t.path = no_text.path AND t.transcribed_at >= no_text.checked_at)"
+    ).rowcount
+    conn.commit()
+    return int(stale_transcripts or 0) + int(stale_rejections or 0)
 
 
 @contextmanager
@@ -253,6 +276,8 @@ def save_transcript(conn: sqlite3.Connection, transcript: Transcript) -> None:
             transcript.decode_policy,
         ),
     )
+    # One verdict per file: a transcript supersedes any earlier rejection.
+    conn.execute("DELETE FROM no_text WHERE path = ?", (transcript.path,))
     conn.commit()
 
 
@@ -318,6 +343,10 @@ def save_no_text(
         " VALUES (?,?,?,?,?,?,?)",
         (path, duration_s, policy, reason, rejected_text, _now(), decode_policy),
     )
+    # One verdict per file. Left in place, an older transcript stays indexed
+    # (the connector reads `transcripts`) after the file was judged to hold
+    # no speech: a redo left 244 of them, 55 judged as loops.
+    conn.execute("DELETE FROM transcripts WHERE path = ?", (path,))
     conn.commit()
 
 
