@@ -292,7 +292,9 @@ was not the best setting on the one archive where re-ranking helped most:
 | **15** | **0.968** | **0.903** | **0.831** | 4.3s |
 | 30 | 0.968 | 0.887 | 0.824 | 8.6s |
 
-A pool of 15 beat 30 on all three metrics at half the cost. Re-scoring more
+A pool of 15 beat 30 on all three metrics at half the cost. (Latencies are
+from before the re-ranker set `max_length` and `batch_size`; every row is now
+roughly 3x faster, and still linear in the pool.) Re-scoring more
 candidates is not monotonically better -- a bigger pool gives the
 cross-encoder more chances to promote something plausible-but-wrong above the
 right answer. `corpus-eval --rerank-pool-size` exists for this sweep; it takes

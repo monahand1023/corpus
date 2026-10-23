@@ -430,9 +430,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help=(
             "Candidates the cross-encoder re-scores. Latency is linear in "
-            "this: measured on one archive, 0.35s with no re-ranking, 2.3s "
-            "at 8, 4.5s at 15, 8.6s at 30. Worth sweeping before enabling "
-            "re-ranking on a server people wait on."
+            "this: about 0.1s per candidate on CPU, so ~3s at 30. Worth "
+            "sweeping before enabling re-ranking on a server people wait on."
         ),
     )
     parser.add_argument(

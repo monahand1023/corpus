@@ -56,6 +56,8 @@ class BGEReranker:
     # someone else's multi-hour GPU job just because sentence-transformers
     # found a GPU sitting there.
     #
+    # SUPERSEDED for latency by the max_length/batch_size note below: these
+    # figures are without either, and both devices are now ~3x faster.
     # Benchmarked 2026-09-08 on an M4 Pro (bge-reranker-v2-m3, real ~18-chunk
     # candidate pools drawn from a 46k-chunk corpus via corpus-voyage.db):
     # CPU ~390ms/pair, MPS ~142ms/pair (MPS ~2.7x faster, not the ~1x/"both
