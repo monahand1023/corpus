@@ -141,6 +141,10 @@ def test_every_embedder_initialises_the_token_counter_the_pipeline_reads():
     import ast
 
     for impl in _implementations(corpus.embedder, Embedder):
+        # A class-level property (a wrapper delegating to the embedder it
+        # wraps) cannot be missing at the end of a run either.
+        if isinstance(inspect.getattr_static(impl, "total_tokens_used", None), property):
+            continue
         init = getattr(impl, "__init__", None)
         assert init is not None, f"{impl.__name__} has no __init__"
         tree = ast.parse(inspect.getsource(init).lstrip())
