@@ -44,6 +44,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one, keeping its speech. `TranscriberBackend.transcribe_window` takes an
   optional `languages`; a backend without it still runs unconstrained.
 
+### Security
+- **Dependencies with published vulnerabilities upgraded** to their first
+  patched release or later: Pillow 13.0.0, PyJWT 2.15.1, pypdf 6.21.1, aiohttp
+  3.14.5, urllib3 2.8.0, certifi 2026.10.19, fsspec 2026.9.0, mcp 1.30.0,
+  multidict 6.9.1, sentence-transformers 5.7.0. The minimums for the direct
+  dependencies among them (mcp, pypdf, sentence-transformers) are raised too,
+  so an install from PyPI cannot resolve to a vulnerable version.
+
 ### Fixed
 - **The README's `corpus-migrate-fts --db ...` example failed**: the command
   takes `--config`, not `--db`. Also, the README's "under 300ms" claim held only
