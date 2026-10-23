@@ -32,6 +32,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one or two tokens per text fewer than the local tokenizer counts, which a
   2%-only threshold read as truncation on every short query. The check now
   allows that per-text gap as well.
+- **A plain `uv sync` no longer strips the dev environment.** It uninstalls
+  anything not requested, and extras never are by default, so one bare sync
+  removed every extra and left mypy and the extra-gated tests failing. Every
+  extra is now in an `all-extras` dependency group that is synced by default;
+  `--no-default-groups` gives a base-only install, which the CI eval gate uses.
 
 ## [0.4.0] - 2026-09-24
 

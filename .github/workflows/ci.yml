@@ -51,8 +51,9 @@ jobs:
 
   # Keyless retrieval-regression gate: ingests the committed sample corpus
   # with the zero-dependency `hash` embedder (no API key, no extras — just
-  # `uv sync --dev`) and fails the build if recall@5 / nDCG@5 drop below the
-  # floors in examples/sample_corpus/thresholds.json. See docs/eval.md.
+  # `uv sync --no-default-groups --group dev`) and fails the build if
+  # recall@5 / nDCG@5 drop below the floors in
+  # examples/sample_corpus/thresholds.json. See docs/eval.md.
   # (The API-key-gated LLM-as-judge validation runs in the separate 'judge-gate' job below.)
   eval-gate:
     runs-on: ubuntu-latest
@@ -71,7 +72,8 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies (base only, no extras, no API key)
-        run: uv sync --dev
+        # --no-default-groups: the default groups include every extra.
+        run: uv sync --no-default-groups --group dev
 
       - name: Ingest sample corpus
         run: uv run corpus-ingest --config examples/sample_corpus/corpus.toml --all
@@ -116,7 +118,7 @@ jobs:
 
       - name: Install dependencies (summarizer extra for the anthropic SDK)
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
-        run: uv sync --extra summarizer --dev
+        run: uv sync --no-default-groups --group dev --extra summarizer
 
       - name: Judge validation + adversarial gate
         if: ${{ env.ANTHROPIC_API_KEY != '' }}

@@ -129,6 +129,17 @@ dev = [
     "ruff>=0.15.12",
     "mypy>=2.1.0",
 ]
+# Every extra, as a group so it can be a DEFAULT group (below). A plain
+# `uv sync` is exact: it uninstalls anything not requested, and extras are
+# never requested by default -- so one bare `uv sync` in this checkout removed
+# 97 packages, after which mypy reported 32 errors and extra-gated tests failed
+# or skipped. Opt out for a base-only install with `--no-default-groups`.
+all-extras = [
+    "corpus-rag[all,xls,music,transcribe,transcribe-mlx]",
+]
+
+[tool.uv]
+default-groups = ["dev", "all-extras"]
 
 [tool.ruff]
 line-length = 100

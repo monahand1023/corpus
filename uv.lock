@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -410,6 +410,7 @@ wheels = [
 name = "corpus-rag"
 version = "0.4.0"
 source = { editable = "." }
+default-groups = ["all-extras", "dev"]
 dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
@@ -478,6 +479,9 @@ xlsx = [
 ]
 
 [package.dev-dependencies]
+all-extras = [
+    { name = "corpus-rag", extra = ["all", "music", "transcribe", "transcribe-mlx", "xls"] },
+]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -522,6 +526,7 @@ requires-dist = [
 provides-extras = ["voyage", "reranker", "transcribe", "transcribe-mlx", "summarizer", "pdf", "html", "gemini", "docx", "xlsx", "rtf", "pptx", "all", "xls", "music"]
 
 [package.metadata.requires-dev]
+all-extras = [{ name = "corpus-rag", extras = ["all", "xls", "music", "transcribe", "transcribe-mlx"] }]
 dev = [
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "pytest", specifier = ">=9.0.3" },
