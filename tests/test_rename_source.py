@@ -193,3 +193,24 @@ def test_the_yield_baseline_follows_the_rename(tmp_path):
         assert store.last_yield("old") is None
     finally:
         store.close()
+
+
+def test_vectors_move_to_the_new_partition(tmp_path):
+    """`chunks_vec` is partitioned by source type, and sqlite-vec cannot
+    UPDATE a partition key. A rename that moved only the `chunks` column
+    left every vector filed under the old name: unfiltered search still found
+    them, and a search filtered to the new name found nothing, silently.
+
+    Opened read-only so nothing on open can repair what the rename left."""
+    db = _store(tmp_path, {"old": 4, "other": 2})
+    rename_source(db, "old", "new")
+
+    store = ChunkStore(db, embedding_dim=DIM, read_only=True)
+    try:
+        assert store.vec_partitioned()
+        probe = [math.sin(1 * (j + 1) * 0.1) for j in range(DIM)]
+        hits = store.vector_search(probe, top_k=10, filter_sources=["new"])
+        assert len(hits) == 4
+        assert store.vector_search(probe, top_k=10, filter_sources=["old"]) == []
+    finally:
+        store.close()

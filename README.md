@@ -4,7 +4,7 @@
 
 Your personal archive — notes, PDFs, documents, and the speech inside your audio and video — queryable in plain English, stored and searched entirely on your machine.
 
-A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or handing your whole archive to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server — the database, index, and search all run locally. (One honest caveat: the text you ingest or query is sent to your chosen embedding API — Voyage or Gemini — to be turned into vectors. See [what corpus doesn't do](#what-corpus-doesnt-do).) Run `corpus-init` once, point `corpus-index` at a folder, and Claude Code can search years of notes in under 300ms. There are **17 connectors** — markdown, PDF, DOCX, XLSX, HTML, CSV, zip archives and more — plus [`corpus-transcribe`](#corpus-transcribe-speech-into-the-index) for recordings.
+A personal knowledge system shouldn't require a vector database service, a SaaS subscription, or handing your whole archive to someone else's cloud. `corpus` is one Python process, one SQLite file, one MCP server — the database, index, and search all run locally. (One honest caveat: the text you ingest or query is sent to your chosen embedding API — Voyage or Gemini — to be turned into vectors. See [what corpus doesn't do](#what-corpus-doesnt-do).) Run `corpus-init` once, point `corpus-index` at a folder, and Claude Code can search years of notes in about half a second -- measured on an archive of hundreds of thousands of chunks, most of it the embedding API round-trip and keyword search. There are **17 connectors** — markdown, PDF, DOCX, XLSX, HTML, CSV, zip archives and more — plus [`corpus-transcribe`](#corpus-transcribe-speech-into-the-index) for recordings.
 
 New here? [Quick start](#quick-start) gets you searching. [`docs/testing.md`](docs/testing.md) explains how the project establishes that any of this actually works, which is the part most RAG projects leave out.
 
@@ -294,7 +294,8 @@ corpus-rename old new --dry-run          # rename a source without re-embedding
 corpus-publish-check                     # safe to make public? asks the REMOTE too
 corpus-publish-check --pypi corpus-rag   # + scan CI logs and published artifacts
 corpus-contextualize --source notes --dry-run  # estimate Haiku spend for contextual retrieval
-corpus-migrate-fts --db archive/corpus.db      # rebuild the FTS index after a schema change
+corpus-migrate-fts --dry-run                   # rebuild the FTS index after a schema change
+corpus-migrate-vec --dry-run                   # partition an older, large vector index by source
 ```
 
 ## corpus-index: point it at a folder
@@ -568,7 +569,9 @@ corpus-benchmark --compare voyage gemini        # embed-latency A/B
 corpus-benchmark --json out.json
 ```
 
-Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates at 100–300ms (provider API round-trip), while `vector_search` / `fts_search` / `fusion` / `dedupe` are collectively under ~5ms. The optimization lever is "fewer or concurrent embed calls," not "faster SQLite." If `vector_search` exceeds ~50ms you've outgrown brute-force `vec0` (~100K chunks) and want HNSW indexing.
+Typical profile on an M-series Mac, few-thousand-chunk corpus: `embed` dominates at 100–300ms (provider API round-trip), while `vector_search` / `fts_search` / `fusion` / `dedupe` are collectively under ~5ms. On an archive of hundreds of thousands of chunks across dozens of source types, the medians were: embed ~140ms, `vector_search` ~200ms, `fts_search` ~170ms, ~520ms in total.
+
+`vector_search` is brute force, and it runs one extra search for every source type the first search under-serves, which on a wide archive is most of them. Those extra searches are cheap only because the vector index is partitioned by source type, so each one scans only its own type. A store created before that layout scans everything per search; on the archive above, `vector_search` took ~3.9s per query until `corpus-migrate-vec` partitioned it (small stores migrate automatically when opened). `corpus-doctor` reports a store that still needs it.
 
 `--compare` measures embedder-API latency only — it does **not** compare retrieval quality, because two providers' vectors aren't comparable against one DB. For quality, ingest each provider into its own corpus and run `corpus-eval` against each.
 

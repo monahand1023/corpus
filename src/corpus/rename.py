@@ -15,9 +15,13 @@ that trusts the metadata does not disagree with the column beside it.
 `summaries` is keyed by `(source_type, source_key)` too. Leaving those behind
 orphans paid work that `get_summary` can then never find.
 
-WHAT IS DELIBERATELY NOT TOUCHED. Vectors and BM25 rows are keyed by `rowid`,
-which does not change, so they are left exactly as they are -- and that is the
-whole point: renaming a source must not cost an embedding bill.
+WHAT IS DELIBERATELY NOT RECOMPUTED. Vectors and BM25 rows are keyed by
+`rowid`, which does not change, and renaming a source must not cost an
+embedding bill. BM25 rows are left exactly as they are. Vectors are MOVED, not
+re-embedded: `chunks_vec` is partitioned by source type and sqlite-vec cannot
+update a partition key, so each one is deleted and re-inserted, bytes intact,
+under the new name. Left where they were, a search filtered to the new name
+finds none of them.
 """
 
 from __future__ import annotations
@@ -27,6 +31,9 @@ import re
 import sqlite3
 from pathlib import Path
 
+import sqlite_vec
+
+from corpus.db.sqlite import is_vec_partitioned
 from corpus.types import SOURCE_TYPE_PATTERN
 
 
@@ -67,9 +74,12 @@ def rename_source(db_path: Path | str, old: str, new: str) -> int:
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
     try:
         rows = conn.execute(
-            "SELECT id, source_key, chunk_kind, chunk_index, metadata"
+            "SELECT rowid, id, source_key, chunk_kind, chunk_index, metadata"
             " FROM chunks WHERE source_type = ?",
             (old,),
         ).fetchall()
@@ -133,6 +143,18 @@ def rename_source(db_path: Path | str, old: str, new: str) -> int:
                 " WHERE id = ?",
                 (new_id, new, metadata, row["id"]),
             )
+        if is_vec_partitioned(conn):
+            for row in rows:
+                vec = conn.execute(
+                    "SELECT embedding FROM chunks_vec WHERE rowid = ?", (row["rowid"],)
+                ).fetchone()
+                if vec is None:
+                    continue
+                conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (row["rowid"],))
+                conn.execute(
+                    "INSERT INTO chunks_vec(rowid, source_type, embedding) VALUES (?, ?, ?)",
+                    (row["rowid"], new, vec["embedding"]),
+                )
         conn.execute(
             "UPDATE summaries SET source_type = ? WHERE source_type = ?",
             (new, old),

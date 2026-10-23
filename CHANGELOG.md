@@ -7,11 +7,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`corpus-migrate-vec`** partitions an existing store's vector index by source
+  type (see Changed). A store up to 200,000 chunks migrates by itself when
+  opened read-write; a larger one waits for this command, for the same reasons
+  as `corpus-migrate-fts`. Nothing is re-embedded. `--dry-run` reports only.
+- **`corpus-doctor` checks the vector layout**, and fails on an unpartitioned
+  index or on vectors stored without a source type.
 - **`corpus-transcribe --redo-stale --transcribed-since DATE`** limits a redo to
   rows written on or after DATE, so a pipeline fix redoes only what that
   pipeline wrote.
 
 ### Changed
+- **Source-filtered vector search scans only the named sources.** `chunks_vec`
+  is now partitioned by `source_type`. Before, a filtered search narrowed the
+  result but still read every vector, and building the candidate pool runs one
+  filtered search per under-represented source type, which on a wide archive is
+  most of them. Measured on a large archive: `vector_search` from ~3.9s to
+  ~0.2s per query, whole queries from ~4.2s to ~0.5s, same retrieval metrics.
+  Every vector writer now records the type, including `corpus-reembed` (which
+  rebuilds the table) and `corpus-rename` (which moves vectors to the new name,
+  since sqlite-vec cannot update a partition key). A vector written by an older
+  corpus has no type and is in no filtered search; opening the store read-write
+  re-files it.
 - **The re-ranker is ~3.5x faster on CPU.** `BGEReranker` now sets
   `max_length=512` (left unset, bge-reranker-v2-m3 scores up to 8192 tokens per
   pair) and scores in batches of 4 (one batch pads every pair to the longest).
@@ -28,6 +45,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   optional `languages`; a backend without it still runs unconstrained.
 
 ### Fixed
+- **The README's `corpus-migrate-fts --db ...` example failed**: the command
+  takes `--config`, not `--db`. Also, the README's "under 300ms" claim held only
+  for small archives; it now states what was measured.
 - **`corpus-eval --compare` compared configs on different query vectors.** Each
   config re-embedded every query, and a hosted embedder returns a slightly
   different vector each time, so the table mixed embedder noise into what it

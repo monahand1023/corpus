@@ -43,6 +43,7 @@ EXEMPT = {
     "judge": "waits on a remote API; it is not what is occupying the machine",
     "list_sources": "reads metadata",
     "migrate_fts": "one-shot schema change",
+    "migrate_vec": "one-shot schema change",
     "publish_check": "reads git",
     "query": "interactive; someone is waiting for the answer",
     "rename": "renames ids in place",

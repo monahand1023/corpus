@@ -42,6 +42,7 @@ from pathlib import Path
 
 import sqlite_vec
 
+from corpus.db.sqlite import create_vec_table
 from corpus.util.sqlite_ro import connect_ro
 from corpus.util.tokens import estimate_tokens
 
@@ -247,19 +248,20 @@ def swap_in_staged(db_path: Path | str, *, new_dim: int) -> int:
 
         conn.execute("BEGIN")
         conn.execute("DROP TABLE IF EXISTS chunks_vec")
-        conn.execute(
-            "CREATE VIRTUAL TABLE chunks_vec USING vec0"
-            f"(embedding float[{new_dim}])"
-        )
+        # The store's own definition, partition key included: a hand-written
+        # one here recreated the table unpartitioned, and every filtered
+        # search after a re-embed was a full scan again.
+        create_vec_table(conn, new_dim)
         moved = 0
         for row in conn.execute(
-            f"SELECT rowid_ref, embedding FROM {_STAGING} WHERE dim = ?"
-            " ORDER BY rowid_ref",
+            f"SELECT s.rowid_ref, c.source_type, s.embedding FROM {_STAGING} s"
+            " JOIN chunks c ON c.rowid = s.rowid_ref"
+            " WHERE s.dim = ? ORDER BY s.rowid_ref",
             (new_dim,),
         ):
             conn.execute(
-                "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
-                (row["rowid_ref"], row["embedding"]),
+                "INSERT INTO chunks_vec(rowid, source_type, embedding) VALUES (?, ?, ?)",
+                (row["rowid_ref"], row["source_type"], row["embedding"]),
             )
             moved += 1
         conn.execute(

@@ -213,3 +213,19 @@ def test_fts_rows_survive_the_swap(tmp_path):
         assert store.fts_search("wording", top_k=5), "FTS rows were lost"
     finally:
         store.close()
+
+
+def test_the_swap_builds_the_partitioned_layout(tmp_path):
+    """The swap recreates `chunks_vec`; recreating it unpartitioned made every
+    source-filtered search after a re-embed a full scan again. Opened
+    read-only so no migration on open can cover for the swap."""
+    db = _store(tmp_path, n=4)
+    stage_embeddings(db, new_dim=NEW_DIM, embed=lambda t: [_vec(3, NEW_DIM)] * len(t))
+    swap_in_staged(db, new_dim=NEW_DIM)
+
+    store = ChunkStore(db, embedding_dim=NEW_DIM, read_only=True)
+    try:
+        assert store.vec_partitioned()
+        assert len(store.vector_search(_vec(3, NEW_DIM), top_k=10, filter_sources=["notes"])) == 4
+    finally:
+        store.close()

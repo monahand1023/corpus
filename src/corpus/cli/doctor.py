@@ -812,6 +812,60 @@ def _check_duplicate_content(db_path: str | None) -> bool | None:
     return True
 
 
+def _check_vector_layout(db_path: str | None) -> bool | None:
+    """Whether a source-filtered vector search scans only that source.
+
+    Two ways it does not, neither of which errors anywhere. An index still
+    on the unpartitioned layout reads every vector for every filtered
+    search -- measured at ~10x the pool-building time on a wide archive.
+    And a vector written by code older than the partitioned layout has no
+    type, so it is in no filtered search at all until current code next
+    opens the store read-write and re-files it.
+    """
+    print("\nvector layout")
+    if not db_path:
+        print("  SKIPPED (no --config or --db)")
+        return True
+
+    import sqlite_vec
+
+    from corpus.db.sqlite import is_vec_partitioned
+
+    try:
+        con = connect_ro(Path(db_path))
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+        try:
+            partitioned = is_vec_partitioned(con)
+            untyped = (
+                con.execute(
+                    "SELECT COUNT(*) FROM chunks_vec WHERE source_type IS NULL"
+                ).fetchone()[0]
+                if partitioned
+                else 0
+            )
+        finally:
+            con.close()
+    except Exception as exc:
+        print(f"  SKIPPED (could not inspect: {type(exc).__name__})")
+        return None
+
+    if not partitioned:
+        print("  [ FAIL ] the vector index is not partitioned by source type, so "
+              "every\n           filtered search reads every vector. Run "
+              "`corpus-migrate-vec`.")
+        return False
+    if untyped:
+        print(f"  [ FAIL ] {untyped:,} vector(s) have no source type and are "
+              "missing from\n           every filtered search. They were "
+              "written by an older corpus; update\n           every consumer, "
+              "then open the store read-write (any ingest) to re-file them.")
+        return False
+    print("  [  ok  ] partitioned by source type, every vector typed")
+    return True
+
+
 def _only_survived_the_fallback(sidecar_row: tuple[Any, ...]) -> bool:
     """Did this transcript reach the index ONLY because of reinstatement?
 
@@ -1107,6 +1161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.config and db_path,
         ),
         ("duplicate content", _check_duplicate_content(db_path), db_path),
+        ("vector layout", _check_vector_layout(db_path), db_path),
         (
             "shadowed components",
             _check_shadowed_components(args.load),

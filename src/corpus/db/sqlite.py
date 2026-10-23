@@ -59,6 +59,13 @@ FTS_VERSION = "4"
 # any concurrent ingest failing on its busy timeout meanwhile.
 AUTO_FTS_MIGRATION_MAX_CHUNKS = 200_000
 
+# Above this many chunks, partitioning `chunks_vec` by source type is not done
+# silently while opening a store, for the reasons `_migrate_fts` gives for its
+# own threshold: one transaction holding the only writer lock, run by any
+# caller that happens to open the store read-write. Measured: ~56s to rewrite
+# the vectors of a store near that threshold. `corpus-migrate-vec` does it deliberately.
+AUTO_VEC_MIGRATION_MAX_CHUNKS = 200_000
+
 # sqlite-vec's vec0 refuses a KNN query with k above this, raising
 # `OperationalError: k value in knn query too large`. Nothing in this engine
 # bounded it, so a caller asking for a large enough top_k crashed the whole
@@ -187,6 +194,29 @@ DEFAULT_MIN_CHUNKS_FOR_GUARD = 50
 DEFAULT_CACHE_SIZE_MB = 64
 DEFAULT_MMAP_SIZE_MB = 1024
 DEFAULT_TEMP_STORE_MEMORY = True
+
+
+def create_vec_table(conn: sqlite3.Connection, dim: int) -> None:
+    """`chunks_vec`, partitioned by source type.
+
+    A partition key makes a `source_type` constraint narrow the k-NN scan
+    itself. The `rowid IN (subquery)` filter it replaces narrowed only the
+    result: every filtered search still scanned every vector, and
+    `build_vector_pool` runs one per under-served type -- dozens per query on
+    a wide archive. Measured on a large archive with dozens of types: pool built in
+    ~1.06s before, ~0.11s after, same pools.
+    """
+    conn.execute(
+        "CREATE VIRTUAL TABLE chunks_vec USING "
+        f"vec0(source_type text partition key, embedding float[{dim}])"
+    )
+
+
+def is_vec_partitioned(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'"
+    ).fetchone()
+    return row is not None and "partition key" in row[0].lower()
 
 
 @dataclass(frozen=True)
@@ -369,6 +399,11 @@ class ChunkStore:
                 self._init_schema(init_conn)
                 self._guard_embedding_dim(init_conn)
                 self._migrate_fts(init_conn)
+                self._migrate_vec(init_conn)
+            # Read once: only this constructor migrates, and a store another
+            # process partitions meanwhile still answers the unpartitioned
+            # query shape correctly -- just without the speedup.
+            self._vec_partitioned = is_vec_partitioned(init_conn)
         except BaseException:
             # Setup failed, so no caller holds this store and nobody will ever
             # call close() on it. Without this the connection survives until
@@ -529,9 +564,10 @@ class ChunkStore:
             );
             """
         )
-        conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[{self._embedding_dim}])"
-        )
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'chunks_vec'"
+        ).fetchone() is None:
+            create_vec_table(conn, self._embedding_dim)
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, tokenize = 'porter unicode61')"
         )
@@ -714,6 +750,125 @@ class ChunkStore:
                 FTS_VERSION,
             )
 
+    def _migrate_vec(self, conn: sqlite3.Connection) -> None:
+        """Partition `chunks_vec` by source type -- if it is cheap.
+
+        Same policy as `_migrate_fts`, for the same reasons: a small store
+        migrates as it opens, a large one waits for `corpus-migrate-vec`, and
+        a read-only open never gets here. Nothing is re-embedded: the stored
+        vectors are copied out, the table is rebuilt with the partition key,
+        and they are copied back with each chunk's type.
+
+        One transaction, so an interruption leaves the old layout intact.
+        sqlite-vec cannot rename a vec0 table (its shadow tables keep the old
+        name), hence a staging copy rather than build-new-then-swap.
+
+        On an already-partitioned store this instead re-files vectors an
+        older writer stored without a type (see `_refile_untyped_vectors`).
+        """
+        if is_vec_partitioned(conn):
+            self._refile_untyped_vectors(conn)
+            return
+        chunks = conn.execute("SELECT COUNT(*) AS c FROM chunks").fetchone()["c"]
+        if chunks > AUTO_VEC_MIGRATION_MAX_CHUNKS and not self._allow_expensive_migration:
+            logger.warning(
+                "%s: vector index is UNPARTITIONED and has %d chunks -- too many "
+                "to rebuild automatically while opening the store. Search still "
+                "works, but every source-filtered vector search scans the whole "
+                "index, which on a wide archive makes each query several times "
+                "slower. Run `corpus-migrate-vec` when no other process is "
+                "writing to this database, after deploying the current code "
+                "EVERYWHERE: an older writer files new vectors with no source "
+                "type, which current code repairs only when it next opens the "
+                "store read-write.",
+                self._db_path,
+                chunks,
+            )
+            return
+        if conn.in_transaction:
+            conn.commit()
+        # DDL does not open an implicit transaction in sqlite3; without an
+        # explicit one, a crash after the DROP would lose every vector.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            vectors = conn.execute("SELECT COUNT(*) AS c FROM chunks_vec").fetchone()["c"]
+            conn.execute(
+                "CREATE TABLE _chunks_vec_staging AS "
+                "SELECT v.rowid AS rid, c.source_type AS st, v.embedding AS emb "
+                "FROM chunks_vec v JOIN chunks c ON c.rowid = v.rowid"
+            )
+            conn.execute("DROP TABLE chunks_vec")
+            create_vec_table(conn, self._embedding_dim)
+            moved = conn.execute(
+                "INSERT INTO chunks_vec(rowid, source_type, embedding) "
+                "SELECT rid, st, emb FROM _chunks_vec_staging"
+            ).rowcount
+            conn.execute("DROP TABLE _chunks_vec_staging")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if vectors:
+            logger.warning(
+                "partitioned the vector index of %s by source type: %d vector(s) "
+                "moved, %d dropped as orphans (no chunk row)",
+                self._db_path,
+                moved,
+                vectors - moved,
+            )
+
+    def _refile_untyped_vectors(self, conn: sqlite3.Connection) -> None:
+        """Give a type back to vectors written without one.
+
+        Code from before partitioning inserts `(rowid, embedding)` only, and
+        sqlite-vec accepts that, filing the vector under a NULL partition. It
+        then still appears in unfiltered search but in NO filtered one --
+        silently, which is why this runs on every read-write open rather than
+        waiting to be noticed. Costs one scan (~0.3s on a large store).
+        """
+        rows = conn.execute(
+            "SELECT v.rowid AS rid, c.source_type AS st, v.embedding AS emb "
+            "FROM chunks_vec v LEFT JOIN chunks c ON c.rowid = v.rowid "
+            "WHERE v.source_type IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        with self._txn() as txn:
+            for r in rows:
+                txn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (r["rid"],))
+                if r["st"] is not None:
+                    txn.execute(
+                        "INSERT INTO chunks_vec(rowid, source_type, embedding) VALUES (?, ?, ?)",
+                        (r["rid"], r["st"], r["emb"]),
+                    )
+        logger.warning(
+            "%s: re-filed %d vector(s) stored with no source type -- written by "
+            "code older than the partitioned index. Update every consumer of "
+            "this database to the current corpus.",
+            self._db_path,
+            len(rows),
+        )
+
+    def vec_partitioned(self) -> bool:
+        """Whether `chunks_vec` is partitioned by source type."""
+        return self._vec_partitioned
+
+    def _put_vector(
+        self, conn: sqlite3.Connection, rowid: int, source_type: str, blob: bytes
+    ) -> None:
+        """The one way a vector is written. Two writers deciding separately
+        what a row needs is how a partition key gets left out."""
+        conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
+        if self._vec_partitioned:
+            conn.execute(
+                "INSERT INTO chunks_vec(rowid, source_type, embedding) VALUES (?, ?, ?)",
+                (rowid, source_type, blob),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob)
+            )
+
     @contextmanager
     def _txn(self) -> Iterator[sqlite3.Connection]:
         try:
@@ -816,8 +971,7 @@ class ChunkStore:
         )
         rowid = cur.fetchone()["rowid"]
         blob = sqlite_vec.serialize_float32(list(embedding))
-        self._conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
-        self._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob))
+        self._put_vector(self._conn, rowid, chunk.metadata.source_type, blob)
         self._conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
         self._conn.execute(
             "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
@@ -1139,6 +1293,13 @@ class ChunkStore:
         # already-constrained candidate set.
         if filter_sources:
             placeholders = ",".join("?" for _ in filter_sources)
+            # Partitioned: the constraint narrows the scan to those types.
+            # Otherwise it narrows only the result, and every vector is read.
+            type_filter = (
+                f"v.source_type IN ({placeholders})"
+                if self._vec_partitioned
+                else f"v.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))"
+            )
             rows = self._conn.execute(
                 f"""
                 SELECT c.id, c.source_type, c.source_key, c.content, c.metadata,
@@ -1146,7 +1307,7 @@ class ChunkStore:
                 FROM chunks_vec v
                 JOIN chunks c ON c.rowid = v.rowid
                 WHERE v.embedding MATCH ? AND k = ?
-                  AND v.rowid IN (SELECT rowid FROM chunks WHERE source_type IN ({placeholders}))
+                  AND {type_filter}
                 ORDER BY v.distance
                 """,
                 (blob, min(top_k, VEC0_MAX_K), *filter_sources),
@@ -1207,7 +1368,7 @@ class ChunkStore:
                 f"expected {self._embedding_dim}"
             )
         row = self._conn.execute(
-            "SELECT rowid, content FROM chunks WHERE id = ?", (chunk_id,)
+            "SELECT rowid, source_type, content FROM chunks WHERE id = ?", (chunk_id,)
         ).fetchone()
         if row is None:
             return False
@@ -1217,10 +1378,7 @@ class ChunkStore:
                 "UPDATE chunks SET context = ? WHERE id = ?", (context, chunk_id)
             )
             blob = sqlite_vec.serialize_float32(list(embedding))
-            conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
-            conn.execute(
-                "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob)
-            )
+            self._put_vector(conn, rowid, row["source_type"], blob)
             conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (rowid,))
             conn.execute(
                 "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
