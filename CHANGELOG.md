@@ -28,6 +28,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   optional `languages`; a backend without it still runs unconstrained.
 
 ### Fixed
+- **`corpus-eval --compare` compared configs on different query vectors.** Each
+  config re-embedded every query, and a hosted embedder returns a slightly
+  different vector each time, so the table mixed embedder noise into what it
+  reported as config differences. Configs now share one vector per query
+  (`corpus.embedder.memo.MemoizedQueryEmbedder`), which also embeds each query
+  once instead of once per config. `--repeat` still embeds afresh, since
+  measuring that noise is its job.
 - **Short texts no longer trip the Voyage truncation warning.** The server bills
   one or two tokens per text fewer than the local tokenizer counts, which a
   2%-only threshold read as truncation on every short query. The check now

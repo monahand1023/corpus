@@ -22,6 +22,7 @@ from typing import Any
 from corpus.cli._common import load_config_or_exit, load_python_export, open_store_read_only
 from corpus.credentials import resolve_dotenv
 from corpus.embedder.factory import make_embedder
+from corpus.embedder.memo import MemoizedQueryEmbedder
 from corpus.eval.goldset import (
     audit_queries,
     report_findings,
@@ -560,7 +561,10 @@ def main() -> int:
 
     retriever = Retriever(
         store=store,
-        embedder=embedder,
+        # --compare: every config gets the same vector per query, so the table
+        # shows config differences rather than embedder noise. Not --repeat,
+        # which exists to measure that noise.
+        embedder=MemoizedQueryEmbedder(embedder) if args.compare else embedder,
         reranker=reranker,
         reference_patterns=config.compiled_references(),
     )

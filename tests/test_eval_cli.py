@@ -172,3 +172,50 @@ def test_check_missing_file_returns_2(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert rc == 2
     assert err.strip() != ""
+
+
+def _count_query_embeds(monkeypatch) -> list[str]:
+    calls: list[str] = []
+    orig = HashEmbedder.embed_query
+
+    def counting(self, text: str) -> list[float]:
+        calls.append(text)
+        return orig(self, text)
+
+    monkeypatch.setattr(HashEmbedder, "embed_query", counting)
+    return calls
+
+
+def test_compare_embeds_each_query_once_across_configs(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """Every config must see the SAME query vector, or the comparison mixes
+    embedder noise into what it reports as a config difference."""
+    db = tmp_path / "c.db"
+    _build_store(db)
+    cfg = tmp_path / "corpus.toml"
+    _write_config(cfg, db)
+    q = tmp_path / "q.py"
+    _write_queries(q)
+    calls = _count_query_embeds(monkeypatch)
+
+    assert _run(cfg, q, ["--compare"]) == 0
+
+    assert sorted(calls) == sorted(set(calls)), "a query was re-embedded between configs"
+    assert len(calls) == 3
+
+
+def test_repeat_still_embeds_afresh_on_every_run(tmp_path: Path, capsys, monkeypatch) -> None:
+    """--repeat exists to MEASURE embedder noise; memoizing across its runs
+    would report a spread of zero and hide it."""
+    db = tmp_path / "c.db"
+    _build_store(db)
+    cfg = tmp_path / "corpus.toml"
+    _write_config(cfg, db)
+    q = tmp_path / "q.py"
+    _write_queries(q)
+    calls = _count_query_embeds(monkeypatch)
+
+    assert _run(cfg, q, ["--repeat", "2"]) == 0
+
+    assert len(calls) == 6
