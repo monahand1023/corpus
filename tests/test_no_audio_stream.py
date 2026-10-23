@@ -33,6 +33,10 @@ def _fake_ffmpeg(monkeypatch, *, stderr: str, returncode: int = 1) -> None:
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    # decode() checks for ffmpeg before running it. Without this, a machine
+    # with no ffmpeg never reaches the fake -- and a test expecting the broad
+    # AudioUnavailableError passes on "ffmpeg is not on PATH" instead.
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
 
 
 def test_no_audio_stream_raises_its_own_error(tmp_path, monkeypatch):
@@ -75,9 +79,14 @@ def test_a_timeout_is_not_reclassified(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1.0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    # decode() checks for ffmpeg before running it. Without this, a machine
+    # with no ffmpeg never reaches the fake -- and a test expecting the broad
+    # AudioUnavailableError passes on "ffmpeg is not on PATH" instead.
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
     with pytest.raises(AudioUnavailableError) as exc:
         decode(media)
     assert not isinstance(exc.value, NoAudioStreamError)
+    assert "timed out" in str(exc.value), "failed for some reason other than the timeout"
 
 
 # --- what the run does with it -----------------------------------------------

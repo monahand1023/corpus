@@ -238,7 +238,10 @@ def test_the_cli_supplies_the_SUBPROCESS_runner_not_the_thread_one(monkeypatch, 
 
     (tmp_path / "a.mov").write_bytes(b"x")
     monkeypatch.setattr(mod, "transcribe_directory", fake_directory)
-    monkeypatch.setattr(mod, "ffmpeg_available", lambda: True, raising=False)
+    # Where the CLI looks it up: it imports the function inside main, so a
+    # patch on `mod` (with raising=False) replaced nothing, and this test
+    # passed only on machines that happen to have ffmpeg installed.
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
 
     class _Backend:
         model_name = "m"
@@ -315,6 +318,7 @@ def test_the_cli_supplies_a_duration_lookup(monkeypatch, tmp_path):
 
     (tmp_path / "a.mov").write_bytes(b"x")
     monkeypatch.setattr(mod, "transcribe_directory", fake_directory)
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
 
     class _Backend:
         model_name = "m"

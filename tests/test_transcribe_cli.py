@@ -185,6 +185,8 @@ def test_transcribed_since_scopes_redo_stale(tmp_path, monkeypatch, capsys) -> N
         return [], 0, 0
 
     monkeypatch.setattr(run_mod, "stale_paths_present", fake_present)
+    # The CLI refuses to start without ffmpeg, before it reaches the redo.
+    monkeypatch.setattr("corpus.transcripts.audio.ffmpeg_available", lambda: True)
     db = tmp_path / "t.db"
     store.open_store(db).__enter__()
     main_argv([str(tmp_path), "--db", str(db), "--redo-stale", "--transcribed-since", "2026-09-14"])
