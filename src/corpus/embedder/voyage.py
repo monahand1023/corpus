@@ -51,6 +51,10 @@ FALLBACK_CHARS_PER_TOKEN = 1.3
 TPM_TARGET = int(os.environ.get("CORPUS_TPM_TARGET") or 2_600_000)
 _TPM_WINDOW_SECONDS = 60.0
 
+# Tokens per text the server may bill below the local tokenizer's count
+# without it meaning truncation. See the check in `_embed_batch`.
+_PER_TEXT_TOKEN_SLACK = 2
+
 
 @dataclass(frozen=True)
 class EmbedResult:
@@ -224,9 +228,14 @@ class VoyageEmbedder:
         # count would warn on every batch.
         if self._tokenizer_ok:
             sent = sum(self.token_counts(texts))
-            # 2%: the local tokenizer and the server disagree slightly on
-            # ordinary text, and a threshold at zero would fire constantly.
-            if sent and response.total_tokens < sent * 0.98:
+            # The local tokenizer and the server disagree slightly, two ways:
+            # ~2% on ordinary text, and a fixed 1-2 tokens PER TEXT however
+            # short it is (measured on voyage-4-large: "x" counts 1, bills 0).
+            # A percentage alone called every short query truncated, since
+            # one token is 10% of ten. Real truncation loses far more than
+            # either allowance.
+            slack = max(sent * 0.02, _PER_TEXT_TOKEN_SLACK * len(texts))
+            if sent and sent - response.total_tokens > slack:
                 logger.warning(
                     "Voyage billed %d tokens for %d text(s) but the local "
                     "tokenizer counted %d -- roughly %d tokens were TRUNCATED "

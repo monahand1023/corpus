@@ -27,6 +27,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one, keeping its speech. `TranscriberBackend.transcribe_window` takes an
   optional `languages`; a backend without it still runs unconstrained.
 
+### Fixed
+- **Short texts no longer trip the Voyage truncation warning.** The server bills
+  one or two tokens per text fewer than the local tokenizer counts, which a
+  2%-only threshold read as truncation on every short query. The check now
+  allows that per-text gap as well.
+
 ## [0.4.0] - 2026-09-24
 
 ### Added

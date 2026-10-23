@@ -30,7 +30,7 @@ class _Resp:
         self.total_tokens = total_tokens
 
 
-def _embedder(billed: int):
+def _embedder(billed: int, local_per_text: int = 1000):
     from corpus.embedder.voyage import VoyageEmbedder
 
     emb = VoyageEmbedder.__new__(VoyageEmbedder)
@@ -39,7 +39,7 @@ def _embedder(billed: int):
     emb.total_tokens_used = 0
     emb._token_window = []
     emb._throttle = lambda *_a, **_k: None
-    emb.token_counts = lambda texts: [1000 for _ in texts]
+    emb.token_counts = lambda texts: [local_per_text for _ in texts]
 
     class _Client:
         def embed(self, **kw):
@@ -90,3 +90,34 @@ def test_no_warning_when_the_tokenizer_is_untrusted(caplog):
     assert not [r for r in caplog.records if "truncat" in r.message.lower()], (
         "compared a char ESTIMATE against a real count and called it truncation"
     )
+
+
+def test_a_short_query_one_token_off_does_not_warn(caplog):
+    """Measured against voyage-4-large: the server bills one or two tokens
+    fewer per text than the local tokenizer counts, whatever the length.
+    On a 10-token query one token is 10%, so a percentage-only threshold
+    called every short query truncated."""
+    emb = _embedder(billed=10, local_per_text=11)
+
+    with caplog.at_level(logging.WARNING):
+        emb._embed_batch(["a short query"], "query")
+
+    assert not [r for r in caplog.records if "truncat" in r.message.lower()]
+
+
+def test_a_batch_of_short_texts_two_tokens_off_each_does_not_warn(caplog):
+    emb = _embedder(billed=4 * 4, local_per_text=6)  # 24 local, 16 billed
+
+    with caplog.at_level(logging.WARNING):
+        emb._embed_batch(["a", "b", "c", "d"], "document")
+
+    assert not [r for r in caplog.records if "truncat" in r.message.lower()]
+
+
+def test_the_per_text_slack_does_not_hide_a_real_truncation(caplog):
+    emb = _embedder(billed=900, local_per_text=1000)
+
+    with caplog.at_level(logging.WARNING):
+        emb._embed_batch(["a"], "document")
+
+    assert any("truncat" in r.message.lower() for r in caplog.records)
