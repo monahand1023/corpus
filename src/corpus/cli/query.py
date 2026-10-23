@@ -59,7 +59,11 @@ def main() -> int:
     reranker = None
     if args.rerank:
         from corpus.reranker.local import BGEReranker
-        reranker = BGEReranker(device=config.reranker.device)
+        reranker = BGEReranker(
+            device=config.reranker.device,
+            max_length=config.reranker.max_length,
+            batch_size=config.reranker.batch_size,
+        )
 
     retriever = Retriever(
         store=store,

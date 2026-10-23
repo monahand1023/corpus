@@ -115,7 +115,9 @@ def test_rerank_lazy_load_calls_cross_encoder() -> None:
 
         reranker._ensure_loaded()
 
-    mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="cpu")
+    mock_ce_class.assert_called_once_with(
+        "BAAI/bge-reranker-v2-m3", device="cpu", max_length=512
+    )
     assert reranker._model is mock_ce_instance
 
 
@@ -137,7 +139,39 @@ def test_device_threads_through_to_cross_encoder() -> None:
         reranker = BGEReranker(device="mps")
         reranker._ensure_loaded()
 
-    mock_ce_class.assert_called_once_with("BAAI/bge-reranker-v2-m3", device="mps")
+    mock_ce_class.assert_called_once_with(
+        "BAAI/bge-reranker-v2-m3", device="mps", max_length=512
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. max_length is explicit: bge-reranker-v2-m3 otherwise scores up to 8192
+#    tokens per pair, which made every pair ~3x slower on CPU
+# ---------------------------------------------------------------------------
+
+def test_max_length_defaults_to_512() -> None:
+    assert BGEReranker()._max_length == 512
+
+
+def test_max_length_threads_through_to_cross_encoder() -> None:
+    mock_st = MagicMock()
+    mock_ce_class = MagicMock()
+    mock_st.CrossEncoder = mock_ce_class
+
+    with patch.dict(sys.modules, {"sentence_transformers": mock_st}):
+        reranker = BGEReranker(max_length=1024)
+        reranker._ensure_loaded()
+
+    mock_ce_class.assert_called_once_with(
+        "BAAI/bge-reranker-v2-m3", device="cpu", max_length=1024
+    )
+
+
+def test_max_length_comes_from_config() -> None:
+    from corpus.config import RerankerConfig
+
+    assert RerankerConfig().max_length == 512
+    assert RerankerConfig(max_length=2048).max_length == 2048
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +207,30 @@ def test_rerank_scores_against_summary_text() -> None:
 
     pairs = mock_model.predict.call_args.args[0]
     assert pairs[0][1] == "SUMMARY\n\nbody"
+
+
+# ---------------------------------------------------------------------------
+# 10. batch_size is explicit: the batch is padded to its longest pair, so a
+#     whole 30-candidate pool in one batch pays for the longest pair 30 times
+# ---------------------------------------------------------------------------
+
+def test_batch_size_defaults_to_4() -> None:
+    assert BGEReranker()._batch_size == 4
+
+
+def test_batch_size_threads_through_to_predict() -> None:
+    reranker = BGEReranker(batch_size=16)
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [0.1, 0.9]
+    reranker._model = mock_model
+
+    reranker.rerank("q", [fake_chunk("a"), fake_chunk("b")])  # type: ignore[list-item]
+
+    assert mock_model.predict.call_args.kwargs["batch_size"] == 16
+
+
+def test_batch_size_comes_from_config() -> None:
+    from corpus.config import RerankerConfig
+
+    assert RerankerConfig().batch_size == 4
+    assert RerankerConfig(batch_size=32).batch_size == 32

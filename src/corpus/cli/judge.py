@@ -96,7 +96,11 @@ def _retriever_from_config(config_path: str | None, rerank: bool = False) -> Any
     if rerank:
         from corpus.reranker.local import BGEReranker
 
-        reranker = BGEReranker(device=config.reranker.device)
+        reranker = BGEReranker(
+            device=config.reranker.device,
+            max_length=config.reranker.max_length,
+            batch_size=config.reranker.batch_size,
+        )
     return Retriever(
         store=store,
         embedder=embedder,

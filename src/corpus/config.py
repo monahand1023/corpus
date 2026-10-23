@@ -46,6 +46,11 @@ class RerankerConfig(BaseModel):
     never let sentence-transformers auto-select MPS on Apple Silicon."""
 
     device: str = "cpu"
+    # Tokens per (query, chunk) pair. See corpus/reranker/local.py: uncapped,
+    # the model scores up to 8192 and is ~3x slower for it.
+    max_length: int = 512
+    # Pairs per forward pass; smaller pads less. Measured fastest on CPU.
+    batch_size: int = 4
 
 
 class PruningConfig(BaseModel):

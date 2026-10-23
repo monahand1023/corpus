@@ -12,6 +12,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pipeline wrote.
 
 ### Changed
+- **The re-ranker is ~3.5x faster on CPU.** `BGEReranker` now sets
+  `max_length=512` (left unset, bge-reranker-v2-m3 scores up to 8192 tokens per
+  pair) and scores in batches of 4 (one batch pads every pair to the longest).
+  Measured on real 30-candidate pools: about 10s per query before,
+  2.6-2.9s after. Both are `[reranker]` settings.
 - **Speech regions are packed into windows of up to 30s** before transcription.
   One window per detected region sent 1-2s clips to the model; on a real archive
   41% of windows under 2s came back in the wrong language. On a sample, packing

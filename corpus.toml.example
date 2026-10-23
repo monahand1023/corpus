@@ -37,11 +37,20 @@ hybrid = true              # combine vector + BM25 via reciprocal rank fusion
 # Silicon, letting sentence-transformers pick silently lands on MPS, and
 # corpus has no way to know whether something else (e.g. a long-running MLX
 # job) already has the GPU, and CPU can never contend with another process's
-# GPU work. Measured on an M4 Pro: ~10-12s to rerank a 30-candidate pool on
-# CPU vs. ~4-5s on MPS (~2.7x faster) — neither is sub-second, so budget for
-# this latency either way. Set to "mps" only if you know the GPU is free and
-# want the speedup.
+# GPU work. Measured on an M4 Pro with the defaults below: ~2.6-2.9s to
+# rerank a 30-candidate pool on CPU (it was ~10s before max_length and
+# batch_size were set). MPS was ~2.7x faster than CPU before those settings
+# and has not been re-measured since. Set to "mps" only if you know the GPU
+# is free and want the speedup.
 device = "cpu"
+#
+# max_length: tokens per (query, chunk) pair. Unset, the model scores up to
+# 8192, which made every pair ~3x slower; 512 is what its authors use.
+# max_length = 512
+#
+# batch_size: pairs per forward pass. Each batch is padded to its longest
+# pair, so smaller is faster on CPU; 4 measured best. A GPU may want more.
+# batch_size = 4
 
 [pruning]
 # Guards orphan deletion during ingest against a connector that silently

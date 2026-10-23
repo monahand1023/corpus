@@ -80,9 +80,32 @@ class BGEReranker:
     # order of magnitude per pair. That gap — not just the GPU-contention
     # risk above — is why `rerank=False` stays the default rather than
     # something to flip on casually.
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", device: str = "cpu"):
+    #
+    # `max_length` is explicit for the same reason `device` is: left unset,
+    # sentence-transformers takes the model's own limit, which for
+    # bge-reranker-v2-m3 is 8192 tokens. Measured 2026-10-23 on the same
+    # M4 Pro (real 30-candidate pools, CPU): 391ms/pair uncapped,
+    # 134ms/pair at 512 -- the ~390ms above was mostly attention over tokens
+    # the model's authors never score past (their own reranker defaults to
+    # 512). Typical pairs are well under 512 tokens; the few longer ones get cut.
+    #
+    # `batch_size` likewise: a batch is padded to its longest pair, so scoring
+    # the whole pool as one batch makes every pair pay for the longest one.
+    # Same setup, interleaved runs, median per 30-candidate query: 3.9s at the
+    # library's 32, 2.6-2.9s at 4; 1, 2 and 8 were all slower than 4, and
+    # sorting pairs by length first changed nothing. Measured on CPU only --
+    # a GPU may prefer larger batches.
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-reranker-v2-m3",
+        device: str = "cpu",
+        max_length: int = 512,
+        batch_size: int = 4,
+    ):
         self._model_name = model_name
         self._device = device
+        self._max_length = max_length
+        self._batch_size = batch_size
         self._model: CrossEncoder | None = None  # lazy
 
     def _ensure_loaded(self) -> None:
@@ -107,7 +130,9 @@ class BGEReranker:
                 "and sentence-transformers, which is why it is opt-in."
             ) from exc
 
-        self._model = CrossEncoder(self._model_name, device=self._device)
+        self._model = CrossEncoder(
+            self._model_name, device=self._device, max_length=self._max_length
+        )
 
     def rerank(
         self,
@@ -122,7 +147,7 @@ class BGEReranker:
         pairs = [(query, _rerank_text(c)) for c in candidates]
         # CrossEncoder.predict accepts a batch of (query, text) pairs — documented
         # usage — but its type stubs only admit a single pair or flat list.
-        scores = self._model.predict(pairs)  # type: ignore[arg-type]
+        scores = self._model.predict(pairs, batch_size=self._batch_size)  # type: ignore[arg-type]
         reranked = sorted(zip(candidates, scores, strict=True), key=lambda x: -float(x[1]))
         out = [c for c, _ in reranked]
         return out[:top_n] if top_n else out
